@@ -1,5 +1,6 @@
 package com.silk.backend.database
 
+import com.silk.shared.models.RoomKind
 import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.javatime.datetime
 import java.time.LocalDateTime
@@ -24,9 +25,12 @@ object Users : Table("users") {
 object Groups : Table("groups") {
     val id = varchar("id", 128).uniqueIndex() // 群组ID
     val name = varchar("name", 256) // 群组名称
+    val roomKind = varchar("room_kind", 32).default(RoomKind.CHAT.name) // 显式 Room 类型
     val invitationCode = varchar("invitation_code", 32).uniqueIndex() // 邀请码（唯一）
     val hostId = varchar("host_id", 128) // 群主ID（创建者）
     val createdAt = datetime("created_at").default(LocalDateTime.now()) // 创建时间
+    val updatedAt = datetime("updated_at").default(LocalDateTime.now()) // 最近活动时间
+    val lastMessageAt = datetime("last_message_at").nullable() // 最后一条持久化消息时间
     
     override val primaryKey = PrimaryKey(id)
 }

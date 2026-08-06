@@ -1,4 +1,4 @@
-import { Group, CreateGroupResponse } from '../models/Group';
+import { Group, CreateGroupResponse, RoomKind } from '../models/Group';
 import { GroupCard } from '../components/GroupCard';
 import { LoadingIndicator } from '../components/LoadingIndicator';
 import { SectionHeader } from '../components/SectionHeader';
@@ -29,7 +29,7 @@ export struct GroupListPage {
   @State generatedToken: string = '';
 
   private get silkPrivateGroups(): Group[] {
-    return this.groups.filter((g: Group) => g.name.startsWith('[Silk]'));
+    return this.groups.filter((g: Group) => g.roomKind === RoomKind.SILK_PRIVATE);
   }
 
   private get ccGroups(): Group[] {
@@ -38,7 +38,7 @@ export struct GroupListPage {
 
   private get silkNormalGroups(): Group[] {
     return this.groups.filter((g: Group) =>
-      !g.name.startsWith('[Silk]') && this.ccConnectStatus[g.id] === undefined
+      g.roomKind === RoomKind.CHAT && this.ccConnectStatus[g.id] === undefined
     );
   }
 
@@ -81,9 +81,8 @@ export struct GroupListPage {
       const response = await this.apiClient.getGroups(userId);
       const unreadCounts = await this.apiClient.getUnreadCounts(userId);
 
-      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀）
       const sourceGroups: Group[] = response.data
-        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
+        ? response.data.filter((g: Group) => g.roomKind !== RoomKind.WORKFLOW)
         : [];
       const nextGroups: Group[] = [];
       for (let i = 0; i < sourceGroups.length; i++) {
@@ -239,9 +238,9 @@ export struct GroupListPage {
 
     try {
       const response = await this.apiClient.getGroups(userId);
-      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀）
+      // 工作流房间仍通过工作流入口访问。
       const sourceGroups: Group[] = response.data
-        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
+        ? response.data.filter((g: Group) => g.roomKind !== RoomKind.WORKFLOW)
         : [];
       const unreadCounts = await this.apiClient.getUnreadCounts(userId);
       const refreshed: Group[] = [];

@@ -199,9 +199,7 @@ export class AppStore {
     try {
       const response = await this.apiClient.getGroups(this._currentUser.id);
       if (response.success && response.data) {
-        // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
-        // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
-        this._groups = response.data.filter((g: Group) => !g.name.startsWith('wf_'));
+        this._groups = response.data.filter((g: Group) => g.roomKind !== 'WORKFLOW');
       }
     } catch (error) {
       console.error(`加载群组失败: ${this.errorToString(error)}`);

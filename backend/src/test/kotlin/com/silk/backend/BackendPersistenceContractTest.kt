@@ -8,6 +8,7 @@ import com.silk.backend.database.LoginRequest
 import com.silk.backend.database.UserSettingsRepository
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.ChatHistoryEntry
+import com.silk.shared.models.RoomKind
 import org.mindrot.jbcrypt.BCrypt
 import java.io.File
 import java.sql.DriverManager
@@ -20,6 +21,18 @@ import kotlin.test.assertTrue
 
 class BackendPersistenceContractTest {
     @Test
+    fun `group creation timestamps advance within one backend process`() {
+        TestWorkspace().use {
+            val first = assertNotNull(GroupRepository.createGroup("First timestamp room", "owner"))
+            Thread.sleep(10)
+            val second = assertNotNull(GroupRepository.createGroup("Second timestamp room", "owner"))
+
+            assertTrue(second.updatedAt > first.updatedAt)
+            assertTrue(java.time.LocalDateTime.parse(second.createdAt) > java.time.LocalDateTime.parse(first.createdAt))
+        }
+    }
+
+    @Test
     fun `database init preserves existing auth settings and group data`() {
         withTempRuntime { root ->
             val dbFile = File(root, "legacy-silk.db")
@@ -27,6 +40,16 @@ class BackendPersistenceContractTest {
 
             System.setProperty("silk.databasePath", dbFile.absolutePath)
             System.setProperty("silk.chatHistoryDir", File(root, "chat_history").absolutePath)
+            ChatHistoryManager().saveChatHistory(
+                "group_legacy-group-id",
+                ChatHistory(
+                    sessionId = "legacy-room-recency",
+                    messages = mutableListOf(
+                        chatEntry("legacy-recency-1", "legacy-user-id", "Legacy User", "older", 4_000L),
+                        chatEntry("legacy-recency-2", "legacy-user-id", "Legacy User", "latest", 5_000L),
+                    ),
+                ),
+            )
 
             DatabaseFactory.init()
 
@@ -51,8 +74,16 @@ class BackendPersistenceContractTest {
             val group = assertNotNull(GroupRepository.findGroupById("legacy-group-id"))
             assertEquals("Legacy Group", group.name)
             assertEquals(user.id, group.hostId)
+            assertEquals(RoomKind.CHAT, group.roomKind)
+            assertTrue(group.updatedAt > 0L)
+            assertEquals(5_000L, group.lastMessageAt)
             assertTrue(GroupRepository.isUserInGroup(group.id, user.id))
             assertEquals(listOf(group.id), GroupRepository.getUserGroups(user.id).map { it.id })
+
+            assertTrue(GroupRepository.updateGroupName(group.id, "Renamed Legacy Group"))
+            assertEquals(5_000L, GroupRepository.findGroupById(group.id)?.lastMessageAt)
+            assertTrue(GroupRepository.touchRoom(group.id, 6_000L))
+            assertEquals(6_000L, GroupRepository.findGroupById(group.id)?.lastMessageAt)
 
             DatabaseFactory.init()
 
@@ -60,6 +91,47 @@ class BackendPersistenceContractTest {
             assertTrue(loginAfterSecondInit.success, loginAfterSecondInit.message)
             assertEquals(bridgeToken, UserSettingsRepository.getBridgeToken(user.id))
             assertEquals(listOf(group.id), GroupRepository.getUserGroups(user.id).map { it.id })
+            assertEquals(6_000L, GroupRepository.findGroupById(group.id)?.lastMessageAt)
+        }
+    }
+
+    @Test
+    fun `database init backfills explicit room kinds without trusting workflow name prefixes`() {
+        withTempRuntime { root ->
+            val dbFile = File(root, "legacy-room-kinds.db")
+            seedLegacyDatabase(dbFile)
+            seedLegacyRoomKinds(dbFile)
+            val workflowDir = File(root, "workflows").apply { mkdirs() }
+            File(workflowDir, "workflow_store.json").writeText(
+                """{"workflows":[{"groupId":"workflow-metadata-room","name":"Migrated Workflow"},{"groupId":"workflow-name-collision-room","name":"Legacy Group"}]}"""
+            )
+            File(workflowDir, "workspace_store.json").writeText(
+                """{"workspaces":[{"roomId":"workspace-metadata-room"}]}"""
+            )
+
+            System.setProperty("silk.databasePath", dbFile.absolutePath)
+            System.setProperty("silk.workflowDir", workflowDir.absolutePath)
+
+            DatabaseFactory.init()
+
+            assertEquals(RoomKind.WORKFLOW, GroupRepository.findGroupById("workflow-metadata-room")?.roomKind)
+            assertEquals("Project Alpha", GroupRepository.findGroupById("workflow-metadata-room")?.name)
+            assertEquals(RoomKind.WORKFLOW, GroupRepository.findGroupById("workflow-name-collision-room")?.roomKind)
+            assertEquals("Legacy Group (1)", GroupRepository.findGroupById("workflow-name-collision-room")?.name)
+            assertEquals(RoomKind.WORKFLOW, GroupRepository.findGroupById("workspace-metadata-room")?.roomKind)
+            assertEquals(RoomKind.SILK_PRIVATE, GroupRepository.findGroupById("silk-private-room")?.roomKind)
+            assertEquals(RoomKind.CHAT, GroupRepository.findGroupById("wf_orphan-room")?.roomKind)
+            assertEquals(RoomKind.CHAT, GroupRepository.findGroupById("cc-connect-room")?.roomKind)
+
+            DatabaseFactory.init()
+            assertEquals(RoomKind.WORKFLOW, GroupRepository.findGroupById("workflow-metadata-room")?.roomKind)
+            assertEquals("Project Alpha", GroupRepository.findGroupById("workflow-metadata-room")?.name)
+            assertEquals("Legacy Group (1)", GroupRepository.findGroupById("workflow-name-collision-room")?.name)
+            assertEquals(RoomKind.SILK_PRIVATE, GroupRepository.findGroupById("silk-private-room")?.roomKind)
+
+            assertTrue(GroupRepository.updateGroupName("workflow-metadata-room", "Canonical Project Alpha"))
+            DatabaseFactory.init()
+            assertEquals("Canonical Project Alpha", GroupRepository.findGroupById("workflow-metadata-room")?.name)
         }
     }
 
@@ -249,6 +321,40 @@ class BackendPersistenceContractTest {
         }
     }
 
+    private fun seedLegacyRoomKinds(dbFile: File) {
+        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { connection ->
+            connection.createStatement().use { statement ->
+                listOf(
+                    Triple("workflow-metadata-room", "Project Alpha", "WF0001"),
+                    Triple("workspace-metadata-room", "Workspace Backfill", "WF0002"),
+                    Triple("silk-private-room", "[Silk] Legacy User", "WF0003"),
+                    Triple("wf_orphan-room", "wf_orphan", "WF0004"),
+                    Triple("cc-connect-room", "Claude Automation", "WF0005"),
+                    Triple("workflow-name-collision-room", "wf_collision", "WF0006"),
+                ).forEach { (id, name, code) ->
+                    statement.executeUpdate(
+                        """
+                        INSERT INTO groups (id, name, invitation_code, host_id, created_at)
+                        VALUES ('$id', '$name', '$code', 'legacy-user-id', '2024-01-03 03:04:05')
+                        """.trimIndent()
+                    )
+                }
+                statement.executeUpdate(
+                    """
+                    INSERT INTO group_members (group_id, user_id, role, joined_at)
+                    VALUES ('silk-private-room', 'legacy-user-id', 'HOST', '2024-01-03 03:04:06')
+                    """.trimIndent()
+                )
+                statement.executeUpdate(
+                    """
+                    INSERT INTO group_members (group_id, user_id, role, joined_at)
+                    VALUES ('silk-private-room', 'silk_ai_agent', 'GUEST', '2024-01-03 03:04:07')
+                    """.trimIndent()
+                )
+            }
+        }
+    }
+
     private fun chatEntry(
         messageId: String,
         senderId: String,
@@ -269,13 +375,16 @@ class BackendPersistenceContractTest {
         val previousDatabasePath = System.getProperty("silk.databasePath")
         val previousChatHistoryDir = System.getProperty("silk.chatHistoryDir")
         val previousUserTodoBaseDir = System.getProperty("silk.userTodoBaseDir")
+        val previousWorkflowDir = System.getProperty("silk.workflowDir")
 
         try {
+            System.setProperty("silk.workflowDir", File(root, "workflows").absolutePath)
             block(root)
         } finally {
             restoreProperty("silk.databasePath", previousDatabasePath)
             restoreProperty("silk.chatHistoryDir", previousChatHistoryDir)
             restoreProperty("silk.userTodoBaseDir", previousUserTodoBaseDir)
+            restoreProperty("silk.workflowDir", previousWorkflowDir)
             root.deleteRecursively()
         }
     }

@@ -145,9 +145,9 @@ fun GroupListScreen(appState: AppState) {
                 }
 
                 if (response != null && response.success) {
-                    // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
-                    // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
-                    groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+                    // 工作流房间仍通过工作流 Tab 访问。
+                    groups = (response.groups ?: emptyList())
+                        .filterNot { it.roomKind == com.silk.shared.models.RoomKind.WORKFLOW }
                     println("✅ 加载了 ${groups.size} 个群组")
 
                     // 加载未读消息数
@@ -259,7 +259,8 @@ fun GroupListScreen(appState: AppState) {
                                                         ApiClient.leaveGroup(groupId, userId)
                                                     }
                                                     val r = ApiClient.getUserGroups(userId)
-                                                    if (r.success) groups = (r.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+                                                    if (r.success) groups = (r.groups ?: emptyList())
+                                                        .filterNot { it.roomKind == com.silk.shared.models.RoomKind.WORKFLOW }
                                                     isDeleting = false; isDeleteMode = false; selectedGroups = emptySet()
                                                     Toast.makeText(context, "已退出 ${selectedGroups.size} 个群组", Toast.LENGTH_SHORT).show()
                                                 }
@@ -430,10 +431,12 @@ fun GroupListScreen(appState: AppState) {
                 }
                 else -> {
                     // 群组列表（Silk AI → CC-Connect → Silk Groups）
-                    val silkPrivateGroups = groups.filter { it.name.startsWith("[Silk]") }
+                    val silkPrivateGroups = groups.filter {
+                        it.roomKind == com.silk.shared.models.RoomKind.SILK_PRIVATE
+                    }
                     val ccGroups = groups.filter { ccConnectStatus.containsKey(it.id) }
                     val silkNormalGroups = groups.filter {
-                        !it.name.startsWith("[Silk]") && !ccConnectStatus.containsKey(it.id)
+                        it.roomKind == com.silk.shared.models.RoomKind.CHAT && !ccConnectStatus.containsKey(it.id)
                     }
 
                     @Composable
@@ -800,7 +803,7 @@ fun GroupCard(
                     Spacer(modifier = Modifier.width(6.dp))
 
                     // 邀请码（Silk 专属对话不显示）
-                    if (!group.name.startsWith("[Silk]")) {
+                    if (group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE) {
                         Text(
                             text = "[${group.invitationCode}]",
                             style = MaterialTheme.typography.labelSmall,
@@ -825,7 +828,9 @@ fun GroupCard(
                     }
 
                     // 👥 成员按钮（Silk 专属对话不显示）
-                    if (!isDeleteMode && onMembersClick != null && !group.name.startsWith("[Silk]")) {
+                    if (!isDeleteMode && onMembersClick != null &&
+                        group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE
+                    ) {
                         Surface(
                             onClick = { onMembersClick() },
                             color = SilkColors.secondary.copy(alpha = 0.5f),
@@ -1427,4 +1432,3 @@ fun GroupMembersListDialog(
         }
     )
 }
-

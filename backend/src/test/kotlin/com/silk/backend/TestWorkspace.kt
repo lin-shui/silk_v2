@@ -2,6 +2,7 @@ package com.silk.backend
 
 import com.silk.backend.database.ContactRequests
 import com.silk.backend.database.Contacts
+import com.silk.backend.database.CcConnectTokens
 import com.silk.backend.database.GroupMembers
 import com.silk.backend.database.Groups
 import com.silk.backend.database.RefreshTokensTable
@@ -33,7 +34,16 @@ internal class TestWorkspace : AutoCloseable {
             driver = "org.sqlite.JDBC"
         )
         transaction(database) {
-            SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable, RefreshTokensTable)
+            SchemaUtils.create(
+                Users,
+                Groups,
+                GroupMembers,
+                Contacts,
+                ContactRequests,
+                UserSettingsTable,
+                CcConnectTokens,
+                RefreshTokensTable,
+            )
         }
     }
 

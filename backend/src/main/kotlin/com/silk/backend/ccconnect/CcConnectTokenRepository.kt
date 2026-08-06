@@ -6,6 +6,7 @@ import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
 import java.security.SecureRandom
 import java.time.LocalDateTime
 
@@ -53,6 +54,14 @@ object CcConnectTokenRepository {
     fun revokeAllForGroup(groupId: String) {
         transaction {
             CcConnectTokens.deleteWhere { CcConnectTokens.groupId eq groupId }
+        }
+    }
+
+    fun updateLabelForGroup(groupId: String, label: String) {
+        transaction {
+            CcConnectTokens.update({ CcConnectTokens.groupId eq groupId }) {
+                it[CcConnectTokens.label] = label
+            }
         }
     }
 

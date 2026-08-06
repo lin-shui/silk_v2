@@ -1,5 +1,6 @@
 package com.silk.backend.routes
 
+import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.UserRepository
 import com.silk.backend.models.Workflow
@@ -205,10 +206,13 @@ private fun Route.registerRemoveWorkflowMemberRoute(
         if (!GroupRepository.isUserInGroup(workflow.groupId, targetUserId)) {
             return@delete call.respond(HttpStatusCode.NotFound)
         }
+        val ownedWorkspaces = workspaceManager.listWorkspaces(targetUserId, workflow.groupId)
         val (removed, _) = GroupRepository.leaveGroup(workflow.groupId, targetUserId)
         if (!removed) {
             return@delete call.respond(HttpStatusCode.InternalServerError)
         }
+        ownedWorkspaces.forEach { AgentRuntime.cleanupState(it.ownerId, it.workspaceId) }
+        workspaceManager.privatizeWorkspacesOwnedBy(workflow.groupId, targetUserId)
         workspaceManager.removeCopilotFromRoom(workflow.groupId, targetUserId)
         onMemberRevoked(workflow.groupId, targetUserId)
         call.respond(workflow.membersResponse())

@@ -6,6 +6,8 @@ import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.SessionData
 import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceManager
+import com.silk.backend.workflow.WorkflowManager
+import com.silk.shared.models.RoomKind
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -30,6 +32,7 @@ class UserWorkspaceManager(
             ?: "chat_history",
     private val workspaceBaseDir: String = "user_workspace_views",
     private val workflowWorkspaceManager: WorkspaceManager = WorkspaceManager(),
+    private val workflowManager: WorkflowManager = WorkflowManager(),
 ) {
     private val logger = LoggerFactory.getLogger(UserWorkspaceManager::class.java)
     private val json = Json { ignoreUnknownKeys = true }
@@ -142,9 +145,9 @@ class UserWorkspaceManager(
                 val sessionInfo = loadSessionData(viewDir)
                 val chatInfo = loadChatHistory(viewDir)
 
-                appendLine("## ${cleanGroupName(group.name)}")
+                appendLine("## ${displayGroupName(group)}")
                 appendLine("- 目录: group_${group.id}/")
-                appendLine("- 群组类型: ${inferGroupType(group.name)}")
+                appendLine("- 群组类型: ${groupTypeLabel(group.roomKind)}")
                 appendLine("- 创建时间: ${formatCreatedAt(group.createdAt)}")
                 if (sessionInfo != null) {
                     val memberNames = sessionInfo.members
@@ -192,12 +195,12 @@ class UserWorkspaceManager(
         }
     }
 
-    /** 清理群组显示名：wf_ 开头的去掉尾部数字ID后缀 */
-    private fun cleanGroupName(name: String): String {
-        if (!name.startsWith("wf_")) return name
-        // wf_https_1777345689635 -> wf_https
-        return name.replace(Regex("_\\d{10,}$"), "")
-    }
+    private fun displayGroupName(group: Group): String =
+        if (group.roomKind == RoomKind.WORKFLOW) {
+            workflowManager.getWorkflowByGroupId(group.id)?.name?.takeIf(String::isNotBlank) ?: group.name
+        } else {
+            group.name
+        }
 
     private fun formatTimestamp(ts: Long): String {
         val instant = java.time.Instant.ofEpochMilli(ts)
@@ -215,10 +218,10 @@ class UserWorkspaceManager(
         }
     }
 
-    private fun inferGroupType(name: String): String = when {
-        name.startsWith("wf_") -> "工作流"
-        name.startsWith("silk_") -> "Silk 私聊"
-        else -> "群聊"
+    private fun groupTypeLabel(roomKind: RoomKind): String = when (roomKind) {
+        RoomKind.WORKFLOW -> "工作流"
+        RoomKind.SILK_PRIVATE -> "Silk 私聊"
+        RoomKind.CHAT -> "群聊"
     }
 
 }

@@ -7,6 +7,7 @@ import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Language
 import com.silk.shared.models.LeaveGroupResponse
+import com.silk.shared.models.RoomKind
 import com.silk.shared.models.SimpleResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
 import com.silk.shared.models.UserSettings
@@ -43,7 +44,8 @@ data class Group(
     val invitationCode: String,
     val hostId: String,
     val hostName: String = "",
-    val createdAt: String = ""
+    val createdAt: String = "",
+    val roomKind: RoomKind = RoomKind.CHAT,
 )
 
 @Serializable

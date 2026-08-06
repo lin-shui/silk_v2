@@ -472,8 +472,7 @@ fun main() {
 @Composable
 fun SilkApp() {
     val appState = remember { WebAppState() }
-    val scope = rememberCoroutineScope()
-    
+
     // 处理华为 OAuth 回调
     LaunchedEffect(Unit) {
         val handled = handleOAuthCallback(appState)
@@ -488,6 +487,7 @@ fun SilkApp() {
         NicknameSetupScene(appState)
     } else {
         Div({
+            attr("class", "silk-app-shell")
             style {
                 display(DisplayStyle.Flex)
                 height(100.vh)
@@ -510,8 +510,7 @@ fun SilkApp() {
                 } else {
                     key(appState.currentTab) {
                         when (appState.currentTab) {
-                            NavTab.SILK -> SilkTabContent(appState)
-                            NavTab.WORKFLOW -> WorkflowScene(appState)
+                            NavTab.CONVERSATIONS -> ConversationScene(appState)
                             NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
                             NavTab.AUDIO_DUPLEX -> AudioDuplexScene(appState)
                         }
@@ -525,6 +524,7 @@ fun SilkApp() {
 @Composable
 fun SilkNavRail(appState: WebAppState) {
     Div({
+        attr("class", "silk-nav-rail")
         style {
             width(72.px)
             property("flex-shrink", "0")
@@ -558,11 +558,12 @@ fun SilkNavRail(appState: WebAppState) {
         }
 
         // Tab items
-        NavRailItem("Silk", appState.currentTab == NavTab.SILK, "\uD83D\uDCAC") {
-            appState.selectTab(NavTab.SILK)
-        }
-        NavRailItem("工作流", appState.currentTab == NavTab.WORKFLOW, "\uD83D\uDD17") {
-            appState.selectTab(NavTab.WORKFLOW)
+        NavRailItem(
+            "会话",
+            appState.currentTab == NavTab.CONVERSATIONS,
+            "\uD83D\uDCAC",
+        ) {
+            appState.selectTab(NavTab.CONVERSATIONS)
         }
         NavRailItem("知识库", appState.currentTab == NavTab.KNOWLEDGE_BASE, "\uD83D\uDCDA") {
             appState.selectTab(NavTab.KNOWLEDGE_BASE)
@@ -625,620 +626,7 @@ fun NavRailItem(label: String, isActive: Boolean, icon: String, onClick: () -> U
     }
 }
 
-@Composable
-fun SilkTabContent(appState: WebAppState) {
-    when (appState.currentScene) {
-        Scene.GROUP_LIST -> GroupListScene(appState)
-        Scene.CONTACTS -> ContactsScene(appState)
-        Scene.CHAT_ROOM -> {
-            if (appState.selectedGroup != null && appState.currentUser != null) {
-                ChatScene(appState)
-            } else {
-                Div({ style { padding(20.px) } }) {
-                    Text("状态错误，请返回重试")
-                    Button({ onClick { appState.navigateBack() } }) {
-                        Text("返回群组列表")
-                    }
-                }
-            }
-        }
-        else -> GroupListScene(appState)
-    }
-}
-
-@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
-@Composable
-fun ChatScene(appState: WebAppState) {
-    console.log("🎬 ChatScene被调用")
-    
-    val group = appState.selectedGroup
-    val user = appState.currentUser
-    val scope = rememberCoroutineScope()
-    var userGroups by remember(user?.id) { mutableStateOf<List<Group>>(emptyList()) }
-    var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
-    var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
-    var sidebarCcStatus by remember(user?.id) { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
-    var chatListWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_chat_list_w", 320)) }
-    var chatListCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("silk_chat_list_collapsed", false)) }
-    ensureLayoutStylesInjected()
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var showJoinDialog by remember { mutableStateOf(false) }
-    val strings = com.silk.shared.i18n.getStrings(com.silk.shared.models.Language.CHINESE)
-    
-    console.log("   群组:", group?.name ?: "null")
-    console.log("   用户:", user?.fullName ?: "null")
-    
-    if (group == null || user == null) {
-        console.log("⚠️ 群组或用户为空，显示错误页面")
-        Div({ style { padding(20.px) } }) {
-            Text("错误：缺少群组或用户信息")
-            Button({ onClick { appState.navigateBack() } }) {
-                Text("返回")
-            }
-        }
-        return
-    }
-
-    suspend fun refreshSidebarGroups() {
-        isLoadingGroups = true
-        try {
-            val groupsResponse = ApiClient.getUserGroups(user.id)
-            if (groupsResponse.success) {
-                userGroups = (groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-            }
-            val unreadResponse = ApiClient.getUnreadCounts(user.id)
-            if (unreadResponse.success) {
-                unreadCounts = unreadResponse.unreadCounts
-            }
-            val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
-            userGroups.forEach { g ->
-                val info = ApiClient.getCcConnectTokenInfo(g.id, user.id)
-                if (info != null && info.success) {
-                    statusMap[g.id] = info
-                }
-            }
-            sidebarCcStatus = statusMap
-        } catch (e: Exception) {
-            console.error("❌ 加载聊天室群组列表失败:", e)
-        } finally {
-            isLoadingGroups = false
-        }
-    }
-
-    LaunchedEffect(user.id, group.id) {
-        refreshSidebarGroups()
-    }
-
-    // KB 内联引用：注册 window 桥，供聊天内 [[kb:...]] 链接点击跳转到知识库对应条目
-    DisposableEffect(appState) {
-        val bridge: (String?, String) -> Unit = { topicId, entryId ->
-            appState.openKnowledgeBaseEntry(entryId = entryId, topicId = topicId)
-        }
-        window.asDynamic().__silkOpenKnowledgeBaseEntry = bridge
-        onDispose {
-            window.asDynamic().__silkOpenKnowledgeBaseEntry = null
-        }
-    }
-
-    LaunchedEffect(user.id) {
-        while (true) {
-            kotlinx.coroutines.delay(30000)
-            try {
-                val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                if (unreadResponse.success) {
-                    unreadCounts = unreadResponse.unreadCounts
-                }
-            } catch (e: Exception) {
-                console.error("❌ 刷新未读消息失败:", e)
-            }
-        }
-    }
-    
-    console.log("✅ 群组和用户都有效，渲染聊天界面")
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            height(100.percent)
-            width(100.percent)
-            property("overflow", "hidden")
-            property("background", SilkColors.backgroundGradient)
-        }
-    }) {
-        if (chatListCollapsed) {
-            ReopenBar(onExpand = {
-                chatListCollapsed = false
-                LayoutPrefs.setBool("silk_chat_list_collapsed", false)
-            })
-        } else {
-        Div({
-            style {
-                width(chatListWidth.px)
-                property("flex-shrink", "0")
-                property("border-right", "1px solid ${SilkColors.border}")
-                backgroundColor(Color("rgba(255,255,255,0.88)"))
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                property("overflow", "hidden")
-                property("backdrop-filter", "blur(6px)")
-            }
-        }) {
-            Div({
-                style {
-                    padding(12.px, 16.px)
-                    property("border-bottom", "1px solid ${SilkColors.border}")
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    alignItems(AlignItems.Center)
-                }
-            }) {
-                Span({
-                    style {
-                        fontSize(16.px)
-                        color(Color(SilkColors.primary))
-                        property("font-weight", "700")
-                        property("letter-spacing", "1px")
-                        property("flex-shrink", "0")
-                    }
-                }) {
-                    Text("Silk")
-                }
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "8px")
-                    }
-                }) {
-                Button({
-                    attr("title", "收起列表")
-                    style {
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color(SilkColors.textSecondary))
-                        property("border", "1px solid ${SilkColors.border}")
-                        borderRadius(6.px)
-                        padding(4.px, 9.px)
-                        property("cursor", "pointer")
-                        property("flex-shrink", "0")
-                    }
-                    onClick {
-                        chatListCollapsed = true
-                        LayoutPrefs.setBool("silk_chat_list_collapsed", true)
-                    }
-                }) { Text("«") }
-                Span({
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("overflow", "hidden")
-                        property("text-overflow", "ellipsis")
-                        property("white-space", "nowrap")
-                        property("max-width", "120px")
-                    }
-                }) {
-                    Text(user.fullName)
-                }
-                // 🤖 与 Silk 对话按钮
-                Button({
-                    style {
-                        padding(4.px, 8.px)
-                        backgroundColor(Color("#7BA8C9"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(6.px)
-                        property("cursor", "pointer")
-                        property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
-                        fontSize(14.px)
-                        property("flex-shrink", "0")
-                    }
-                    onClick {
-                        scope.launch {
-                            val uid = appState.currentUser?.id ?: return@launch
-                            val r = ApiClient.startSilkPrivateChat(uid)
-                            if (r.success && r.group != null) appState.selectGroup(r.group!!)
-                        }
-                    }
-                }) { Text("🤖") }
-                
-                // ☰ 下拉菜单
-                var showMenu by remember { mutableStateOf(false) }
-                Div({
-                    style {
-                        position(Position.Relative)
-                    }
-                }) {
-                    Button({
-                        style {
-                            padding(4.px, 10.px)
-                            backgroundColor(Color("rgba(255,255,255,0.2)"))
-                            color(Color(SilkColors.textPrimary))
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.border))
-                            }
-                            borderRadius(6.px)
-                            property("cursor", "pointer")
-                            fontSize(16.px)
-                        }
-                        onClick { showMenu = !showMenu }
-                    }) { Text("☰") }
-                    
-                    if (showMenu) {
-                        Div({
-                            style {
-                                position(Position.Fixed)
-                                property("top", "0")
-                                property("left", "0")
-                                property("right", "0")
-                                property("bottom", "0")
-                                property("z-index", "99")
-                            }
-                            onClick { showMenu = false }
-                        })
-                        Div({
-                            style {
-                                position(Position.Absolute)
-                                property("top", "100%")
-                                property("right", "0")
-                                property("z-index", "100")
-                                backgroundColor(Color("#2a2a2a"))
-                                borderRadius(10.px)
-                                property("box-shadow", "0 4px 20px rgba(0,0,0,0.3)")
-                                property("min-width", "160px")
-                                padding(6.px)
-                                marginTop(6.px)
-                            }
-                            onClick { showMenu = false }
-                        }) {
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { showCreateDialog = true; showMenu = false }
-                            }) { Text("➕ ${strings.createButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { showJoinDialog = true; showMenu = false }
-                            }) { Text("🔗 ${strings.joinButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { appState.navigateTo(Scene.CONTACTS); showMenu = false }
-                            }) { Text("👤 ${strings.contactsButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { appState.navigateTo(Scene.SETTINGS); showMenu = false }
-                            }) { Text("⚙️ ${strings.settingsButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { appState.logout(); showMenu = false }
-                            }) { Text("🚪 ${strings.logoutButton}") }
-                        }
-                    }
-                }
-                } // close right-button group
-            }
-
-            Div({
-                style {
-                    property("flex", "1")
-                    property("overflow-y", "auto")
-                    padding(10.px)
-                }
-            }) {
-                when {
-                    isLoadingGroups -> {
-                        Div({
-                            style {
-                                color(Color(SilkColors.textSecondary))
-                                fontSize(13.px)
-                                textAlign("center")
-                                padding(18.px)
-                            }
-                        }) {
-                            Text("加载群组中...")
-                        }
-                    }
-                    userGroups.isEmpty() -> {
-                        Div({
-                            style {
-                                color(Color(SilkColors.textSecondary))
-                                fontSize(13.px)
-                                textAlign("center")
-                                padding(18.px)
-                            }
-                        }) {
-                            Text("暂无群组")
-                        }
-                    }
-                    else -> {
-                        val silkPrivateGroups = userGroups.filter { it.name.startsWith("[Silk]") }
-                        val ccGroups = userGroups.filter { sidebarCcStatus.containsKey(it.id) }
-                        val silkNormalGroups = userGroups.filter { !it.name.startsWith("[Silk]") && !sidebarCcStatus.containsKey(it.id) }
-
-                        @Composable
-                        fun renderGroupItem(item: Group) {
-                            val isActive = item.id == group.id
-                            val unread = unreadCounts[item.id] ?: 0
-                            val ccInfo = sidebarCcStatus[item.id]
-                            val isCcGroup = ccInfo != null
-                            val isSilkPrivate = item.name.startsWith("[Silk]")
-                            Div({
-                                style {
-                                    padding(12.px, 14.px)
-                                    marginBottom(8.px)
-                                    borderRadius(8.px)
-                                    backgroundColor(
-                                        if (isActive) Color("rgba(201, 168, 108, 0.2)")
-                                        else Color(SilkColors.surfaceElevated)
-                                    )
-                                    property("border", if (isActive) "1px solid ${SilkColors.primary}" else "1px solid ${SilkColors.border}")
-                                    property("box-shadow", if (isActive) "0 2px 8px rgba(169, 137, 77, 0.22)" else "0 1px 4px rgba(169, 137, 77, 0.08)")
-                                    property("cursor", "pointer")
-                                    property("transition", "all 0.2s ease")
-                                }
-                                onClick {
-                                    if (item.id != group.id) {
-                                        scope.launch {
-                                            ApiClient.markGroupAsRead(user.id, item.id)
-                                            unreadCounts = unreadCounts - item.id
-                                            appState.selectGroup(item)
-                                        }
-                                    }
-                                }
-                            }) {
-                                Div({
-                                    style {
-                                        display(DisplayStyle.Flex)
-                                        justifyContent(JustifyContent.SpaceBetween)
-                                        alignItems(AlignItems.Center)
-                                        property("gap", "10px")
-                                    }
-                                }) {
-                                    Span({
-                                        style {
-                                            color(Color(SilkColors.textPrimary))
-                                            fontSize(14.px)
-                                            property("font-weight", if (isActive) "700" else "600")
-                                            property("flex", "1")
-                                            property("overflow", "hidden")
-                                            property("text-overflow", "ellipsis")
-                                            property("white-space", "nowrap")
-                                        }
-                                    }) {
-                                        Text(item.name)
-                                    }
-                                    val typeBadge: String? = when {
-                                        isCcGroup -> {
-                                            val raw = (ccInfo?.agentType ?: "").lowercase().trim()
-                                            when {
-                                                raw.startsWith("claude") -> "claude"
-                                                raw.startsWith("cursor") -> "cursor"
-                                                raw.startsWith("gemini") -> "gemini"
-                                                raw.startsWith("codex")  -> "codex"
-                                                raw.startsWith("copilot") -> "copilot"
-                                                raw.isBlank() -> "cc"
-                                                else -> raw
-                                            }
-                                        }
-                                        isSilkPrivate -> null
-                                        else -> "silk"
-                                    }
-                                    if (typeBadge != null) {
-                                        Span({
-                                            style {
-                                                fontSize(9.px)
-                                                padding(1.px, 5.px)
-                                                borderRadius(3.px)
-                                                property("font-weight", "600")
-                                                property("letter-spacing", "0.3px")
-                                                property("flex-shrink", "0")
-                                                if (isCcGroup) {
-                                                    if (ccInfo?.connected == true) {
-                                                        backgroundColor(Color("#E8F5E9"))
-                                                        color(Color("#2E7D32"))
-                                                    } else {
-                                                        backgroundColor(Color("#FFF3E0"))
-                                                        color(Color("#E65100"))
-                                                    }
-                                                } else {
-                                                    backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
-                                                    color(Color(SilkColors.primary))
-                                                }
-                                            }
-                                        }) {
-                                            Text(if (isCcGroup && ccInfo?.connected != true) "$typeBadge ⏸" else typeBadge)
-                                        }
-                                    }
-                                    if (unread > 0) {
-                                        Span({
-                                            style {
-                                                minWidth(22.px)
-                                                height(22.px)
-                                                padding(0.px, 6.px)
-                                                borderRadius(11.px)
-                                                backgroundColor(Color("#FF5722"))
-                                                color(Color.white)
-                                                fontSize(11.px)
-                                                property("font-weight", "700")
-                                                display(DisplayStyle.Flex)
-                                                justifyContent(JustifyContent.Center)
-                                                alignItems(AlignItems.Center)
-                                            }
-                                        }) {
-                                            Text(if (unread > 99) "99+" else unread.toString())
-                                        }
-                                    }
-                                }
-                                // 非 Silk 专属对话才显示邀请码
-                                if (!isSilkPrivate) {
-                                Div({
-                                    style {
-                                        color(Color(SilkColors.textSecondary))
-                                        fontSize(11.px)
-                                        marginTop(4.px)
-                                        property("letter-spacing", "1px")
-                                    }
-                                }) {
-                                    Text("[${item.invitationCode}]")
-                                }
-                                }
-                            }
-                        }
-
-                        // --- Section 1: Silk 专属对话 ---
-                        if (silkPrivateGroups.isNotEmpty()) {
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "8px")
-                                    marginBottom(8.px)
-                                }
-                            }) {
-                                Span({
-                                    style {
-                                        fontSize(11.px)
-                                        color(Color(SilkColors.primary))
-                                        property("font-weight", "700")
-                                        property("letter-spacing", "1px")
-                                        property("white-space", "nowrap")
-                                    }
-                                }) { Text("Silk AI") }
-                                Div({
-                                    style {
-                                        property("flex", "1")
-                                        height(1.px)
-                                        backgroundColor(Color(SilkColors.primary))
-                                        property("opacity", "0.3")
-                                    }
-                                })
-                            }
-                            silkPrivateGroups.forEach { renderGroupItem(it) }
-                        }
-
-                        // --- Section 2: CC-Connect 群组 ---
-                        if (ccGroups.isNotEmpty()) {
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "8px")
-                                    marginTop(if (silkPrivateGroups.isNotEmpty()) 12.px else 0.px)
-                                    marginBottom(8.px)
-                                }
-                            }) {
-                                Span({
-                                    style {
-                                        fontSize(11.px)
-                                        color(Color("#2E7D32"))
-                                        property("font-weight", "700")
-                                        property("letter-spacing", "1px")
-                                        property("white-space", "nowrap")
-                                    }
-                                }) { Text("CC-Connect") }
-                                Div({
-                                    style {
-                                        property("flex", "1")
-                                        height(1.px)
-                                        backgroundColor(Color("#4CAF50"))
-                                        property("opacity", "0.3")
-                                    }
-                                })
-                            }
-                            ccGroups.forEach { renderGroupItem(it) }
-                        }
-
-                        // --- Section 3: Silk 普通群组 ---
-                        if (silkNormalGroups.isNotEmpty()) {
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "8px")
-                                    marginTop(if (silkPrivateGroups.isNotEmpty() || ccGroups.isNotEmpty()) 12.px else 0.px)
-                                    marginBottom(8.px)
-                                }
-                            }) {
-                                Span({
-                                    style {
-                                        fontSize(11.px)
-                                        color(Color(SilkColors.textSecondary))
-                                        property("font-weight", "700")
-                                        property("letter-spacing", "1px")
-                                        property("white-space", "nowrap")
-                                    }
-                                }) { Text("Silk Groups") }
-                                Div({
-                                    style {
-                                        property("flex", "1")
-                                        height(1.px)
-                                        backgroundColor(Color(SilkColors.textSecondary))
-                                        property("opacity", "0.2")
-                                    }
-                                })
-                            }
-                            silkNormalGroups.forEach { renderGroupItem(it) }
-                        }
-                    }
-                }
-            }
-        }
-        ColumnResizer(
-            isLeftPanel = true,
-            minWidth = 220,
-            maxWidth = 520,
-            currentWidth = { chatListWidth },
-            onResize = { chatListWidth = it },
-            onCommit = { LayoutPrefs.setInt("silk_chat_list_w", chatListWidth) },
-        )
-        } // close 列表非折叠分支
-
-        Div({
-            style {
-                property("flex", "1")
-                minWidth(0.px)
-                height(100.percent)
-                property("overflow", "hidden")
-            }
-        }) {
-            ChatAppWithGroup(user, group, appState)
-        }
-    }
-    
-    // 创建/加入群组对话框
-    if (showCreateDialog) {
-        CreateGroupDialog(
-            appState = appState,
-            strings = strings,
-            onDismiss = { showCreateDialog = false },
-            onGroupCreated = { newGroup ->
-                userGroups = userGroups + newGroup
-            },
-            onComplete = { showCreateDialog = false }
-        )
-    }
-    if (showJoinDialog) {
-        JoinGroupDialog(
-            appState = appState,
-            strings = strings,
-            onDismiss = { showJoinDialog = false },
-            onGroupJoined = { newGroup ->
-                userGroups = userGroups + newGroup
-                showJoinDialog = false
-            }
-        )
-    }
-}
-
-// Silk样式表 - 丝滑温暖风格
 object SilkStylesheet : StyleSheet() {
-    val container by style {
-        display(DisplayStyle.Flex)
-        flexDirection(FlexDirection.Column)
-        height(100.percent)
-        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-        property("overflow", "hidden")
-        property("background", SilkColors.backgroundGradient)
-    }
-    
     val header by style {
         property("flex-shrink", "0")
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
@@ -1573,7 +961,12 @@ object SilkStylesheet : StyleSheet() {
 
 @Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements", "TooGenericExceptionCaught", "SwallowedException", "UnusedPrivateProperty")
 @Composable
-fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
+fun ChatAppWithGroup(
+    user: User,
+    group: Group,
+    appState: WebAppState,
+    onRoomActivity: (Long) -> Unit = {},
+) {
     console.log("🎯 ChatAppWithGroup - 用户:", user.fullName, "群组:", group.name)
     
     val scope = rememberCoroutineScope()
@@ -1623,6 +1016,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
     val contentBlocks by chatClient.transientContentBlocks.collectAsState()
     val interactiveOptions by chatClient.interactiveOptions.collectAsState()
+    val latestMessageTimestamp = messages.maxOfOrNull { it.timestamp } ?: 0L
+
+    LaunchedEffect(group.id, latestMessageTimestamp) {
+        if (latestMessageTimestamp > 0L) onRoomActivity(latestMessageTimestamp)
+    }
 
     // Update ccConnectInfo when metadata arrives via WebSocket
     LaunchedEffect(ccMetadataJson) {
@@ -1858,7 +1256,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
-    val activeChatNavigationTarget = appState.chatNavigationTarget?.takeIf { it.groupId == group.id }
+    val activeChatNavigationTarget = appState.roomNavigationTarget?.takeIf { it.roomId == group.id }
 
     // 自动滚动到底部 — 包括 contentBlocks（cc-connect / Claudian 流式回复的主要通道）
     // 以及 interactiveOptions（交互式按钮出现在底部时）
@@ -1878,19 +1276,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         val target = activeChatNavigationTarget ?: return@LaunchedEffect
         val messageId = target.messageId
         if (messageId.isNullOrBlank()) {
-            appState.consumeChatNavigationTarget(target.requestId)
+            appState.consumeRoomNavigationTarget(target.requestId)
             return@LaunchedEffect
         }
         kotlinx.coroutines.delay(80)
         if (scrollMessageIntoContainer(CHAT_MESSAGES_CONTAINER_ID, messageId)) {
-            appState.consumeChatNavigationTarget(target.requestId)
+            appState.consumeRoomNavigationTarget(target.requestId)
         }
     }
     
-    Div({ classes(SilkStylesheet.container) }) {
+    ConversationDetailScaffold(ConversationDetailVariant.CHAT) {
         // Header - 丝滑风格
         Div({ 
-            classes(SilkStylesheet.header)
+            classes(SilkStylesheet.header, "silk-conversation-fixed-region", "silk-chat-header")
             style {
                 display(DisplayStyle.Flex)
                 alignItems(AlignItems.Center)
@@ -1943,7 +1341,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 Text("←")
             }
             
-            Div({ 
+            Div({
+                attr("class", "silk-chat-header-title")
                 style { 
                     property("flex", "1") 
                     display(DisplayStyle.Flex)
@@ -2025,6 +1424,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             if (isSelectionMode) {
                 // 选择模式工具栏
                 Div({
+                    attr("class", "silk-chat-header-actions")
                     style {
                         display(DisplayStyle.Flex)
                         property("gap", "10px")
@@ -2165,6 +1565,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             } else {
             Div({
+                attr("class", "silk-chat-header-actions")
                 style {
                     display(DisplayStyle.Flex)
                     property("gap", "10px")
@@ -2310,7 +1711,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
                 
                 // 非 Silk 专属对话才显示邀请、添加成员、查看成员按钮
-                if (!group.name.startsWith("[Silk]")) {
+                if (group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE) {
                 
                 // 邀请按钮
                 Button({
@@ -2389,7 +1790,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }) {
                     Text(strings.membersButton)
                 }
-                } // end if !group.name.startsWith("[Silk]")
+                } // end non-Silk-private controls
             }
             } // close else (non-selection mode)
         }
@@ -2444,7 +1845,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         // Status Bar - only show when not connected
         if (connectionState != ConnectionState.CONNECTED) {
             Div({ 
-                classes(SilkStylesheet.statusBar)
+                classes(SilkStylesheet.statusBar, "silk-conversation-fixed-region")
                 style {
                     property("background", when (connectionState) {
                         ConnectionState.CONNECTED -> "linear-gradient(90deg, ${SilkColors.success}, #8DBE7C)"
@@ -2467,7 +1868,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         // Messages container with drag-and-drop support
         // flex: 1 spacer pushes content to bottom; overflow-y: auto enables scroll
         Div({ 
-            classes(SilkStylesheet.messagesContainer)
+            classes(SilkStylesheet.messagesContainer, "silk-conversation-scroll-region")
             id(CHAT_MESSAGES_CONTAINER_ID)
             style {
                 property("position", "relative")
@@ -2550,7 +1951,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         scope.launch {
                             isLoadingGroups = true
                             val response = ApiClient.getUserGroups(user.id)
-                            userGroups = response.groups?.filter { it.id != group.id && !it.name.startsWith("wf_") } ?: emptyList()
+                            userGroups = response.groups?.filter {
+                                it.id != group.id && it.roomKind != com.silk.shared.models.RoomKind.WORKFLOW
+                            } ?: emptyList()
                             isLoadingGroups = false
                             showForwardDialog = true
                         }
@@ -2606,7 +2009,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             scope.launch {
                                 isLoadingGroups = true
                                 val response = ApiClient.getUserGroups(user.id)
-                                userGroups = response.groups?.filter { it.id != group.id && !it.name.startsWith("wf_") } ?: emptyList()
+                                userGroups = response.groups?.filter {
+                                    it.id != group.id && it.roomKind != com.silk.shared.models.RoomKind.WORKFLOW
+                                } ?: emptyList()
                                 isLoadingGroups = false
                                 showForwardDialog = true
                             }
@@ -2830,14 +2235,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         // Input区域（添加诊断按钮）- 丝滑风格
         if (connectionState == ConnectionState.CONNECTED) {
             Div({ 
-                classes(SilkStylesheet.inputContainer)
+                classes(SilkStylesheet.inputContainer, "silk-conversation-fixed-region", "silk-chat-composer")
                 style {
                     display(DisplayStyle.Flex)
                     property("flex-direction", "column")
                     property("gap", "12px")
                 }
             }) {
-                val isSilkPrivateChat = group.name.startsWith("[Silk]")
+                val isSilkPrivateChat = group.roomKind == com.silk.shared.models.RoomKind.SILK_PRIVATE
                 val isCcConnectGroup = ccConnectInfo != null
                 val currentMemberRole = groupMembers.find { it.id == user.id }?.role
                 val canTriggerCc = currentMemberRole == "HOST" || currentMemberRole == "OPERATOR"
@@ -2858,56 +2263,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
                 // @Silk 快捷按钮（在 Silk 私聊和 cc-connect 群组中隐藏）
                 if (!isSilkPrivateChat && !isCcConnectGroup) {
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        property("justify-content", "flex-start")
-                        property("gap", "8px")
-                        alignItems(AlignItems.Center)
-                    }
-                }) {
-                    Button({
-                        style {
-                            padding(6.px, 12.px)
-                            backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
-                            color(Color(SilkColors.primary))
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.primary))
-                            }
-                            borderRadius(16.px)
-                            property("cursor", "pointer")
-                            fontSize(13.px)
-                            property("font-weight", "500")
-                            property("transition", "all 0.2s ease")
-                            property("white-space", "nowrap")
-                        }
-                        onClick {
-                            val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
-                            if (input != null) {
-                                val currentText = messageText
-                                val cursorPos = input.selectionStart ?: currentText.length
-                                val beforeCursor = currentText.substring(0, cursorPos)
-                                val afterCursor = currentText.substring(cursorPos)
-                                messageText = "$beforeCursor@Silk $afterCursor"
-                                window.setTimeout({
-                                    val newPos = cursorPos + 6
-                                    input.setSelectionRange(newPos, newPos)
-                                    input.focus()
-                                }, 0)
-                            } else {
-                                messageText = if (messageText.isEmpty() || messageText.endsWith(" ")) {
-                                    "${messageText}@Silk "
-                                } else {
-                                    "${messageText} @Silk "
-                                }
-                            }
-                        }
-                    }) {
-                        Text("@Silk")
-                    }
-                }
+                    SilkMentionButton(
+                        inputElementId = "chat-input",
+                        messageText = messageText,
+                        onMessageTextChange = { messageText = it },
+                    )
                 }
 
                 // 代理触发按钮（按连接的代理类型显示 @claude/@cursor 等，仅多人群 HOST/OPERATOR 可见）
@@ -3279,7 +2639,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                         attr("placeholder", when {
                             pendingQuestionId != null -> "回答 Claude Code 的问题..."
-                            group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
+                            group.roomKind == com.silk.shared.models.RoomKind.SILK_PRIVATE -> strings.silkChatInputPlaceholder
                             ccConnectInfo != null -> "Message cc-connect agent..."
                             else -> strings.messageInputPlaceholder
                         })

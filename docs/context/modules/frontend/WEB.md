@@ -5,7 +5,8 @@
 - `frontend/webApp/src/main/kotlin/com/silk/web/Main.kt`
 - `AppState.kt`
 - `ApiClient.kt`
-- `GroupListScene.kt`
+- `ConversationScene.kt`
+- `ConversationDetailScaffold.kt`
 - `KnowledgeBaseScene.kt`
 - `WorkflowScene.kt`
 - `AudioDuplexScene.kt`
@@ -17,10 +18,14 @@
 - Compose for Web
 - 登录后是左侧 `NavRail` + 右侧内容区
 - 主 Tab：
-  - Silk
-  - Workflow
+  - 会话
   - Knowledge Base
   - Audio Duplex
+- “会话”由 `ConversationScene` 统一展示 `CHAT / WORKFLOW / SILK_PRIVATE`；Silk AI 固定置顶，其余 Room 按最近活动倒排，有消息时使用最后消息时间、无消息时使用创建时间。当前 Room 收到或发出持久化消息后通过已有 WebSocket 本地立即重排，15 秒列表轮询仅兜底其他 Room、跨设备活动和未读状态；支持搜索、全部/工作群组/聊天群组筛选、未读和 cc-connect 状态。侧栏 `+` 是统一“添加会话”入口，一级切换创建群组/通过邀请码加入，创建模式二级选择聊天群组/工作群组。非 Silk Room 的 `⋯` 菜单向所有成员提供邀请，Owner 提供重命名/删除，非 Owner 提供退出；成功后立即更新或移除本地列表
+- 创建工作群组只建 Room + Workflow 元数据，无需 Bridge；用户显式新建 Workspace 时才进入目录信任和 Agent 选择流程
+- 普通聊天和工作群组共享 `ConversationDetailScaffold` / `ConversationPaneScaffold` 几何骨架；固定区使用 `silk-conversation-fixed-region`，消息区是唯一的 `silk-conversation-scroll-region`，业务状态和消息 scope 仍由各自主体管理
+- 桌面宽度下，当前工作群组在 Room 下展开 Team Channel、我的工作区、Co-pilot、成员、历史共享和已归档分组；再次点击当前工作群组只收拢/展开该子树，不切换或重载右侧会话。Room 树展开状态按 Room 持久化到 `silk_room_tree_expanded_<roomId>`，内部分类折叠状态持久化到 `silk_room_workspace_sections_<roomId>`。Room 侧栏可收起为 28px 重开条，整条均可点击展开，状态持久化到 `silk_room_list_collapsed`，并兼容读取旧 `silk_wf_list_collapsed` / `silk_chat_list_collapsed` 偏好。统一会话壳层根据会话容器宽度在 `<= 1100px` 时切为列表/详情单页、隐藏折叠控件且强制展示完整列表，并使用单一 Workspace 下拉选择器；根据详情容器宽度在 `<= 900px` 时把代码审查改为上下分栏，并保留 viewport media query 作为旧浏览器兜底。Conversation detail 到消息区必须保持完整的 `flex + min-height: 0` 高度链，避免消息区折叠为零高度
+- 旧 `GroupListScene`、`ChatScene` 和 `WorkflowScene` 外层列表已删除；聊天与工作群组仅保留统一壳层下的 `ChatAppWithGroup` / `WorkflowRoomView` 主体，创建和邀请码加入共用 `ConversationScene` 内的添加会话弹窗
 
 ## Build-Time Facts
 
@@ -33,9 +38,9 @@
 - 改文件消息/下载逻辑时，优先看 `FileContracts.kt` / `FileContractsTest.kt`
 - 改布局壳层时，确认 `AppState.kt` 与 `Main.kt` 的 scene/tab 状态流
 - 改 Audio Duplex 时看 `AudioDuplexScene.kt` 与后端 `/ws/audio-duplex`
-- 工作流面板（`WorkflowScene.kt`）含 Folder Picker：
+- 工作群组主体（`WorkflowScene.kt`）含 Folder Picker：
   - Team Channel 与 Personal Workspace 使用独立 Tab；composer、停止生成、卡片回复和 Agent 回包都携带显式 `scope/workspaceId`
-  - Team Channel 中的人工对话不自动触发 AI；无论 Room 是单人还是多人，只有以 `@Silk` 开头的消息进入 Silk `DirectModelAgent`。Workspace 由后端路由到目标 Owner 的编码 Agent。Observer 只读发送时共享的历史，不能操作卡片或本地控制面
+  - Team Channel 中的人工对话不自动触发 AI；composer 复用普通聊天的 `@Silk` 快捷按钮，只有以 `@Silk` 开头的消息进入 Silk `DirectModelAgent`。Workspace 由后端路由到目标 Owner 的编码 Agent，不显示 Team Channel 的 `@Silk` 按钮。Observer 只读发送时共享的历史，不能操作卡片或本地控制面
   - Workflow 列表按当前 JWT 成员身份发现，非 Owner 加入后也能看到共享 Room；header 的“成员”面板向所有成员展示名单，Owner 可按登录名、姓名或手机号搜索并增删成员
   - 工作区可在 Web 内创建、重命名、切换共享、管理 Room 成员 Co-pilot、归档/恢复/删除；他人当前共享工作区按 Owner 身份稳定分组（Observer 与 Co-pilot 都保留在 Owner 名下），Co-pilot 另有操作权限快捷分组；已撤销共享但仍可合法读取的消息单列为“历史共享”，选项显示“Owner - 最后共享名称”，窄屏收敛为去重后的单一下拉选择器
   - 切换 Team Channel 或 Workspace 时，消息区在内容完成布局后滚到当前流底部；显式跳转到某条消息时由消息定位逻辑接管，不被自动滚底覆盖

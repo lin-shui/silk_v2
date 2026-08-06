@@ -11,7 +11,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 
 1. 前端通过 HTTP + `/chat` WebSocket 连接后端。
 2. `Application.kt` 安装基础 Ktor 插件并调用 `configureWebSockets()`、`configureRouting()`。
-3. `Routing.kt` 是 HTTP 总入口；`routes/FileRoutes.kt`、`routes/AsrRoutes.kt` 已从大文件中拆出。
+3. `Routing.kt` 是 HTTP 总入口；`routes/RoomRoutes.kt`、`FileRoutes.kt`、`AsrRoutes.kt` 等专项路由已拆分为独立文件。
 4. `WebSocketConfig.kt` 内的 `ChatServer` 是聊天主链：
    - 权限校验
    - 历史回放
@@ -21,10 +21,12 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
 5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
-6. Workflow Room 复用 Group（`roomId = groupId`），消息显式分为 `TEAM` 与 `WORKSPACE(roomId, workspaceId)`；TEAM 始终对 Room 成员广播，只有以 `@Silk` 开头的用户消息才进入 `DirectModelAgent`，WORKSPACE 经 Owner/Co-pilot 鉴权后进入 `AgentRuntime(ownerId, workspaceId)`。
-7. `WorkspaceManager` 在 `workspace_store.json` 持久化工作目录、active agent、权限模式、per-agent session、可见性、最后共享名称、Co-pilot 和 `ACTIVE/ARCHIVED` 生命周期；`workflow_store.json` 暂保留工作流入口元数据并作为一次性迁移源。Workflow Room 连接只恢复已显式创建且 cwd 非空的活动工作区，不会隐式创建默认编码工作区。SHARED 转 PRIVATE 后，Observer 的历史入口只返回 Owner 与最后共享名称，不暴露私有阶段名称或 runtime 元数据。
-8. `Routing.kt` 另提供 `/ws/audio-duplex`，把客户端音频双工 WebSocket 代理到 `AIConfig.AUDIO_DUPLEX_URL` 上游 Worker。
-9. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
+6. SQLite `groups.room_kind` 以 `CHAT / WORKFLOW / SILK_PRIVATE` 显式区分 Room，`groups.last_message_at` 独立记录最近一条持久化消息时间；启动迁移器分别从 Workflow/Workspace 元数据和历史消息幂等回填旧数据。`Group.name` 是 Room 展示名权威，Workflow 名称仅作旧数据兼容；运行时不再根据 `wf_` 或 `[Silk]` 名称前缀判断类型，也不以重命名等元数据更新时间代替消息活跃时间。
+7. Workflow Room 复用 Group（`roomId = groupId`），消息显式分为 `TEAM` 与 `WORKSPACE(roomId, workspaceId)`；TEAM 始终对 Room 成员广播，只有以 `@Silk` 开头的用户消息才进入 `DirectModelAgent`，WORKSPACE 经 Owner/Co-pilot 鉴权后进入 `AgentRuntime(ownerId, workspaceId)`。
+8. `WorkspaceManager` 在 `workspace_store.json` 持久化工作目录、active agent、权限模式、per-agent session、可见性、最后共享名称、Co-pilot 和 `ACTIVE/ARCHIVED` 生命周期；`workflow_store.json` 暂保留工作流入口元数据并作为一次性迁移源。Workflow Room 连接只恢复已显式创建且 cwd 非空的活动工作区，不会隐式创建默认编码工作区。SHARED 转 PRIVATE 后，Observer 的历史入口只返回 Owner 与最后共享名称，不暴露私有阶段名称或 runtime 元数据。
+9. Web 端以单一“会话”入口消费 `GET /api/rooms/visible`，Silk 专属会话固定置顶，其余普通聊天和工作群组按最近活动倒排：有消息时使用最后消息时间，无消息时使用创建时间。当前 Room 的持久化消息通过已有 WebSocket 在本地立即更新排序，15 秒 Room 列表轮询仅作为其他 Room、跨设备活动和未读状态的兜底；侧栏 `+` 统一承载创建群组和通过邀请码加入，Room 行菜单按 JWT 角色提供邀请、重命名、退出和删除，操作成功后本地立即更新列表。普通聊天与 Workflow Team Channel 共用 `@Silk` 快捷按钮并触发同一 `TEAM` Silk AI 链路，Workspace 则继续使用独立的编码 Agent 链路。内部分别复用聊天主体和 Workflow/Workspace 主体。桌面 Room 侧栏和工作群组树可折叠并持久化偏好，`<= 1100px` 的列表/详情单页布局会忽略侧栏偏好并保持列表完整可用。
+10. `Routing.kt` 另提供 `/ws/audio-duplex`，把客户端音频双工 WebSocket 代理到 `AIConfig.AUDIO_DUPLEX_URL` 上游 Worker。
+11. `frontend/shared` 定义多端共享消息模型、Room 合同、WebSocket 客户端行为与解析逻辑。
 
 ## Persistent State
 
@@ -49,7 +51,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Surface | Primary Paths | Notes |
 | --- | --- | --- |
 | App/bootstrap | `Application.kt`, `settings.gradle.kts`, root `build.gradle.kts`, `silk.sh` | 运行入口与构建编排 |
-| HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt`, `routes/ObsidianRoutes.kt` | `Routing.kt` 仍然很大，是主索引点；`AgentChangesRoutes` 是只读代码审查（Source Control）路由；`ObsidianRoutes` 提供 `/api/obsidian/sync` 一键导出 |
+| HTTP routes | `Routing.kt`, `routes/RoomRoutes.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt`, `routes/ObsidianRoutes.kt` | `RoomRoutes` 提供统一 Room 发现/创建；`Routing.kt` 仍然是其他路由的主索引点 |
 | Obsidian integration | `obsidian-plugin/silk-sync/` | Obsidian 插件，一键同步 Silk 聊天记录和 KB 条目到 vault |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt`, `workspace/WorkspaceAccessPolicy.kt` | 消息主链、scope ACL、历史、URL 下载 |
 | Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |

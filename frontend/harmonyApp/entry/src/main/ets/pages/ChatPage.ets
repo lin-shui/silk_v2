@@ -926,9 +926,9 @@ export struct ChatPage {
 
     try {
       const response = await this.apiClient.getGroups(this.userId);
-      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），不允许转发到工作流私聊群组
+      // 不允许转发到工作流房间。
       const groups = response.data
-        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
+        ? response.data.filter((g: Group) => g.roomKind !== 'WORKFLOW')
         : [];
       const result: Group[] = [];
       for (let i = 0; i < groups.length; i++) {
@@ -1017,9 +1017,9 @@ export struct ChatPage {
     return `${month}-${day} ${hours}:${minutes}`;
   }
 
-  /** 与 Android ChatScreen 一致：群组名为 [Silk] 开头表示与 Silk 的专属私聊，无需再点 @ */
+  /** Silk 专属私聊无需再点 @。 */
   private isSilkPrivateChat(): boolean {
-    return this.groupName.startsWith('[Silk]');
+    return globalAppStore.currentGroup?.roomKind === 'SILK_PRIVATE';
   }
 
   private getCcAgentName(): string {

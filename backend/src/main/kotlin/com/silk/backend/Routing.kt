@@ -15,11 +15,9 @@ import com.silk.backend.database.DeleteGroupRequest
 import com.silk.backend.database.DeleteUserTodoRequest
 import com.silk.backend.database.Group
 import com.silk.backend.database.GroupMemberApi
-import com.silk.backend.database.GroupMembers
 import com.silk.backend.database.GroupMembersResponse
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.GroupResponse
-import com.silk.backend.database.Groups
 import com.silk.backend.database.HandleContactRequestData
 import com.silk.backend.database.JoinGroupRequest
 import com.silk.backend.database.LeaveGroupRequest
@@ -90,6 +88,7 @@ import com.silk.backend.routes.agentChangesRoutes
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.routes.obsidianRoutes
+import com.silk.backend.routes.roomRoutes
 import com.silk.backend.routes.workspaceRoutes
 import com.silk.backend.routes.workflowRoomRoutes
 import com.silk.backend.workspace.WorkspaceManager
@@ -104,6 +103,7 @@ import com.silk.shared.models.AddTrustRequest
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
+import com.silk.shared.models.RoomKind
 import com.silk.shared.models.TrustedDirListResponse
 import com.silk.shared.models.TrustedDirCheckResponse
 import com.silk.shared.models.TrustedDirRecordDto
@@ -158,11 +158,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import org.jetbrains.exposed.sql.and
-import org.jetbrains.exposed.sql.insert
-import org.jetbrains.exposed.sql.select
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
-import org.jetbrains.exposed.sql.transactions.transaction
 import java.io.File
 import java.time.LocalDate
 import java.util.UUID
@@ -304,9 +299,9 @@ private suspend fun ApplicationCall.resolveOwnPathUser(pathUserId: String): Stri
 internal fun getGroupChatServer(groupId: String): ChatServer {
     return groupChatServers.computeIfAbsent(groupId) {
         val sessionName = "group_$groupId"
-        val wf = workflowManager.getWorkflowByGroupId(groupId)
-        val isWorkflowRoom = wf != null
-        ChatServer(sessionName, workspaceManager).also {
+        val group = GroupRepository.findGroupById(groupId)
+        val isWorkflowRoom = com.silk.backend.rooms.isWorkflowRoom(groupId, workflowManager, workspaceManager)
+        ChatServer(sessionName, workspaceManager, group?.roomKind ?: RoomKind.CHAT).also {
             logger.info("🆕 创建新的群组聊天服务器: {} (workflowRoom={})", sessionName, isWorkflowRoom)
         }
     }
@@ -432,10 +427,24 @@ fun Application.configureRouting() {
         workflowKbRoutes()
         pollMessagesRoute()
         obsidianRoutes(workspaceManager)
+        roomRoutes(
+            workflowManager = workflowManager,
+            workspaceManager = workspaceManager,
+            onMemberRevoked = { roomId, userId ->
+                groupChatServers[roomId]?.revokeRoomMember(userId)
+            },
+            onRoomDeleted = { roomId, memberIds ->
+                groupChatServers.remove(roomId)?.let { chatServer ->
+                    memberIds.forEach { userId -> chatServer.revokeRoomMember(userId) }
+                }
+            },
+        )
         workspaceRoutes(
             workspaceManager = workspaceManager,
             trustedDirManager = trustedDirManager,
-            isWorkflowRoom = { roomId -> workflowManager.getWorkflowByGroupId(roomId) != null },
+            isWorkflowRoom = { roomId ->
+                com.silk.backend.rooms.isWorkflowRoom(roomId, workflowManager, workspaceManager)
+            },
         )
         workflowRoomRoutes(
             workflowManager = workflowManager,
@@ -1239,7 +1248,7 @@ private fun Route.coreRoutes() {
                 return@get call.respond(HttpStatusCode.NotFound)
             }
             // 旧 PDF 没有逐消息 scope 元数据，无法可靠过滤 PRIVATE workspace 内容。
-            if (workflowManager.getWorkflowByGroupId(groupId) != null) {
+            if (com.silk.backend.rooms.isWorkflowRoom(groupId, workflowManager, workspaceManager)) {
                 return@get call.respond(HttpStatusCode.Conflict, "Workflow Room 暂不支持 PDF 报告导出")
             }
             
@@ -1622,8 +1631,8 @@ private fun Route.groupContactRoutes() {
                 val request = call.receive<JoinGroupRequest>()
                 // 禁止通过邀请码加入 [Silk] 专属对话
                 val targetGroup = GroupRepository.findGroupByInvitationCode(request.invitationCode)
-                if (targetGroup != null && targetGroup.name.startsWith("[Silk]")) {
-                    call.respond(HttpStatusCode.Forbidden, GroupResponse(false, "该群组为专属对话，无法通过邀请码加入"))
+                if (targetGroup?.roomKind == RoomKind.SILK_PRIVATE) {
+                    call.respond(HttpStatusCode.Forbidden, GroupResponse(false, "Silk 专属对话不能通过邀请码加入"))
                     return@post
                 }
                 val response = GroupService.joinGroup(request)
@@ -1931,9 +1940,8 @@ private fun Route.groupContactRoutes() {
                     return@post
                 }
                 
-                // 禁止向 Silk 专属对话添加成员
-                if (group.name.startsWith("[Silk]")) {
-                    call.respond(SimpleResponse(false, "专属对话无法添加成员"))
+                if (group.roomKind != RoomKind.CHAT) {
+                    call.respond(SimpleResponse(false, "该 Room 请使用专用成员管理入口"))
                     return@post
                 }
                 
@@ -2423,89 +2431,22 @@ private fun Route.unreadTodoMessageRoutes() {
                 // Silk AI Agent ID
                 val silkAgentId = SilkAgent.AGENT_ID
                 
-                // 查找用户与 Silk 的专属私聊群组
-                // 使用特殊命名规则来区分 Silk 私聊：以 "[Silk] " 开头
-                val existingGroup = transaction {
-                    val userGroups = GroupMembers
-                        .select { GroupMembers.userId eq request.userId }
-                        .map { it[GroupMembers.groupId] }
-                    
-                    for (groupId in userGroups) {
-                        val group = Groups.select { Groups.id eq groupId }.singleOrNull()
-                        if (group != null && group[Groups.name].startsWith("[Silk] ")) {
-                            // 检查 Silk AI 是否也在这个群组中
-                            val silkInGroup = GroupMembers.select {
-                                (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq silkAgentId)
-                            }.count() > 0
-                            
-                            if (silkInGroup) {
-                                // 检查群组是否只有2个成员（用户 + Silk）
-                                val memberCount = GroupMembers.select { GroupMembers.groupId eq groupId }.count()
-                                if (memberCount == 2L) {
-                                    val hostUser = UserRepository.findUserById(group[Groups.hostId])
-                                    return@transaction com.silk.backend.database.Group(
-                                        id = group[Groups.id],
-                                        name = group[Groups.name],
-                                        invitationCode = group[Groups.invitationCode],
-                                        hostId = group[Groups.hostId],
-                                        hostName = hostUser?.fullName ?: "",
-                                        createdAt = group[Groups.createdAt].toString()
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    null
-                }
+                val existingGroup = GroupRepository.findSilkPrivateGroup(request.userId, silkAgentId)
                 
                 if (existingGroup != null) {
                     logger.info("✅ 找到用户 {} 与 Silk 的私聊: {}", user.fullName, existingGroup.name)
                     call.respond(PrivateChatResponse(true, "打开 Silk 对话", existingGroup, isNew = false))
                 } else {
-                    // 创建新的 Silk 私聊群组
-                    val groupName = "[Silk] ${user.fullName} 的专属对话"
-                    val groupId = java.util.UUID.randomUUID().toString()
-                    val invitationCode = java.util.UUID.randomUUID().toString().substring(0, 6).uppercase()
-                    
-                    val newGroup = transaction {
-                        // 创建群组
-                        Groups.insert {
-                            it[id] = groupId
-                            it[name] = groupName
-                            it[Groups.invitationCode] = invitationCode
-                            it[hostId] = request.userId // 用户作为群主
-                        }
-                        
-                        // 添加用户作为成员
-                        GroupMembers.insert {
-                            it[GroupMembers.groupId] = groupId
-                            it[GroupMembers.userId] = request.userId
-                            it[GroupMembers.role] = MemberRole.HOST.name
-                        }
-                        
-                        // 添加 Silk AI 作为成员
-                        GroupMembers.insert {
-                            it[GroupMembers.groupId] = groupId
-                            it[GroupMembers.userId] = silkAgentId
-                            it[GroupMembers.role] = MemberRole.GUEST.name
-                        }
-                        
-                        // 创建聊天历史文件夹
-                        val sessionDir = java.io.File("chat_history/group_$groupId")
-                        sessionDir.mkdirs()
-                        logger.debug("📁 Silk 私聊历史文件夹已创建: {}", sessionDir.path)
-                        
-                        com.silk.backend.database.Group(
-                            id = groupId,
-                            name = groupName,
-                            invitationCode = invitationCode,
-                            hostId = request.userId,
-                            hostName = user.fullName,
-                            createdAt = System.currentTimeMillis().toString()
-                        )
+                    val newGroup = GroupRepository.createSilkPrivateGroup(
+                        userId = request.userId,
+                        userDisplayName = user.fullName,
+                        silkAgentId = silkAgentId,
+                    )
+                    if (newGroup == null) {
+                        call.respond(HttpStatusCode.InternalServerError, PrivateChatResponse(false, "创建 Silk 对话失败"))
+                        return@post
                     }
-                    
-                    logger.info("🆕 创建用户 {} 与 Silk 的私聊: {}", user.fullName, groupName)
+                    logger.info("🆕 创建用户 {} 与 Silk 的私聊: {}", user.fullName, newGroup.name)
                     call.respond(PrivateChatResponse(true, "创建 Silk 对话", newGroup, isNew = true))
                 }
             } catch (e: Exception) {
@@ -3758,9 +3699,13 @@ private fun Route.workflowKbRoutes() {
             val taskFocus = req["taskFocus"]?.jsonPrimitive?.contentOrNull ?: ""
             val permissionMode = req["permissionMode"]?.jsonPrimitive?.contentOrNull ?: ""
 
-            // 自动创建关联群组（工作流私聊）
-            val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
-            val group = com.silk.backend.database.GroupRepository.createGroup(groupName, userId)
+            // 房间类型由 room_kind 表达，不再编码到名称里。
+            val groupName = GroupService.uniqueRoomName(name.trim())
+            val group = com.silk.backend.database.GroupRepository.createGroup(
+                groupName,
+                userId,
+                RoomKind.WORKFLOW,
+            )
             if (group == null) {
                 respondError(HttpStatusCode.InternalServerError, "Failed to create workflow group")
                 return@post
@@ -3880,11 +3825,27 @@ private fun Route.workflowKbRoutes() {
                 )
                 return@put
             }
-            val updated = workflowManager.renameWorkflow(workflowId, userId, newName)
-            if (updated == null) {
+            val existing = workflowManager.getWorkflow(workflowId, userId)
+            if (existing == null) {
                 call.respondText(
                     """{"success":false,"message":"Workflow not found"}""",
                     ContentType.Application.Json, HttpStatusCode.NotFound
+                )
+                return@put
+            }
+            if (!GroupRepository.updateGroupName(existing.groupId, newName)) {
+                call.respondText(
+                    """{"success":false,"message":"Room rename failed"}""",
+                    ContentType.Application.Json, HttpStatusCode.InternalServerError
+                )
+                return@put
+            }
+            val updated = workflowManager.renameWorkflow(workflowId, userId, newName)
+            if (updated == null) {
+                GroupRepository.updateGroupName(existing.groupId, existing.name)
+                call.respondText(
+                    """{"success":false,"message":"Workflow rename failed"}""",
+                    ContentType.Application.Json, HttpStatusCode.InternalServerError
                 )
                 return@put
             }
@@ -3958,14 +3919,14 @@ private fun Route.workflowKbRoutes() {
 private fun Route.chatWebSocketRoute() {
         webSocket("/chat") {
             val groupId = call.parameters["groupId"] ?: "default_room"
-            val workflow = workflowManager.getWorkflowByGroupId(groupId)
+            val workflowRoom = com.silk.backend.rooms.isWorkflowRoom(groupId, workflowManager, workspaceManager)
             val token = call.parameters["token"]
             val tokenUserId = token?.takeIf { it.isNotBlank() }?.let(JwtProvider::verifyAccessToken)
-            if ((!token.isNullOrBlank() && tokenUserId == null) || (workflow != null && tokenUserId == null)) {
+            if ((!token.isNullOrBlank() && tokenUserId == null) || (workflowRoom && tokenUserId == null)) {
                 close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "valid JWT required"))
                 return@webSocket
             }
-            if (workflow != null && !GroupRepository.isUserInGroup(groupId, tokenUserId.orEmpty())) {
+            if (workflowRoom && !GroupRepository.isUserInGroup(groupId, tokenUserId.orEmpty())) {
                 close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "room membership required"))
                 return@webSocket
             }
@@ -3986,7 +3947,7 @@ private fun Route.chatWebSocketRoute() {
             val groupChatServer = getGroupChatServer(groupId)
 
             // 恢复该用户显式创建的可执行工作区；连接 Room 不会隐式创建默认工作区。
-            val ownedWorkspaces = if (workflow == null) emptyList() else {
+            val ownedWorkspaces = if (!workflowRoom) emptyList() else {
                 workspaceManager.listWorkspaces(userId, groupId).filter {
                     it.lifecycleState == WorkspaceLifecycleState.ACTIVE && it.workingDir.isNotBlank()
                 }

@@ -20,6 +20,8 @@ object DatabaseFactory {
 
     fun init() {
         initSqlite()
+        RoomKindMigration.run()
+        RoomLastMessageMigration.run()
         initKbPostgresIfEnabled()
     }
 

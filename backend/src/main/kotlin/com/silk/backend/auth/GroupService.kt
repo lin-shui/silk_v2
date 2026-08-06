@@ -7,6 +7,7 @@ import com.silk.backend.database.GroupResponse
 import com.silk.backend.database.JoinGroupRequest
 import com.silk.backend.database.MemberRole
 import com.silk.backend.database.UserRepository
+import com.silk.shared.models.RoomKind
 import org.slf4j.LoggerFactory
 
 /**
@@ -19,26 +20,30 @@ object GroupService {
      * 创建新群组
      */
     fun createGroup(request: CreateGroupRequest): GroupResponse {
+        return createRoom(request.userId, request.groupName, RoomKind.CHAT)
+    }
+
+    fun createRoom(userId: String, roomName: String, roomKind: RoomKind): GroupResponse {
         // 验证输入
-        if (request.groupName.isBlank()) {
+        if (roomName.isBlank()) {
             return GroupResponse(false, "群组名称不能为空")
         }
-        if (request.groupName.trimStart().startsWith("[Silk]")) {
+        if (roomName.trimStart().startsWith("[Silk]")) {
             return GroupResponse(false, "群组名称不能以 [Silk] 开头，该前缀为系统保留")
         }
 
         // 验证用户是否存在
-        val user = UserRepository.findUserById(request.userId)
+        val user = UserRepository.findUserById(userId)
         if (user == null) {
             return GroupResponse(false, "用户不存在")
         }
         
         // 使用用户输入的群名（不添加前缀）
         // 如果名字重复，自动添加 (数字) 后缀
-        val uniqueGroupName = generateUniqueGroupName(request.groupName)
+        val uniqueGroupName = uniqueRoomName(roomName.trim())
         
         // 创建群组
-        val group = GroupRepository.createGroup(uniqueGroupName, request.userId)
+        val group = GroupRepository.createGroup(uniqueGroupName, userId, roomKind)
         
         if (group == null) {
             return GroupResponse(false, "创建群组失败，请稍后重试")
@@ -53,7 +58,7 @@ object GroupService {
      * 生成唯一的群组名称
      * 如果名称已存在，在后面添加 (1), (2), (3)... 直到找到唯一名称
      */
-    private fun generateUniqueGroupName(baseName: String): String {
+    fun uniqueRoomName(baseName: String): String {
         // 检查原始名称是否可用
         if (!GroupRepository.isGroupNameExists(baseName)) {
             return baseName
@@ -143,4 +148,3 @@ object GroupService {
         return GroupRepository.getGroupMembers(groupId)
     }
 }
-

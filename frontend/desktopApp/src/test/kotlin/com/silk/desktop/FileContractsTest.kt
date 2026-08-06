@@ -1,10 +1,21 @@
 package com.silk.desktop
 
+import com.silk.shared.models.RoomKind
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class FileContractsTest {
+    @Test
+    fun legacyGroupJsonDefaultsToChatRoomKind() {
+        val group = Json.decodeFromString<Group>(
+            """{"id":"group-1","name":"Legacy","invitationCode":"ABC123","hostId":"user-1"}"""
+        )
+
+        assertEquals(RoomKind.CHAT, group.roomKind)
+    }
+
     @Test
     fun parseDesktopFileMessageContentPreservesJsonPayload() {
         val parsed = parseDesktopFileMessageContent(

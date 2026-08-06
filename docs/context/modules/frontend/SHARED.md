@@ -13,6 +13,7 @@
 - `models/ApiResponses.kt`
 - `models/UserSettings.kt`（含 `CcStateResponse` / `DirEntry` / `DirListingResponse` 等 CC 模块协议）
 - `models/AudioDuplexModels.kt`
+- `models/RoomModels.kt`（`RoomKind`、统一 Room 列表/创建/管理 DTO）
 - `PlatformWebSocket*`
 - `i18n/Strings.kt`
 
@@ -25,6 +26,7 @@
 - 停止生成消息发送
 - Workflow Room stream 合同：`Message.scope`、`workspaceId`、`observerVisible`；`ChatClient.sendMessage/stopGeneration` 显式传递消息目标
 - 跨端消息模型与基础 API response 模型
+- Room 类型与统一发现/创建/管理合同；旧 Group JSON 缺少 `roomKind` 时默认为 `CHAT`，`lastMessageAt` / `createdAtEpochMs` 默认 `0` 以兼容旧响应，统一使用 `sortedByLatestActivity()` 按最后消息或创建时间倒排
 - 知识库上下文合同：`Message.kbContextSelection`(`KnowledgeBaseContextSelection`：`pinnedEntryIds`/`excludedEntryIds`) + `MessageReference.origin/reason`；`ChatClient.sendMessage(..., kbContextSelection)` 把本轮选择带给后端，后端据此重建 KB prompt 上下文并回广播 `references`
 - CC 模块前后端共享 DTO（避免双份维护）
 - Audio Duplex 基础状态模型

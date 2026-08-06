@@ -206,9 +206,212 @@ object SilkChatStyles {
     flex: 1;
 }
 
-@media (max-width: 760px) {
+.silk-conversation-mobile-back {
+    display: none;
+}
+
+.silk-conversation-scene {
+    min-width: 0;
+    min-height: 0;
+    container: silk-conversation-scene / inline-size;
+}
+
+.silk-conversation-detail {
+    container: silk-conversation-detail / inline-size;
+}
+
+.silk-conversation-sidebar {
+    box-sizing: border-box;
+}
+
+.silk-conversation-sidebar-content {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.silk-conversation-sidebar-reopen {
+    display: none;
+    width: 28px;
+    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.silk-conversation-sidebar-reopen > .silk-reopen-bar {
+    box-sizing: border-box;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.silk-conversation-sidebar.is-collapsed {
+    width: 28px !important;
+}
+
+.silk-conversation-sidebar.is-collapsed .silk-conversation-sidebar-content {
+    display: none;
+}
+
+.silk-conversation-sidebar.is-collapsed .silk-conversation-sidebar-reopen {
+    display: flex;
+    align-items: stretch;
+}
+
+.silk-conversation-scaffold,
+.silk-conversation-scaffold-layout,
+.silk-conversation-pane {
+    display: flex;
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.silk-conversation-scaffold-layout.silk-chat-layout,
+.silk-conversation-pane {
+    flex-direction: column;
+}
+
+.silk-conversation-scaffold-layout.silk-chat-layout {
+    font-family: 'Noto Serif SC', 'Cormorant Garamond', Georgia, serif;
+    background: ${SilkColors.backgroundGradient};
+}
+
+.silk-conversation-scaffold-layout.silk-workflow-layout {
+    flex-direction: row;
+}
+
+.silk-conversation-fixed-region {
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.silk-conversation-scroll-region {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.silk-conversation-detail-content {
+    min-width: 0;
+    min-height: 0;
+}
+
+.silk-workflow-header-title {
+    min-width: 0;
+}
+
+.silk-chat-header-title {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.silk-chat-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
+}
+
+.silk-workflow-composer-badges {
+    flex-wrap: wrap;
+}
+
+.silk-workflow-source-panel {
+    max-width: min(48%, 520px);
+}
+
+.silk-workspace-tree-desktop {
+    display: block;
+}
+
+.silk-workflow-toolbar.silk-workflow-toolbar-sidebar-owned,
+.silk-workspace-create-mobile {
+    display: none !important;
+}
+
+@container silk-conversation-scene (max-width: 1100px) {
     .silk-workspace-nav-desktop { display: none; }
     .silk-workspace-nav-mobile { display: flex; }
+    .silk-workspace-tree-desktop { display: none; }
+    .silk-workflow-toolbar.silk-workflow-toolbar-sidebar-owned { display: flex !important; }
+    .silk-workspace-create-mobile { display: block !important; }
+    .silk-conversation-sidebar,
+    .silk-conversation-sidebar.is-collapsed { width: 100% !important; }
+    .silk-conversation-sidebar .silk-conversation-sidebar-content { display: flex !important; }
+    .silk-conversation-sidebar .silk-conversation-sidebar-reopen,
+    .silk-conversation-collapse-control { display: none !important; }
+    .silk-conversation-sidebar.has-selection { display: none !important; }
+    .silk-conversation-detail { width: 100% !important; }
+    .silk-conversation-mobile-back { display: block; flex-shrink: 0; }
+}
+
+@container silk-conversation-detail (max-width: 900px) {
+    .silk-workflow-layout { flex-direction: column !important; }
+    .silk-workflow-layout > .silk-col-resizer { display: none; }
+    .silk-workflow-chat-column { height: auto !important; }
+    .silk-workflow-source-panel {
+        width: 100% !important;
+        max-width: none;
+        height: 42% !important;
+        border-left: 0 !important;
+        border-top: 1px solid ${SilkColors.border};
+    }
+}
+
+@media (max-width: 1100px) {
+    .silk-workspace-nav-desktop { display: none; }
+    .silk-workspace-nav-mobile { display: flex; }
+    .silk-workspace-tree-desktop { display: none; }
+    .silk-workflow-toolbar.silk-workflow-toolbar-sidebar-owned { display: flex !important; }
+    .silk-workspace-create-mobile { display: block !important; }
+    .silk-conversation-sidebar,
+    .silk-conversation-sidebar.is-collapsed { width: 100% !important; }
+    .silk-conversation-sidebar .silk-conversation-sidebar-content { display: flex !important; }
+    .silk-conversation-sidebar .silk-conversation-sidebar-reopen,
+    .silk-conversation-collapse-control { display: none !important; }
+    .silk-conversation-sidebar.has-selection { display: none !important; }
+    .silk-conversation-detail { width: 100% !important; }
+    .silk-conversation-mobile-back { display: block; flex-shrink: 0; }
+}
+
+@media (max-width: 900px) {
+    .silk-workflow-layout { flex-direction: column !important; }
+    .silk-workflow-layout > .silk-col-resizer { display: none; }
+    .silk-workflow-chat-column { height: auto !important; }
+    .silk-workflow-source-panel {
+        width: 100% !important;
+        max-width: none;
+        height: 42% !important;
+        border-left: 0 !important;
+        border-top: 1px solid ${SilkColors.border};
+    }
+}
+
+@media (max-width: 760px) {
+    .silk-app-shell,
+    .silk-nav-rail { height: 100dvh !important; }
+    .silk-workflow-header {
+        flex-wrap: wrap;
+        gap: 7px !important;
+        padding: 10px 12px !important;
+    }
+    .silk-workflow-header-title { flex: 1 1 180px !important; }
+    .silk-workflow-toolbar { padding: 6px 10px !important; }
+    .silk-workflow-composer-row { gap: 6px !important; }
+    .silk-chat-header {
+        flex-wrap: wrap;
+        gap: 8px !important;
+        padding: 8px 10px !important;
+    }
+    .silk-chat-composer { padding: 10px !important; }
 }
 """.trimIndent()
 }

@@ -17,6 +17,7 @@
   - CHAT_ROOM
   - SETTINGS
 - 不是当前 Workflow / KB / Audio Duplex 主线承载端
+- Group 合同已解析共享 `RoomKind`，旧 JSON 缺字段时默认 `CHAT`
 
 ## Why It Still Matters
 

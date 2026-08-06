@@ -255,6 +255,19 @@ object CcConnectRegistry {
         logger.info("[CcConnect][{}] unregistered", groupId)
     }
 
+    suspend fun disconnect(groupId: String, reason: String) {
+        val connection = connections.remove(groupId)
+        clearPending(groupId)
+        if (connection != null) {
+            try {
+                connection.session.close(CloseReason(CloseReason.Codes.GOING_AWAY, reason))
+            } catch (_: Exception) {
+                // The connection may already be closing; registry state is authoritative here.
+            }
+        }
+        logger.info("[CcConnect][{}] disconnected: {}", groupId, reason)
+    }
+
     fun isConnected(groupId: String): Boolean = connections.containsKey(groupId)
 
     fun getConnectionInfo(groupId: String): CcConnectConnectionMeta? = connections[groupId]?.meta

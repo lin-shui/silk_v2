@@ -230,6 +230,29 @@ class WorkspaceManager(
         return changed
     }
 
+    @Synchronized fun privatizeWorkspacesOwnedBy(roomId: String, ownerId: String): Int {
+        val store = load()
+        var changed = 0
+        store.workspaces.replaceAll { workspace ->
+            val belongsToOwner = workspace.roomId == roomId && workspace.ownerId == ownerId
+            val needsPrivacyReset = workspace.visibility != WorkspaceVisibility.PRIVATE || workspace.copilots.isNotEmpty()
+            if (belongsToOwner && needsPrivacyReset) {
+                changed++
+                workspace.copy(
+                    visibility = WorkspaceVisibility.PRIVATE,
+                    lastSharedName = workspace.lastSharedName
+                        ?: workspace.name.takeIf { workspace.visibility == WorkspaceVisibility.SHARED },
+                    copilots = emptyList(),
+                    updatedAt = System.currentTimeMillis(),
+                )
+            } else {
+                workspace
+            }
+        }
+        if (changed > 0) save(store)
+        return changed
+    }
+
     @Synchronized fun updateLifecycleState(
         workspaceId: String,
         lifecycleState: WorkspaceLifecycleState,

@@ -11,6 +11,7 @@
 
 - 独立 ArkTS / ArkUI 应用
 - 不复用 `frontend/shared`
+- ArkTS `Group` 手工同步 `RoomKind` 字符串合同；完整统一导航前按显式类型保持现有 Workflow 可见策略
 - 页面包含：
   - `MainPage.ets`
   - `ChatPage.ets`

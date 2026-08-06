@@ -40,7 +40,7 @@ export struct KnowledgeBasePage {
 
   async aboutToAppear(): Promise<void> {
     await this.appStore.loadGroups();
-    this.groups = this.appStore.groups.filter((group) => !group.name.startsWith('wf_'));
+    this.groups = this.appStore.groups.filter((group) => group.roomKind !== 'WORKFLOW');
     await this.loadTopics();
   }
 

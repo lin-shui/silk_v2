@@ -1,10 +1,21 @@
 package com.silk.android
 
+import com.silk.shared.models.RoomKind
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FileContractsTest {
+    @Test
+    fun `legacy group json defaults to chat room kind`() {
+        val group = Json.decodeFromString<Group>(
+            """{"id":"group-1","name":"Legacy","invitationCode":"ABC123","hostId":"user-1"}"""
+        )
+
+        assertEquals(RoomKind.CHAT, group.roomKind)
+    }
+
     @Test
     fun `file list parser preserves encoded download urls and processed urls`() {
         val json = """

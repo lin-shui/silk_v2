@@ -2,10 +2,12 @@
 
 **文档类型**：产品设计文档 + 技术实现参考  
 **创建日期**：2026-07-24  
-**状态**：实施中（Phase 1、Phase 1.5、Phase 2 已完成；下一阶段为 Phase 3 GitHub 集成 MVP）
+**状态**：实施中（Phase 1、1.5、2 已完成；Phase 2.5 已完成代码与自动化验证，待手工验收）
 **作者**：产品 + 工程对齐讨论产出
 
-**最近完成**：Phase 2 于 2026-08-04 完成代码、自动化验证和双账号真实 bridge 基本手工验收。
+**最近完成**：Phase 2.5 于 2026-08-05 完成统一 Room 导航、显式 RoomKind、跨端合同兼容和自动化验证。
+
+**下一步计划**：完成 [Unified Room Navigation 与显式 RoomKind](2026-08-04-unified-room-navigation.md) 的双账号、窄屏和 cc-connect 手工验收，再进入 Phase 3 GitHub 集成 MVP。
 
 ---
 
@@ -616,7 +618,23 @@ backend/src/main/kotlin/com/silk/backend/
 - [x] Team Channel 触发策略统一：普通消息不触发 AI，仅前置 `@Silk` 触发，不区分单人/多人
 - [x] 自动化验证：多用户并行，消息不跨工作区混入；私密工作区消息不出现在未授权历史 / recall / export
 
-**完成说明（2026-08-04）**：Phase 2 已关闭，可以进入 Phase 3。更高并发、断线重连、授权撤销与成员移除后的在线连接失效继续纳入回归验证，但不再作为 Phase 3 的进入阻塞项。
+**完成说明（2026-08-04）**：Phase 2 已关闭，可以进入 Phase 2.5。更高并发、断线重连、授权撤销与成员移除后的在线连接失效继续纳入回归验证，但不再作为后续阶段的进入阻塞项。
+
+### Phase 2.5：统一 Room 导航与显式 RoomKind
+
+**目标**：让前端信息架构与“Workflow Room 是普通 Room 增强”的领域模型一致，并移除通过 Group 名称前缀判断会话类型的运行时约定。
+
+- [x] Group 持久化显式 `RoomKind`（`CHAT / WORKFLOW / SILK_PRIVATE`）并完成旧数据幂等迁移
+- [x] cc-connect 保持 `CHAT` 类型，只作为聊天群组的集成能力展示
+- [x] 后端 Workflow/Silk Private 鉴权与触发逻辑停止依赖 `wf_` / `[Silk]` 名称前缀
+- [x] 新增统一 Room 发现/创建接口；工作群组创建与 PersonalWorkspace 创建解耦
+- [x] Web 移除独立 Workflow 一级入口，合并为统一会话列表
+- [x] 当前工作群组在桌面侧栏展开 Team Channel / Workspace 二级树，窄屏保留单一选择器
+- [x] Web/Android/Desktop/Harmony 同步 RoomKind 合同并按阶段移除名称筛选
+
+**实施说明（2026-08-05）**：Phase 2.5 的代码和自动化验证已关闭；真实双账号、窄屏与 cc-connect 手工回归完成后正式进入 Phase 3。无运行时入口的旧 Web 会话壳层留作后续文件拆分清理，不影响统一导航生效。
+
+详细计划：`docs/context/planning/exec-plans/active/2026-08-04-unified-room-navigation.md`
 
 ### Phase 3：GitHub 集成 MVP
 
@@ -644,7 +662,7 @@ backend/src/main/kotlin/com/silk/backend/
 
 以下内容明确不在本次重设计范围内：
 
-- **cc-connect 群组**：cc-connect 通过独立的 `/ccconnect-bridge` 端点连接，有独立的群组类型和消息路由逻辑；本次不迁移 cc-connect 群组到 Workflow Room 模型，保持现状不变。
+- **cc-connect 集成能力**：cc-connect Room 统一归类为普通聊天 `CHAT`，不是独立 Room 类型，也不迁移为 Workflow Room；其 `/ccconnect-bridge` 连接协议、Agent 元数据和消息路由实现保持现状。
 - **Android / Harmony 前端 UI 适配**：Phase 1–3 的 `Message` 模型字段变更（`scope` / `workspaceId`）会触发 `FileContractsTest`，Android 和 Harmony 需同步更新共享模型以保持编译通过，但完整的多工作区 UI 适配在 Phase 4 处理。
 
 ---

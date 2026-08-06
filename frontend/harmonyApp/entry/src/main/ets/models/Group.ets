@@ -1,6 +1,12 @@
 /**
  * 群组数据模型
  */
+export enum RoomKind {
+  CHAT = 'CHAT',
+  WORKFLOW = 'WORKFLOW',
+  SILK_PRIVATE = 'SILK_PRIVATE'
+}
+
 export interface Group {
   id: string;
   name: string;
@@ -14,6 +20,7 @@ export interface Group {
   lastMessage?: string;
   lastMessageTime?: number;
   unreadCount?: number;
+  roomKind: RoomKind;
 }
 
 /**
@@ -76,6 +83,7 @@ export function createDefaultGroup(id: string, name: string, ownerId: string): G
     ownerId,
     memberCount: 1,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    roomKind: RoomKind.CHAT
   };
 }

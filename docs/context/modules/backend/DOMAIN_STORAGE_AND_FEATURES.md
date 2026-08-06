@@ -5,7 +5,7 @@
 `database/` + `auth/` 主要承载：
 
 - 用户注册 / 登录
-- 群组与成员
+- Room/Group 与成员；`groups.room_kind` 显式区分 `CHAT / WORKFLOW / SILK_PRIVATE`，`updated_at` 记录通用元数据活动，`last_message_at` 独立记录最近一条持久化消息时间并由启动迁移从旧聊天历史回填
 - 联系人与好友请求
 - 未读计数
 - 用户设置（含 Claude Code bridge token、`app_auth_token` 用于前端 Bearer 鉴权）
@@ -107,7 +107,7 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
 ## Route Ownership
 
 - Todo HTTP 主要仍在 `Routing.kt`
-- Workflow 元数据 HTTP 在 `Routing.kt` 的 `/api/workflows`；成员可见 Workflow 列表与 Room 成员管理在 `routes/WorkflowRoomRoutes.kt`（`GET /api/workflows/visible`、`GET/POST/DELETE /api/workflows/{workflowId}/members*`），身份只从 Bearer JWT 解析，只允许 Owner 搜索、添加和移除成员；PersonalWorkspace HTTP 在 `routes/WorkspaceRoutes.kt` 的 `/api/rooms/{roomId}/workspaces`
+- 统一 Room 发现/创建在 `routes/RoomRoutes.kt`（`GET /api/rooms/visible`、`POST /api/rooms`）；Workflow 元数据兼容 HTTP 在 `Routing.kt` 的 `/api/workflows`；成员可见 Workflow 列表与 Room 成员管理在 `routes/WorkflowRoomRoutes.kt`，PersonalWorkspace HTTP 在 `routes/WorkspaceRoutes.kt` 的 `/api/rooms/{roomId}/workspaces`
 - 移除 Workflow Room 成员会同步撤销其在该 Room 所有 Workspace 中的 Co-pilot 权限，关闭当前 WebSocket 连接，并拒绝旧连接继续发送消息
 - Trusted directory HTTP 在 `Routing.kt` 的 `/users/{userId}/trusted-dirs/*`
 - KB HTTP 在 `Routing.kt` 的 `/api/kb/*`（含 `PUT /api/kb/topics/{id}` 改主题/访问策略、`POST /api/kb/captures` 入库候选、`PUT /api/kb/entries/{entryId}` 支持移动条目到同 space 内其他 topic、`GET /api/kb/entries/search`（$ 快捷引用 KB 文档的搜索端点）、`POST /api/kb/copilot`（同步）和 `POST /api/kb/copilot/stream`（SSE 流式）在 KB 页面内生成/应用 AI 编辑草稿——支持条目级 `update_entry` 和主题级 `create_entry` 两种模式，`entryId` 可选填；流式端点通过 `thinking`/`text`/`draft`/`applied`/`error`/`done` 事件逐帧推送；草稿 `KnowledgeBaseCopilotDraft` 新增 `diffChunks: List<DiffChunk>` 字段（后端 LCS 行级 diff 算法生成），供前端 `DiffReviewPane` 逐块接受/拒绝；前端 `KnowledgeCopilotSidebar` 按 `CopilotSidebarState`（INPUT/PREVIEW/REVIEW）三状态渲染，每个状态一个主按钮，审阅控制在侧栏而非编辑区；`GET/POST/DELETE /api/kb/memory*` 管理显式长期记忆、`GET /api/kb/memory/{entryId}` 带访问追踪读取单条记忆、`POST /api/kb/memory/consolidate` 触发去重合并与 TTL 衰减、`GET/PUT /api/kb/context-preferences` 读写用户级空间与 memory 偏好；既有路由按调用方 userId 做读写/成员可见性鉴权）

@@ -74,6 +74,13 @@
 - Primary test:
   - `frontend/webApp/src/test/kotlin/com/silk/web/FileContractsTest.kt`
 
+## Shared Room Contract
+
+- Command: `./gradlew :frontend:shared:desktopTest`
+- Primary test:
+  - `frontend/shared/src/commonTest/kotlin/com/silk/shared/RoomModelsTest.kt`
+- Note: shared `jsTest` requires a configured headless browser; use the desktop target for stable local/CI commonTest execution.
+
 ## Android File Contract / Parser
 
 - Commands:
