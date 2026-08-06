@@ -42,6 +42,7 @@ import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.workspace.WorkspaceManager
 import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceVisibility
+import com.silk.shared.models.RoomKind
 import org.slf4j.LoggerFactory
 
 private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
@@ -230,6 +231,7 @@ internal fun extractSilkRequest(content: String, isSilkPrivateChat: Boolean): St
 class ChatServer(
     private val sessionName: String = "default_room",
     private val workspaceManager: WorkspaceManager = WorkspaceManager(),
+    private val roomKind: RoomKind = RoomKind.CHAT,
 ) {
     private val logger = LoggerFactory.getLogger(ChatServer::class.java)
     private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
@@ -533,6 +535,7 @@ class ChatServer(
 
             // 持久化到文件系统
             historyManager.addMessage(sessionName, message)
+            GroupRepository.touchRoom(roomId(), message.timestamp)
             logger.debug("💾 [broadcast] 消息已保存: {}", message.id)
 
             if (message.scope == MessageScope.TEAM) {
@@ -1094,6 +1097,8 @@ class ChatServer(
 
     private fun roomId(): String = sessionName.removePrefix("group_")
 
+    private fun isSilkPrivateRoom(): Boolean = roomKind == RoomKind.SILK_PRIVATE
+
     internal fun canonicalizeMessage(message: Message): Message? {
         if (message.userId in revokedRoomMembers) {
             logger.warn("拒绝已撤销 Room 成员消息: room={}, userId={}", roomId(), message.userId)
@@ -1185,7 +1190,7 @@ class ChatServer(
             broadcastByScope(msg)
         }
 
-        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
+        val isSilkPrivateChat = isSilkPrivateRoom()
 
         // ==================== cc-connect 命令转发 ====================
         if (routedMessage.scope == MessageScope.TEAM && handleCcCommandMessage(routedMessage)) return
@@ -2110,7 +2115,7 @@ class ChatServer(
                 }
             }
 
-            if (userId.isNotBlank() && getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true) {
+            if (userId.isNotBlank() && isSilkPrivateRoom()) {
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         GroupTodoExtractionService.refreshTodosForUser(userId)
@@ -2154,8 +2159,7 @@ class ChatServer(
             return listOf(sessionName)
         }
         val groupId = sessionName.removePrefix("group_")
-        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
-        if (isSilkPrivateChat) {
+        if (isSilkPrivateRoom()) {
             return GroupRepository.getUserGroups(userId).map { "group_${it.id}" }.distinct()
         }
         return if (GroupRepository.isUserInGroup(groupId, userId)) listOf(sessionName) else emptyList()

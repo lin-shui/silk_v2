@@ -149,17 +149,6 @@ internal fun backendWsOrigin(): String {
     return "$wsProtocol//${window.location.host}"
 }
 
-// ==================== 安全的 JS 互操作辅助函数（避免在 js("...") 中引用 Kotlin 变量） ====================
-
-private val jsGetUserMedia = js("(function() { return navigator.mediaDevices.getUserMedia({audio: true}); })")
-private val jsNewArray = js("(function() { return []; })")
-private val jsCreateRecorder = js("(function(stream) { var opts = {mimeType: 'audio/webm;codecs=opus'}; try { return new MediaRecorder(stream, opts); } catch(e) { return new MediaRecorder(stream); } })")
-private val jsCreateBlob = js("(function(chunks) { return new Blob(chunks, {type: 'audio/webm'}); })")
-private val jsBlobToArrayBuffer = js("(function(blob) { return blob.arrayBuffer(); })")
-private val jsArrayBufferToBase64 = js("(function(ab) { var u8 = new Uint8Array(ab); var b = ''; for (var i = 0; i < u8.length; i++) b += String.fromCharCode(u8[i]); return btoa(b); })")
-private val jsStopTracks = js("(function(stream) { if (stream && stream.getTracks) { stream.getTracks().forEach(function(t) { t.stop(); }); } })")
-
-
 internal fun downloadAsFile(content: String, fileName: String) {
     val blob = org.w3c.files.Blob(
         arrayOf(content),
@@ -472,8 +461,7 @@ fun main() {
 @Composable
 fun SilkApp() {
     val appState = remember { WebAppState() }
-    val scope = rememberCoroutineScope()
-    
+
     // 处理华为 OAuth 回调
     LaunchedEffect(Unit) {
         val handled = handleOAuthCallback(appState)
@@ -488,6 +476,7 @@ fun SilkApp() {
         NicknameSetupScene(appState)
     } else {
         Div({
+            attr("class", "silk-app-shell")
             style {
                 display(DisplayStyle.Flex)
                 height(100.vh)
@@ -510,8 +499,7 @@ fun SilkApp() {
                 } else {
                     key(appState.currentTab) {
                         when (appState.currentTab) {
-                            NavTab.SILK -> SilkTabContent(appState)
-                            NavTab.WORKFLOW -> WorkflowScene(appState)
+                            NavTab.CONVERSATIONS -> ConversationScene(appState)
                             NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
                             NavTab.AUDIO_DUPLEX -> AudioDuplexScene(appState)
                         }
@@ -525,6 +513,7 @@ fun SilkApp() {
 @Composable
 fun SilkNavRail(appState: WebAppState) {
     Div({
+        attr("class", "silk-nav-rail")
         style {
             width(72.px)
             property("flex-shrink", "0")
@@ -558,11 +547,12 @@ fun SilkNavRail(appState: WebAppState) {
         }
 
         // Tab items
-        NavRailItem("Silk", appState.currentTab == NavTab.SILK, "\uD83D\uDCAC") {
-            appState.selectTab(NavTab.SILK)
-        }
-        NavRailItem("工作流", appState.currentTab == NavTab.WORKFLOW, "\uD83D\uDD17") {
-            appState.selectTab(NavTab.WORKFLOW)
+        NavRailItem(
+            "会话",
+            appState.currentTab == NavTab.CONVERSATIONS,
+            "\uD83D\uDCAC",
+        ) {
+            appState.selectTab(NavTab.CONVERSATIONS)
         }
         NavRailItem("知识库", appState.currentTab == NavTab.KNOWLEDGE_BASE, "\uD83D\uDCDA") {
             appState.selectTab(NavTab.KNOWLEDGE_BASE)
@@ -574,23 +564,48 @@ fun SilkNavRail(appState: WebAppState) {
         // Spacer
         Div({ style { property("flex", "1") } })
 
-        // Settings
-        Div({
-            style {
-                property("cursor", "pointer")
-                padding(8.px)
-                borderRadius(8.px)
-                property("transition", "background 0.2s")
-            }
-            onClick { appState.navigateTo(Scene.SETTINGS) }
-        }) {
-            Span({
-                style {
-                    fontSize(20.px)
-                    property("filter", "grayscale(1) brightness(2)")
-                }
-            }) { Text("\u2699\uFE0F") }
+        NavRailUtilityButton(
+            title = "联系人",
+            icon = "\uD83D\uDC64",
+            isActive = appState.currentScene == Scene.CONTACTS,
+        ) {
+            appState.openContacts()
         }
+        NavRailUtilityButton(
+            title = "设置",
+            icon = "\u2699\uFE0F",
+            isActive = appState.currentScene == Scene.SETTINGS,
+        ) {
+            appState.navigateTo(Scene.SETTINGS)
+        }
+    }
+}
+
+@Composable
+private fun NavRailUtilityButton(
+    title: String,
+    icon: String,
+    isActive: Boolean,
+    onClick: () -> Unit,
+) {
+    Button({
+        attr("title", title)
+        attr("aria-label", title)
+        style {
+            width(48.px)
+            height(40.px)
+            padding(0.px)
+            marginBottom(4.px)
+            border(0.px)
+            borderRadius(8.px)
+            backgroundColor(Color(if (isActive) "rgba(255,255,255,0.25)" else "transparent"))
+            color(Color.white)
+            property("cursor", "pointer")
+            property("transition", "background 0.2s")
+        }
+        onClick { onClick() }
+    }) {
+        Span({ style { fontSize(20.px) } }) { Text(icon) }
     }
 }
 
@@ -625,620 +640,7 @@ fun NavRailItem(label: String, isActive: Boolean, icon: String, onClick: () -> U
     }
 }
 
-@Composable
-fun SilkTabContent(appState: WebAppState) {
-    when (appState.currentScene) {
-        Scene.GROUP_LIST -> GroupListScene(appState)
-        Scene.CONTACTS -> ContactsScene(appState)
-        Scene.CHAT_ROOM -> {
-            if (appState.selectedGroup != null && appState.currentUser != null) {
-                ChatScene(appState)
-            } else {
-                Div({ style { padding(20.px) } }) {
-                    Text("状态错误，请返回重试")
-                    Button({ onClick { appState.navigateBack() } }) {
-                        Text("返回群组列表")
-                    }
-                }
-            }
-        }
-        else -> GroupListScene(appState)
-    }
-}
-
-@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
-@Composable
-fun ChatScene(appState: WebAppState) {
-    console.log("🎬 ChatScene被调用")
-    
-    val group = appState.selectedGroup
-    val user = appState.currentUser
-    val scope = rememberCoroutineScope()
-    var userGroups by remember(user?.id) { mutableStateOf<List<Group>>(emptyList()) }
-    var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
-    var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
-    var sidebarCcStatus by remember(user?.id) { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
-    var chatListWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_chat_list_w", 320)) }
-    var chatListCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("silk_chat_list_collapsed", false)) }
-    ensureLayoutStylesInjected()
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var showJoinDialog by remember { mutableStateOf(false) }
-    val strings = com.silk.shared.i18n.getStrings(com.silk.shared.models.Language.CHINESE)
-    
-    console.log("   群组:", group?.name ?: "null")
-    console.log("   用户:", user?.fullName ?: "null")
-    
-    if (group == null || user == null) {
-        console.log("⚠️ 群组或用户为空，显示错误页面")
-        Div({ style { padding(20.px) } }) {
-            Text("错误：缺少群组或用户信息")
-            Button({ onClick { appState.navigateBack() } }) {
-                Text("返回")
-            }
-        }
-        return
-    }
-
-    suspend fun refreshSidebarGroups() {
-        isLoadingGroups = true
-        try {
-            val groupsResponse = ApiClient.getUserGroups(user.id)
-            if (groupsResponse.success) {
-                userGroups = (groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-            }
-            val unreadResponse = ApiClient.getUnreadCounts(user.id)
-            if (unreadResponse.success) {
-                unreadCounts = unreadResponse.unreadCounts
-            }
-            val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
-            userGroups.forEach { g ->
-                val info = ApiClient.getCcConnectTokenInfo(g.id, user.id)
-                if (info != null && info.success) {
-                    statusMap[g.id] = info
-                }
-            }
-            sidebarCcStatus = statusMap
-        } catch (e: Exception) {
-            console.error("❌ 加载聊天室群组列表失败:", e)
-        } finally {
-            isLoadingGroups = false
-        }
-    }
-
-    LaunchedEffect(user.id, group.id) {
-        refreshSidebarGroups()
-    }
-
-    // KB 内联引用：注册 window 桥，供聊天内 [[kb:...]] 链接点击跳转到知识库对应条目
-    DisposableEffect(appState) {
-        val bridge: (String?, String) -> Unit = { topicId, entryId ->
-            appState.openKnowledgeBaseEntry(entryId = entryId, topicId = topicId)
-        }
-        window.asDynamic().__silkOpenKnowledgeBaseEntry = bridge
-        onDispose {
-            window.asDynamic().__silkOpenKnowledgeBaseEntry = null
-        }
-    }
-
-    LaunchedEffect(user.id) {
-        while (true) {
-            kotlinx.coroutines.delay(30000)
-            try {
-                val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                if (unreadResponse.success) {
-                    unreadCounts = unreadResponse.unreadCounts
-                }
-            } catch (e: Exception) {
-                console.error("❌ 刷新未读消息失败:", e)
-            }
-        }
-    }
-    
-    console.log("✅ 群组和用户都有效，渲染聊天界面")
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            height(100.percent)
-            width(100.percent)
-            property("overflow", "hidden")
-            property("background", SilkColors.backgroundGradient)
-        }
-    }) {
-        if (chatListCollapsed) {
-            ReopenBar(onExpand = {
-                chatListCollapsed = false
-                LayoutPrefs.setBool("silk_chat_list_collapsed", false)
-            })
-        } else {
-        Div({
-            style {
-                width(chatListWidth.px)
-                property("flex-shrink", "0")
-                property("border-right", "1px solid ${SilkColors.border}")
-                backgroundColor(Color("rgba(255,255,255,0.88)"))
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                property("overflow", "hidden")
-                property("backdrop-filter", "blur(6px)")
-            }
-        }) {
-            Div({
-                style {
-                    padding(12.px, 16.px)
-                    property("border-bottom", "1px solid ${SilkColors.border}")
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    alignItems(AlignItems.Center)
-                }
-            }) {
-                Span({
-                    style {
-                        fontSize(16.px)
-                        color(Color(SilkColors.primary))
-                        property("font-weight", "700")
-                        property("letter-spacing", "1px")
-                        property("flex-shrink", "0")
-                    }
-                }) {
-                    Text("Silk")
-                }
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "8px")
-                    }
-                }) {
-                Button({
-                    attr("title", "收起列表")
-                    style {
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color(SilkColors.textSecondary))
-                        property("border", "1px solid ${SilkColors.border}")
-                        borderRadius(6.px)
-                        padding(4.px, 9.px)
-                        property("cursor", "pointer")
-                        property("flex-shrink", "0")
-                    }
-                    onClick {
-                        chatListCollapsed = true
-                        LayoutPrefs.setBool("silk_chat_list_collapsed", true)
-                    }
-                }) { Text("«") }
-                Span({
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("overflow", "hidden")
-                        property("text-overflow", "ellipsis")
-                        property("white-space", "nowrap")
-                        property("max-width", "120px")
-                    }
-                }) {
-                    Text(user.fullName)
-                }
-                // 🤖 与 Silk 对话按钮
-                Button({
-                    style {
-                        padding(4.px, 8.px)
-                        backgroundColor(Color("#7BA8C9"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(6.px)
-                        property("cursor", "pointer")
-                        property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
-                        fontSize(14.px)
-                        property("flex-shrink", "0")
-                    }
-                    onClick {
-                        scope.launch {
-                            val uid = appState.currentUser?.id ?: return@launch
-                            val r = ApiClient.startSilkPrivateChat(uid)
-                            if (r.success && r.group != null) appState.selectGroup(r.group!!)
-                        }
-                    }
-                }) { Text("🤖") }
-                
-                // ☰ 下拉菜单
-                var showMenu by remember { mutableStateOf(false) }
-                Div({
-                    style {
-                        position(Position.Relative)
-                    }
-                }) {
-                    Button({
-                        style {
-                            padding(4.px, 10.px)
-                            backgroundColor(Color("rgba(255,255,255,0.2)"))
-                            color(Color(SilkColors.textPrimary))
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.border))
-                            }
-                            borderRadius(6.px)
-                            property("cursor", "pointer")
-                            fontSize(16.px)
-                        }
-                        onClick { showMenu = !showMenu }
-                    }) { Text("☰") }
-                    
-                    if (showMenu) {
-                        Div({
-                            style {
-                                position(Position.Fixed)
-                                property("top", "0")
-                                property("left", "0")
-                                property("right", "0")
-                                property("bottom", "0")
-                                property("z-index", "99")
-                            }
-                            onClick { showMenu = false }
-                        })
-                        Div({
-                            style {
-                                position(Position.Absolute)
-                                property("top", "100%")
-                                property("right", "0")
-                                property("z-index", "100")
-                                backgroundColor(Color("#2a2a2a"))
-                                borderRadius(10.px)
-                                property("box-shadow", "0 4px 20px rgba(0,0,0,0.3)")
-                                property("min-width", "160px")
-                                padding(6.px)
-                                marginTop(6.px)
-                            }
-                            onClick { showMenu = false }
-                        }) {
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { showCreateDialog = true; showMenu = false }
-                            }) { Text("➕ ${strings.createButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { showJoinDialog = true; showMenu = false }
-                            }) { Text("🔗 ${strings.joinButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { appState.navigateTo(Scene.CONTACTS); showMenu = false }
-                            }) { Text("👤 ${strings.contactsButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { appState.navigateTo(Scene.SETTINGS); showMenu = false }
-                            }) { Text("⚙️ ${strings.settingsButton}") }
-                            Div({
-                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
-                                onClick { appState.logout(); showMenu = false }
-                            }) { Text("🚪 ${strings.logoutButton}") }
-                        }
-                    }
-                }
-                } // close right-button group
-            }
-
-            Div({
-                style {
-                    property("flex", "1")
-                    property("overflow-y", "auto")
-                    padding(10.px)
-                }
-            }) {
-                when {
-                    isLoadingGroups -> {
-                        Div({
-                            style {
-                                color(Color(SilkColors.textSecondary))
-                                fontSize(13.px)
-                                textAlign("center")
-                                padding(18.px)
-                            }
-                        }) {
-                            Text("加载群组中...")
-                        }
-                    }
-                    userGroups.isEmpty() -> {
-                        Div({
-                            style {
-                                color(Color(SilkColors.textSecondary))
-                                fontSize(13.px)
-                                textAlign("center")
-                                padding(18.px)
-                            }
-                        }) {
-                            Text("暂无群组")
-                        }
-                    }
-                    else -> {
-                        val silkPrivateGroups = userGroups.filter { it.name.startsWith("[Silk]") }
-                        val ccGroups = userGroups.filter { sidebarCcStatus.containsKey(it.id) }
-                        val silkNormalGroups = userGroups.filter { !it.name.startsWith("[Silk]") && !sidebarCcStatus.containsKey(it.id) }
-
-                        @Composable
-                        fun renderGroupItem(item: Group) {
-                            val isActive = item.id == group.id
-                            val unread = unreadCounts[item.id] ?: 0
-                            val ccInfo = sidebarCcStatus[item.id]
-                            val isCcGroup = ccInfo != null
-                            val isSilkPrivate = item.name.startsWith("[Silk]")
-                            Div({
-                                style {
-                                    padding(12.px, 14.px)
-                                    marginBottom(8.px)
-                                    borderRadius(8.px)
-                                    backgroundColor(
-                                        if (isActive) Color("rgba(201, 168, 108, 0.2)")
-                                        else Color(SilkColors.surfaceElevated)
-                                    )
-                                    property("border", if (isActive) "1px solid ${SilkColors.primary}" else "1px solid ${SilkColors.border}")
-                                    property("box-shadow", if (isActive) "0 2px 8px rgba(169, 137, 77, 0.22)" else "0 1px 4px rgba(169, 137, 77, 0.08)")
-                                    property("cursor", "pointer")
-                                    property("transition", "all 0.2s ease")
-                                }
-                                onClick {
-                                    if (item.id != group.id) {
-                                        scope.launch {
-                                            ApiClient.markGroupAsRead(user.id, item.id)
-                                            unreadCounts = unreadCounts - item.id
-                                            appState.selectGroup(item)
-                                        }
-                                    }
-                                }
-                            }) {
-                                Div({
-                                    style {
-                                        display(DisplayStyle.Flex)
-                                        justifyContent(JustifyContent.SpaceBetween)
-                                        alignItems(AlignItems.Center)
-                                        property("gap", "10px")
-                                    }
-                                }) {
-                                    Span({
-                                        style {
-                                            color(Color(SilkColors.textPrimary))
-                                            fontSize(14.px)
-                                            property("font-weight", if (isActive) "700" else "600")
-                                            property("flex", "1")
-                                            property("overflow", "hidden")
-                                            property("text-overflow", "ellipsis")
-                                            property("white-space", "nowrap")
-                                        }
-                                    }) {
-                                        Text(item.name)
-                                    }
-                                    val typeBadge: String? = when {
-                                        isCcGroup -> {
-                                            val raw = (ccInfo?.agentType ?: "").lowercase().trim()
-                                            when {
-                                                raw.startsWith("claude") -> "claude"
-                                                raw.startsWith("cursor") -> "cursor"
-                                                raw.startsWith("gemini") -> "gemini"
-                                                raw.startsWith("codex")  -> "codex"
-                                                raw.startsWith("copilot") -> "copilot"
-                                                raw.isBlank() -> "cc"
-                                                else -> raw
-                                            }
-                                        }
-                                        isSilkPrivate -> null
-                                        else -> "silk"
-                                    }
-                                    if (typeBadge != null) {
-                                        Span({
-                                            style {
-                                                fontSize(9.px)
-                                                padding(1.px, 5.px)
-                                                borderRadius(3.px)
-                                                property("font-weight", "600")
-                                                property("letter-spacing", "0.3px")
-                                                property("flex-shrink", "0")
-                                                if (isCcGroup) {
-                                                    if (ccInfo?.connected == true) {
-                                                        backgroundColor(Color("#E8F5E9"))
-                                                        color(Color("#2E7D32"))
-                                                    } else {
-                                                        backgroundColor(Color("#FFF3E0"))
-                                                        color(Color("#E65100"))
-                                                    }
-                                                } else {
-                                                    backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
-                                                    color(Color(SilkColors.primary))
-                                                }
-                                            }
-                                        }) {
-                                            Text(if (isCcGroup && ccInfo?.connected != true) "$typeBadge ⏸" else typeBadge)
-                                        }
-                                    }
-                                    if (unread > 0) {
-                                        Span({
-                                            style {
-                                                minWidth(22.px)
-                                                height(22.px)
-                                                padding(0.px, 6.px)
-                                                borderRadius(11.px)
-                                                backgroundColor(Color("#FF5722"))
-                                                color(Color.white)
-                                                fontSize(11.px)
-                                                property("font-weight", "700")
-                                                display(DisplayStyle.Flex)
-                                                justifyContent(JustifyContent.Center)
-                                                alignItems(AlignItems.Center)
-                                            }
-                                        }) {
-                                            Text(if (unread > 99) "99+" else unread.toString())
-                                        }
-                                    }
-                                }
-                                // 非 Silk 专属对话才显示邀请码
-                                if (!isSilkPrivate) {
-                                Div({
-                                    style {
-                                        color(Color(SilkColors.textSecondary))
-                                        fontSize(11.px)
-                                        marginTop(4.px)
-                                        property("letter-spacing", "1px")
-                                    }
-                                }) {
-                                    Text("[${item.invitationCode}]")
-                                }
-                                }
-                            }
-                        }
-
-                        // --- Section 1: Silk 专属对话 ---
-                        if (silkPrivateGroups.isNotEmpty()) {
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "8px")
-                                    marginBottom(8.px)
-                                }
-                            }) {
-                                Span({
-                                    style {
-                                        fontSize(11.px)
-                                        color(Color(SilkColors.primary))
-                                        property("font-weight", "700")
-                                        property("letter-spacing", "1px")
-                                        property("white-space", "nowrap")
-                                    }
-                                }) { Text("Silk AI") }
-                                Div({
-                                    style {
-                                        property("flex", "1")
-                                        height(1.px)
-                                        backgroundColor(Color(SilkColors.primary))
-                                        property("opacity", "0.3")
-                                    }
-                                })
-                            }
-                            silkPrivateGroups.forEach { renderGroupItem(it) }
-                        }
-
-                        // --- Section 2: CC-Connect 群组 ---
-                        if (ccGroups.isNotEmpty()) {
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "8px")
-                                    marginTop(if (silkPrivateGroups.isNotEmpty()) 12.px else 0.px)
-                                    marginBottom(8.px)
-                                }
-                            }) {
-                                Span({
-                                    style {
-                                        fontSize(11.px)
-                                        color(Color("#2E7D32"))
-                                        property("font-weight", "700")
-                                        property("letter-spacing", "1px")
-                                        property("white-space", "nowrap")
-                                    }
-                                }) { Text("CC-Connect") }
-                                Div({
-                                    style {
-                                        property("flex", "1")
-                                        height(1.px)
-                                        backgroundColor(Color("#4CAF50"))
-                                        property("opacity", "0.3")
-                                    }
-                                })
-                            }
-                            ccGroups.forEach { renderGroupItem(it) }
-                        }
-
-                        // --- Section 3: Silk 普通群组 ---
-                        if (silkNormalGroups.isNotEmpty()) {
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "8px")
-                                    marginTop(if (silkPrivateGroups.isNotEmpty() || ccGroups.isNotEmpty()) 12.px else 0.px)
-                                    marginBottom(8.px)
-                                }
-                            }) {
-                                Span({
-                                    style {
-                                        fontSize(11.px)
-                                        color(Color(SilkColors.textSecondary))
-                                        property("font-weight", "700")
-                                        property("letter-spacing", "1px")
-                                        property("white-space", "nowrap")
-                                    }
-                                }) { Text("Silk Groups") }
-                                Div({
-                                    style {
-                                        property("flex", "1")
-                                        height(1.px)
-                                        backgroundColor(Color(SilkColors.textSecondary))
-                                        property("opacity", "0.2")
-                                    }
-                                })
-                            }
-                            silkNormalGroups.forEach { renderGroupItem(it) }
-                        }
-                    }
-                }
-            }
-        }
-        ColumnResizer(
-            isLeftPanel = true,
-            minWidth = 220,
-            maxWidth = 520,
-            currentWidth = { chatListWidth },
-            onResize = { chatListWidth = it },
-            onCommit = { LayoutPrefs.setInt("silk_chat_list_w", chatListWidth) },
-        )
-        } // close 列表非折叠分支
-
-        Div({
-            style {
-                property("flex", "1")
-                minWidth(0.px)
-                height(100.percent)
-                property("overflow", "hidden")
-            }
-        }) {
-            ChatAppWithGroup(user, group, appState)
-        }
-    }
-    
-    // 创建/加入群组对话框
-    if (showCreateDialog) {
-        CreateGroupDialog(
-            appState = appState,
-            strings = strings,
-            onDismiss = { showCreateDialog = false },
-            onGroupCreated = { newGroup ->
-                userGroups = userGroups + newGroup
-            },
-            onComplete = { showCreateDialog = false }
-        )
-    }
-    if (showJoinDialog) {
-        JoinGroupDialog(
-            appState = appState,
-            strings = strings,
-            onDismiss = { showJoinDialog = false },
-            onGroupJoined = { newGroup ->
-                userGroups = userGroups + newGroup
-                showJoinDialog = false
-            }
-        )
-    }
-}
-
-// Silk样式表 - 丝滑温暖风格
 object SilkStylesheet : StyleSheet() {
-    val container by style {
-        display(DisplayStyle.Flex)
-        flexDirection(FlexDirection.Column)
-        height(100.percent)
-        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-        property("overflow", "hidden")
-        property("background", SilkColors.backgroundGradient)
-    }
-    
     val header by style {
         property("flex-shrink", "0")
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
@@ -1249,7 +651,7 @@ object SilkStylesheet : StyleSheet() {
         property("letter-spacing", "2px")
         property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.2)")
     }
-    
+
     val statusBar by style {
         property("flex-shrink", "0")
         padding(4.px, 16.px)
@@ -1259,7 +661,7 @@ object SilkStylesheet : StyleSheet() {
         property("font-size", "12px")
         property("letter-spacing", "1px")
     }
-    
+
     val messagesContainer by style {
         property("flex", "1")
         property("min-height", "0")
@@ -1269,7 +671,7 @@ object SilkStylesheet : StyleSheet() {
         padding(12.px)
         property("background", SilkColors.backgroundGradient)
     }
-    
+
     val messageCard by style {
         backgroundColor(Color(SilkColors.surfaceElevated))
         borderRadius(12.px)
@@ -1279,25 +681,25 @@ object SilkStylesheet : StyleSheet() {
         property("border", "1px solid ${SilkColors.border}")
         property("transition", "all 0.2s ease")
     }
-    
+
     val messageHeader by style {
         display(DisplayStyle.Flex)
         property("justify-content", "space-between")
         marginBottom(6.px)
     }
-    
+
     val userName by style {
         property("font-weight", "600")
         color(Color(SilkColors.primary))
         property("letter-spacing", "0.5px")
     }
-    
+
     val timestamp by style {
         fontSize(11.px)
         color(Color(SilkColors.textLight))
         property("font-style", "italic")
     }
-    
+
     val systemMessage by style {
         fontSize(12.px)
         color(Color(SilkColors.textSecondary))
@@ -1305,7 +707,7 @@ object SilkStylesheet : StyleSheet() {
         marginBottom(8.px)
         property("font-style", "italic")
     }
-    
+
     val inputContainer by style {
         display(DisplayStyle.Flex)
         property("flex-shrink", "0")
@@ -1315,7 +717,7 @@ object SilkStylesheet : StyleSheet() {
         property("gap", "8px")
         property("box-shadow", "0 -2px 8px rgba(169, 137, 77, 0.05)")
     }
-    
+
     val input by style {
         property("flex", "1")
         padding(10.px)
@@ -1573,7 +975,12 @@ object SilkStylesheet : StyleSheet() {
 
 @Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements", "TooGenericExceptionCaught", "SwallowedException", "UnusedPrivateProperty")
 @Composable
-fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
+fun ChatAppWithGroup(
+    user: User,
+    group: Group,
+    appState: WebAppState,
+    onRoomActivity: (Long) -> Unit = {},
+) {
     console.log("🎯 ChatAppWithGroup - 用户:", user.fullName, "群组:", group.name)
     
     val scope = rememberCoroutineScope()
@@ -1623,6 +1030,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
     val contentBlocks by chatClient.transientContentBlocks.collectAsState()
     val interactiveOptions by chatClient.interactiveOptions.collectAsState()
+    val latestMessageTimestamp = messages.maxOfOrNull { it.timestamp } ?: 0L
+
+    LaunchedEffect(group.id, latestMessageTimestamp) {
+        if (latestMessageTimestamp > 0L) onRoomActivity(latestMessageTimestamp)
+    }
 
     // Update ccConnectInfo when metadata arrives via WebSocket
     LaunchedEffect(ccMetadataJson) {
@@ -1716,31 +1128,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         )
     }
     var showInvitationDialog by remember { mutableStateOf(false) }
-    var isUploading by remember { mutableStateOf(false) }
-    var pendingPasteImage by remember { mutableStateOf<dynamic?>(null) }
+    var pendingPasteImage by remember { mutableStateOf<dynamic>(null) }
     var pendingPasteImageUrl by remember { mutableStateOf<String?>(null) }
-    var isScreenshotCrop by remember { mutableStateOf(false) }
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
-    var folderFiles by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    
-    // Drag-and-drop state
-    var isDraggingOver by remember { mutableStateOf(false) }
 
-    // ASR 语音输入状态
-    var isVoiceRecording by remember { mutableStateOf(false) }
-    var isTranscribing by remember { mutableStateOf(false) }
-    var mediaRecorderJs by remember { mutableStateOf<dynamic>(null) }
-    var audioChunksJs by remember { mutableStateOf<dynamic>(null) }
-    
-    // 添加成员到群组相关状态
-    var showAddMemberDialog by remember { mutableStateOf(false) }
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var isLoadingContacts by remember { mutableStateOf(false) }
     var addMemberResult by remember { mutableStateOf<String?>(null) }
+    var memberSearchQuery by remember { mutableStateOf("") }
+    var memberSearchResults by remember { mutableStateOf<List<UserSearchItem>>(emptyList()) }
+    var memberSearchAttempted by remember { mutableStateOf(false) }
     
     // 查看成员列表相关状态
     var showMembersDialog by remember { mutableStateOf(false) }
@@ -1858,7 +1259,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
-    val activeChatNavigationTarget = appState.chatNavigationTarget?.takeIf { it.groupId == group.id }
+    val activeChatNavigationTarget = appState.roomNavigationTarget?.takeIf { it.roomId == group.id }
 
     // 自动滚动到底部 — 包括 contentBlocks（cc-connect / Claudian 流式回复的主要通道）
     // 以及 interactiveOptions（交互式按钮出现在底部时）
@@ -1878,519 +1279,184 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         val target = activeChatNavigationTarget ?: return@LaunchedEffect
         val messageId = target.messageId
         if (messageId.isNullOrBlank()) {
-            appState.consumeChatNavigationTarget(target.requestId)
+            appState.consumeRoomNavigationTarget(target.requestId)
             return@LaunchedEffect
         }
         kotlinx.coroutines.delay(80)
         if (scrollMessageIntoContainer(CHAT_MESSAGES_CONTAINER_ID, messageId)) {
-            appState.consumeChatNavigationTarget(target.requestId)
+            appState.consumeRoomNavigationTarget(target.requestId)
         }
     }
     
-    Div({ classes(SilkStylesheet.container) }) {
-        // Header - 丝滑风格
-        Div({ 
-            classes(SilkStylesheet.header)
-            style {
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                property("gap", "12px")
-            }
-        }) {
-            // 返回按钮
-            Button({
-                style {
-                    padding(6.px, 12.px)
-                    backgroundColor(Color("rgba(255,255,255,0.15)"))
-                    color(Color.white)
-                    border { width(0.px) }
-                    borderRadius(8.px)
-                    property("cursor", "pointer")
-                    fontSize(16.px)
-                    property("backdrop-filter", "blur(4px)")
-                    property("transition", "all 0.2s ease")
-                }
-                onClick { 
-                    console.log("👈 用户点击返回按钮")
-                    scope.launch {
-                        // 1. 先断开WebSocket连接
-                        try {
-                            console.log("🔌 正在断开WebSocket...")
-                            chatClient.disconnect()
-                            console.log("✅ WebSocket已断开")
-                        } catch (e: dynamic) {
-                            console.log("ℹ️ WebSocket断开（忽略错误）")
-                        }
-                        
-                        // 2. 等待服务器完成所有消息处理
-                        kotlinx.coroutines.delay(300)
-                        
-                        // 3. 最后标记已读 - 在断开连接之后调用
-                        // 这样可以确保标记时间晚于用户发送的所有消息
-                        try {
-                            ApiClient.markGroupAsRead(user.id, group.id)
-                            console.log("✅ 已标记群组为已读")
-                        } catch (e: dynamic) {
-                            console.log("⚠️ 标记已读失败")
-                        }
-                        
-                        // 4. 返回到群组列表
-                        console.log("📋 返回到群组列表")
-                        appState.navigateBack()
-                    }
-                }
-            }) {
-                Text("←")
-            }
-            
-            Div({ 
-                style { 
-                    property("flex", "1") 
-                    display(DisplayStyle.Flex)
-                    property("flex-direction", "column")
-                    property("gap", "2px")
-                } 
-            }) {
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "8px")
-                        property("letter-spacing", "2px")
-                    }
-                }) {
-                    Text(group.name)
-                    if (ccConnectInfo != null) {
-                        Span({
-                            style {
-                                fontSize(10.px)
-                                padding(2.px, 8.px)
-                                borderRadius(4.px)
-                                property("font-weight", "600")
-                                property("letter-spacing", "0.5px")
-                                property("cursor", "pointer")
-                                property("transition", "opacity 0.2s ease")
-                                if (ccConnectInfo?.connected == true) {
-                                    backgroundColor(Color("#E8F5E9"))
-                                    color(Color("#2E7D32"))
-                                } else {
-                                    backgroundColor(Color("#FFF3E0"))
-                                    color(Color("#E65100"))
-                                }
-                            }
-                            attr("title", "Click to view token & connection info")
-                            onClick { showCcConnectTokenDialog = true }
-                        }) {
-                            val label = if (ccConnectInfo?.connected == true) {
-                                val agentName = run {
-                                    val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
-                                    when {
-                                        raw.startsWith("claude") -> "Claude"
-                                        raw.startsWith("cursor") -> "Cursor"
-                                        raw.startsWith("gemini") -> "Gemini"
-                                        raw.startsWith("codex")  -> "Codex"
-                                        raw.startsWith("copilot") -> "Copilot"
-                                        raw.isBlank() -> "agent"
-                                        else -> raw
-                                    }
-                                }
-                                "cc-connect ($agentName)"
-                            } else {
-                                "cc-connect (offline)"
-                            }
-                            Text(label)
-                        }
-                    }
-                }
-                val cwdText = ccConnectInfo?.cwd
-                if (ccConnectInfo?.connected == true && !cwdText.isNullOrBlank()) {
+    ConversationDetailScaffold(ConversationDetailVariant.CHAT) {
+        val cwdText = ccConnectInfo?.cwd
+        ConversationHeader(
+            icon = "◉",
+            title = group.name,
+            className = "silk-chat-header",
+            titleSuffix = ccConnectInfo?.let { info ->
+                {
                     Span({
                         style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
+                            fontSize(10.px)
+                            padding(2.px, 8.px)
+                            borderRadius(4.px)
+                            property("font-weight", "600")
+                            property("cursor", "pointer")
+                            property("white-space", "nowrap")
+                            if (info.connected) {
+                                backgroundColor(Color("#E8F5E9"))
+                                color(Color("#2E7D32"))
+                            } else {
+                                backgroundColor(Color("#FFF3E0"))
+                                color(Color("#E65100"))
+                            }
+                        }
+                        attr("title", "查看 cc-connect 连接信息")
+                        onClick { showCcConnectTokenDialog = true }
+                    }) {
+                        val raw = (info.agentType ?: "").lowercase().trim()
+                        val agentName = when {
+                            raw.startsWith("claude") -> "Claude"
+                            raw.startsWith("cursor") -> "Cursor"
+                            raw.startsWith("gemini") -> "Gemini"
+                            raw.startsWith("codex") -> "Codex"
+                            raw.startsWith("copilot") -> "Copilot"
+                            raw.isBlank() -> "agent"
+                            else -> raw
+                        }
+                        Text(if (info.connected) "cc-connect ($agentName)" else "cc-connect (offline)")
+                    }
+                }
+            },
+            subtitle = if (ccConnectInfo?.connected == true && !cwdText.isNullOrBlank()) {
+                {
+                    Span({
+                        attr("title", cwdText)
+                        style {
                             property("font-family", "monospace")
-                            property("letter-spacing", "0")
                             property("overflow", "hidden")
                             property("text-overflow", "ellipsis")
                             property("white-space", "nowrap")
                         }
-                        title(cwdText)
-                    }) {
-                        Text("📁 $cwdText")
-                    }
-                }
-            }
-            
-            // 右侧按钮组
-            if (isSelectionMode) {
-                // 选择模式工具栏
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        property("gap", "10px")
-                        alignItems(AlignItems.Center)
-                    }
-                }) {
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color.white)
-                            property("opacity", "0.9")
-                        }
-                    }) {
-                        Text("已选择 ${selectedMessageIds.size} 条")
-                    }
-                    
-                    // 复制选中消息
-                    Button({
-                        style {
-                            padding(8.px, 14.px)
-                            backgroundColor(Color(if (selectedMessageIds.isNotEmpty()) "rgba(255,255,255,0.25)" else "rgba(255,255,255,0.10)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", if (selectedMessageIds.isNotEmpty()) "pointer" else "default")
-                            fontSize(13.px)
-                            property("transition", "all 0.2s ease")
-                        }
-                        if (selectedMessageIds.isNotEmpty()) {
-                            onClick {
-                                val selectedContent = messages
-                                    .filter { it.id in selectedMessageIds }
-                                    .sortedBy { it.timestamp }
-                                    .joinToString("\n\n") { "${it.userName}:\n${it.content}" }
-                                if (selectedContent.isNotEmpty()) {
-                                    copyTextToClipboard(selectedContent)
-                                }
-                                isSelectionMode = false
-                                selectedMessageIds = emptySet()
-                            }
-                        }
-                    }) {
-                        Text("📋复制")
-                    }
-                    
-                    // 删除选中消息
-                    Button({
-                        style {
-                            padding(8.px, 14.px)
-                            backgroundColor(Color(if (selectedMessageIds.isNotEmpty()) "rgba(255,80,80,0.35)" else "rgba(255,255,255,0.10)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", if (selectedMessageIds.isNotEmpty()) "pointer" else "default")
-                            fontSize(13.px)
-                            property("transition", "all 0.2s ease")
-                        }
-                        if (selectedMessageIds.isNotEmpty()) {
-                            onClick {
-                                val idsToDelete = selectedMessageIds
-                                scope.launch {
-                                    chatClient.removeMessages(idsToDelete)
-                                    for (msgId in idsToDelete) {
-                                        try {
-                                            ApiClient.deleteMessage(group.id, msgId, user.id)
-                                        } catch (e: dynamic) {
-                                            console.log("删除消息失败:", msgId, e)
-                                        }
-                                    }
-                                }
-                                isSelectionMode = false
-                                selectedMessageIds = emptySet()
-                            }
-                        }
-                    }) {
-                        Text("🗑删除")
-                    }
-                    
-                    // 转发选中消息
-                    Button({
-                        style {
-                            padding(8.px, 14.px)
-                            backgroundColor(Color(if (selectedMessageIds.isNotEmpty()) "rgba(255,255,255,0.25)" else "rgba(255,255,255,0.10)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", if (selectedMessageIds.isNotEmpty()) "pointer" else "default")
-                            fontSize(13.px)
-                            property("transition", "all 0.2s ease")
-                        }
-                        if (selectedMessageIds.isNotEmpty()) {
-                            onClick {
-                                val selectedContent = messages
-                                    .filter { it.id in selectedMessageIds }
-                                    .sortedBy { it.timestamp }
-                                    .joinToString("\n\n") { "[${it.userName}] ${it.content}" }
-                                val syntheticMsg = Message(
-                                    id = "forward-multi",
-                                    userId = user.id,
-                                    userName = user.fullName,
-                                    content = selectedContent,
-                                    type = MessageType.TEXT,
-                                    timestamp = js("Date.now()").unsafeCast<Double>().toLong()
-                                )
-                                messageToForward = syntheticMsg
-                                scope.launch {
-                                    isLoadingGroups = true
-                                    val response = ApiClient.getUserGroups(user.id)
-                                    userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
-                                    isLoadingGroups = false
-                                    showForwardDialog = true
-                                }
-                            }
-                        }
-                    }) {
-                        Text("↗转发")
-                    }
-                    
-                    // 取消选择
-                    Button({
-                        style {
-                            padding(8.px, 14.px)
-                            backgroundColor(Color("rgba(255,255,255,0.15)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            fontSize(13.px)
-                            property("transition", "all 0.2s ease")
-                        }
-                        onClick {
-                            isSelectionMode = false
-                            selectedMessageIds = emptySet()
-                        }
-                    }) {
-                        Text("✕ 取消")
-                    }
+                    }) { Text("📁 $cwdText") }
                 }
             } else {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    property("gap", "10px")
-                    alignItems(AlignItems.Center)
-                }
-            }) {
-                // 📁 文件夹按钮 - 查看session文件
-                Button({
+                null
+            },
+        ) {
+            if (isSelectionMode) {
+                Span({
                     style {
-                        padding(10.px, 14.px)
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(18.px)
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("white-space", "nowrap")
                     }
-                    onClick {
+                }) { Text("已选择 ${selectedMessageIds.size} 条") }
+                ConversationHeaderActionButton(
+                    label = "复制选中消息",
+                    icon = "▣",
+                    enabled = selectedMessageIds.isNotEmpty(),
+                ) {
+                    val selectedContent = messages
+                        .filter { it.id in selectedMessageIds }
+                        .sortedBy { it.timestamp }
+                        .joinToString("\n\n") { "${it.userName}:\n${it.content}" }
+                    if (selectedContent.isNotEmpty()) copyTextToClipboard(selectedContent)
+                    isSelectionMode = false
+                    selectedMessageIds = emptySet()
+                }
+                ConversationHeaderActionButton(
+                    label = "删除选中消息",
+                    icon = "⌫",
+                    enabled = selectedMessageIds.isNotEmpty(),
+                    tone = ConversationActionTone.DANGER,
+                ) {
+                    val idsToDelete = selectedMessageIds
+                    scope.launch {
+                        chatClient.removeMessages(idsToDelete)
+                        for (msgId in idsToDelete) {
+                            try {
+                                ApiClient.deleteMessage(group.id, msgId, user.id)
+                            } catch (e: dynamic) {
+                                console.error("删除消息失败:", msgId, e)
+                            }
+                        }
+                    }
+                    isSelectionMode = false
+                    selectedMessageIds = emptySet()
+                }
+                ConversationHeaderActionButton(
+                    label = "转发选中消息",
+                    icon = "↗",
+                    enabled = selectedMessageIds.isNotEmpty(),
+                ) {
+                    val selectedContent = messages
+                        .filter { it.id in selectedMessageIds }
+                        .sortedBy { it.timestamp }
+                        .joinToString("\n\n") { "[${it.userName}] ${it.content}" }
+                    messageToForward = Message(
+                        id = "forward-multi",
+                        userId = user.id,
+                        userName = user.fullName,
+                        content = selectedContent,
+                        type = MessageType.TEXT,
+                        timestamp = js("Date.now()").unsafeCast<Double>().toLong(),
+                    )
+                    scope.launch {
+                        isLoadingGroups = true
+                        val response = ApiClient.getUserGroups(user.id)
+                        userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                        isLoadingGroups = false
+                        showForwardDialog = true
+                    }
+                }
+                ConversationHeaderActionButton(label = "取消选择", icon = "×") {
+                    isSelectionMode = false
+                    selectedMessageIds = emptySet()
+                }
+            } else {
+                ConversationRoomHeaderActions(
+                    inviteLabel = strings.inviteButton,
+                    membersLabel = strings.membersButton,
+                    isExporting = isExportingMarkdown,
+                    exportHint = exportMarkdownHint,
+                    showMembershipActions = group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE,
+                    onOpenFiles = {
                         showFolderExplorer = true
                         isLoadingFiles = true
-                        // FolderExplorerDialog 会自动加载文件列表
-                    }
-                }) {
-                    Text("📁")
-                }
-
-                // 📝 导出按钮 - 导出聊天为 Obsidian Markdown
-                Button({
-                    style {
-                        padding(10.px, 14.px)
-                        backgroundColor(Color(if (isExportingMarkdown) "rgba(255,255,255,0.35)" else "rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", if (isExportingMarkdown) "not-allowed" else "pointer")
-                        fontSize(16.px)
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        property("opacity", if (isExportingMarkdown) "0.85" else "1")
-                    }
-                    onClick {
-                        if (isExportingMarkdown) return@onClick
+                    },
+                    onExport = {
                         scope.launch {
                             isExportingMarkdown = true
-                            exportMarkdownHint = "正在导出..."
                             try {
-                                var vaultHandle: dynamic = null
-                                if (ObsidianVaultManager.isSupported()) {
-                                    vaultHandle = ObsidianVaultManager.getCachedHandleIfValid()
-                                    if (vaultHandle == null) {
-                                        exportMarkdownHint = "请选择 Obsidian Vault 目录..."
-                                        vaultHandle = ObsidianVaultManager.pickVaultDirectory()
-                                    }
-                                }
-
-                                exportMarkdownHint = "正在获取聊天记录..."
-                                val result = ApiClient.exportGroupMarkdown(group.id, user.id)
-                                if (!result.success) {
-                                    exportMarkdownHint = "导出失败：${result.message}"
-                                    window.alert("导出失败：${result.message}")
-                                    return@launch
-                                }
-                                val fileName = result.fileName.ifBlank { "silk_group_${group.id}.md" }
-
-                                if (vaultHandle != null) {
-                                    exportMarkdownHint = "正在写入 Vault..."
-                                    try {
-                                        val relativePath = ObsidianVaultManager.saveToVault(
-                                            vaultHandle, group.name, result.markdown, fileName
-                                        )
-                                        console.log("✅ 已导出到 Obsidian Vault:", relativePath)
-                                        exportMarkdownHint = "已导出: $relativePath"
-                                    } catch (t: Throwable) {
-                                        console.warn("Vault 写入失败，回退到下载:", t)
-                                        downloadAsFile(result.markdown, fileName)
-                                        exportMarkdownHint = "Vault写入失败，已下载：$fileName"
-                                    }
-                                } else {
-                                    downloadAsFile(result.markdown, fileName)
-                                    console.log("✅ 聊天记录已导出:", fileName)
-                                    exportMarkdownHint = "导出成功：$fileName"
-                                }
-                            } catch (t: Throwable) {
-                                val msg = t.message ?: t.toString()
-                                if (msg.contains("abort", ignoreCase = true)) {
-                                    exportMarkdownHint = "已取消"
-                                } else {
-                                    console.error("❌ 导出异常:", t)
-                                    exportMarkdownHint = "导出异常: $msg"
-                                    window.alert("导出失败: $msg")
+                                exportConversationMarkdown(group.id, group.name, user.id) {
+                                    exportMarkdownHint = it
                                 }
                             } finally {
                                 isExportingMarkdown = false
                             }
                         }
-                    }
-                }) {
-                    Text(if (isExportingMarkdown) "导出中..." else "📝")
-                }
-                exportMarkdownHint?.let { hint ->
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color.white)
-                            property("max-width", "260px")
-                            property("overflow", "hidden")
-                            property("text-overflow", "ellipsis")
-                            property("white-space", "nowrap")
-                        }
-                        title(hint)
-                    }) {
-                        Text(hint)
-                    }
-                }
-                if (ObsidianVaultManager.isSupported()) {
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color("rgba(255,255,255,0.6)"))
-                            property("cursor", "pointer")
-                            property("text-decoration", "underline")
-                            property("margin-left", "4px")
-                        }
-                        title("重新选择 Obsidian Vault 目录")
-                        onClick {
-                            scope.launch {
-                                try {
-                                    ObsidianVaultManager.clearCachedHandle()
-                                    ObsidianVaultManager.pickVaultDirectory()
-                                    exportMarkdownHint = "Vault 目录已更新"
-                                } catch (e: Exception) {
-                                    if (e.message?.contains("abort", ignoreCase = true) != true) {
-                                        exportMarkdownHint = "更换目录失败: ${e.message}"
-                                    }
-                                }
+                    },
+                    onChooseVault = {
+                        scope.launch { chooseConversationVault { exportMarkdownHint = it } }
+                    },
+                    onInvite = { showInvitationDialog = true },
+                    onMembers = {
+                        showMembersDialog = true
+                        scope.launch {
+                            isLoadingContacts = true
+                            try {
+                                val contactsResponse = ApiClient.getContacts(user.id)
+                                contacts = contactsResponse.contacts ?: emptyList()
+                                val membersResponse = ApiClient.getGroupMembers(group.id)
+                                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                            } finally {
+                                isLoadingContacts = false
                             }
                         }
-                    }) {
-                        Text("📂")
-                    }
-                }
-                
-                // 非 Silk 专属对话才显示邀请、添加成员、查看成员按钮
-                if (!group.name.startsWith("[Silk]")) {
-                
-                // 邀请按钮
-                Button({
-                    style {
-                        padding(10.px, 14.px)
-                        backgroundColor(Color("rgba(255,255,255,0.15)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(16.px)
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                    }
-                    onClick { showInvitationDialog = true }
-                }) {
-                    Text(strings.inviteButton)
-                }
-                
-                // ➕ 添加成员按钮
-                Button({
-                    style {
-                        padding(10.px, 14.px)
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(16.px)
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                    }
-                    onClick {
-                        // 加载联系人和群组成员
-                        scope.launch {
-                            isLoadingContacts = true
-                            val contactsResponse = ApiClient.getContacts(user.id)
-                            contacts = contactsResponse.contacts ?: emptyList()
-                            val membersResponse = ApiClient.getGroupMembers(group.id)
-                            // 将群主排在第一位
-                            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                            isLoadingContacts = false
-                            showAddMemberDialog = true
-                        }
-                    }
-                }) {
-                    Text("➕")
-                }
-                
-                // 👥 查看成员按钮
-                Button({
-                    style {
-                        padding(10.px, 14.px)
-                        backgroundColor(Color("rgba(255,255,255,0.15)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                    }
-                    onClick {
-                        // 加载联系人和群组成员
-                        scope.launch {
-                            isLoadingContacts = true
-                            val contactsResponse = ApiClient.getContacts(user.id)
-                            contacts = contactsResponse.contacts ?: emptyList()
-                            val membersResponse = ApiClient.getGroupMembers(group.id)
-                            // 将群主排在第一位
-                            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                            isLoadingContacts = false
-                            showMembersDialog = true
-                        }
-                    }
-                }) {
-                    Text(strings.membersButton)
-                }
-                } // end if !group.name.startsWith("[Silk]")
-            }
+                    },
+                )
             } // close else (non-selection mode)
         }
         
@@ -2444,7 +1510,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         // Status Bar - only show when not connected
         if (connectionState != ConnectionState.CONNECTED) {
             Div({ 
-                classes(SilkStylesheet.statusBar)
+                classes(SilkStylesheet.statusBar, "silk-conversation-fixed-region")
                 style {
                     property("background", when (connectionState) {
                         ConnectionState.CONNECTED -> "linear-gradient(90deg, ${SilkColors.success}, #8DBE7C)"
@@ -2467,7 +1533,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         // Messages container with drag-and-drop support
         // flex: 1 spacer pushes content to bottom; overflow-y: auto enables scroll
         Div({ 
-            classes(SilkStylesheet.messagesContainer)
+            classes(SilkStylesheet.messagesContainer, "silk-conversation-scroll-region")
             id(CHAT_MESSAGES_CONTAINER_ID)
             style {
                 property("position", "relative")
@@ -2550,7 +1616,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         scope.launch {
                             isLoadingGroups = true
                             val response = ApiClient.getUserGroups(user.id)
-                            userGroups = response.groups?.filter { it.id != group.id && !it.name.startsWith("wf_") } ?: emptyList()
+                            userGroups = response.groups?.filter {
+                                it.id != group.id && it.roomKind != com.silk.shared.models.RoomKind.WORKFLOW
+                            } ?: emptyList()
                             isLoadingGroups = false
                             showForwardDialog = true
                         }
@@ -2606,7 +1674,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             scope.launch {
                                 isLoadingGroups = true
                                 val response = ApiClient.getUserGroups(user.id)
-                                userGroups = response.groups?.filter { it.id != group.id && !it.name.startsWith("wf_") } ?: emptyList()
+                                userGroups = response.groups?.filter {
+                                    it.id != group.id && it.roomKind != com.silk.shared.models.RoomKind.WORKFLOW
+                                } ?: emptyList()
                                 isLoadingGroups = false
                                 showForwardDialog = true
                             }
@@ -2829,15 +1899,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         
         // Input区域（添加诊断按钮）- 丝滑风格
         if (connectionState == ConnectionState.CONNECTED) {
-            Div({ 
-                classes(SilkStylesheet.inputContainer)
-                style {
-                    display(DisplayStyle.Flex)
-                    property("flex-direction", "column")
-                    property("gap", "12px")
-                }
-            }) {
-                val isSilkPrivateChat = group.name.startsWith("[Silk]")
+            ConversationComposerScaffold("silk-chat-composer") {
+                val isSilkPrivateChat = group.roomKind == com.silk.shared.models.RoomKind.SILK_PRIVATE
                 val isCcConnectGroup = ccConnectInfo != null
                 val currentMemberRole = groupMembers.find { it.id == user.id }?.role
                 val canTriggerCc = currentMemberRole == "HOST" || currentMemberRole == "OPERATOR"
@@ -2856,58 +1919,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
                 val ccPrefix = "@$ccTriggerName"
 
+                ConversationComposerAccessoryRow {
                 // @Silk 快捷按钮（在 Silk 私聊和 cc-connect 群组中隐藏）
                 if (!isSilkPrivateChat && !isCcConnectGroup) {
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        property("justify-content", "flex-start")
-                        property("gap", "8px")
-                        alignItems(AlignItems.Center)
-                    }
-                }) {
-                    Button({
-                        style {
-                            padding(6.px, 12.px)
-                            backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
-                            color(Color(SilkColors.primary))
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.primary))
-                            }
-                            borderRadius(16.px)
-                            property("cursor", "pointer")
-                            fontSize(13.px)
-                            property("font-weight", "500")
-                            property("transition", "all 0.2s ease")
-                            property("white-space", "nowrap")
-                        }
-                        onClick {
-                            val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
-                            if (input != null) {
-                                val currentText = messageText
-                                val cursorPos = input.selectionStart ?: currentText.length
-                                val beforeCursor = currentText.substring(0, cursorPos)
-                                val afterCursor = currentText.substring(cursorPos)
-                                messageText = "$beforeCursor@Silk $afterCursor"
-                                window.setTimeout({
-                                    val newPos = cursorPos + 6
-                                    input.setSelectionRange(newPos, newPos)
-                                    input.focus()
-                                }, 0)
-                            } else {
-                                messageText = if (messageText.isEmpty() || messageText.endsWith(" ")) {
-                                    "${messageText}@Silk "
-                                } else {
-                                    "${messageText} @Silk "
-                                }
-                            }
-                        }
-                    }) {
-                        Text("@Silk")
-                    }
-                }
+                    SilkMentionButton(
+                        inputElementId = "chat-input",
+                        messageText = messageText,
+                        onMessageTextChange = { messageText = it },
+                    )
                 }
 
                 // 代理触发按钮（按连接的代理类型显示 @claude/@cursor 等，仅多人群 HOST/OPERATOR 可见）
@@ -3102,10 +2121,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
                 }
+                } // composer accessory row
                 
-                // 第一行：输入框占据整行
                 // 发送消息的函数
-                                val sendMessage: () -> Unit = {
+                val sendMessage: () -> Unit = {
                     val text = messageText
                     val pendingImg = pendingPasteImage
                     if (text.isNotBlank() || pendingImg != null) {
@@ -3114,7 +2133,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         val pendingUrl = pendingPasteImageUrl
                         pendingPasteImageUrl = null
                         if (pendingUrl != null) {
-                            js("window.URL.revokeObjectURL(pendingUrl)")
+                            window.asDynamic().URL.revokeObjectURL(pendingUrl)
                         }
                         if (pendingImg == null && text.isNotBlank()) {
                             scope.launch {
@@ -3127,27 +2146,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             }
                         }
                         if (pendingImg != null) {
-                            isUploading = true
-                            // 图片+文字一起通过 HTTP 上传，后端保存后广播单条 ##PREVIEW_IMAGE 消息
-                            val w = js("window")
-                            w.__upGid = group.id
-                            w.__upUid = user.id
-                            w.__upUrl = "${backendHttpOrigin()}/api/files/upload"
-                            w.__upFile = pendingImg
-                            w.__upText = if (text.isNotBlank()) text else ""
-                            js("""
-                                var fd = new FormData();
-                                fd.append("sessionId", window.__upGid);
-                                fd.append("userId", window.__upUid);
-                                fd.append("file", window.__upFile);
-                                fd.append("text", window.__upText);
-                                var xhr = new XMLHttpRequest();
-                                xhr.open("POST", window.__upUrl, true);
-                                xhr.onload = function() { window.__upIsUploading = false; };
-                                xhr.onerror = function() { window.__upIsUploading = false; };
-                                xhr.send(fd);
-                            """)
-                            js("window.__upIsUploading = true;")
+                            uploadConversationImage(group.id, user.id, pendingImg, text)
                         }
                     }
                 }
@@ -3159,69 +2158,28 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
                 
 
-                                // 粘贴图片预览
-                if (pendingPasteImageUrl != null) {
-                    Div({
-                        style {
-                            display(DisplayStyle.Flex)
-                            alignItems(AlignItems.Center)
-                            property("gap", "8px")
-                            padding(8.px, 12.px)
-                            marginBottom(8.px)
-                            backgroundColor(Color("rgba(201, 168, 108, 0.08)"))
-                            borderRadius(8.px)
-                            property("border", "1px solid rgba(201, 168, 108, 0.25)")
-                        }
-                    }) {
-                        Img(src = pendingPasteImageUrl!!) {
-                            style {
-                                width(60.px)
-                                height(60.px)
-                                property("object-fit", "cover")
-                                borderRadius(4.px)
-                            }
-                        }
-                        Span({
-                            style {
-                                fontSize(13.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("flex", "1")
-                            }
-                        }) { Text("Send with image") }
-                        Span({
-                            style {
-                                fontSize(16.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("cursor", "pointer")
-                                padding(4.px)
-                            }
-                            onClick {
-                                val url = pendingPasteImageUrl
-                                pendingPasteImage = null
-                                pendingPasteImageUrl = null
-                                if (url != null) { js("window.URL.revokeObjectURL(url)") }
-                            }
-                        }) { Text("x") }
+                pendingPasteImageUrl?.let { objectUrl ->
+                    ConversationComposerImagePreview(objectUrl) {
+                        pendingPasteImage = null
+                        pendingPasteImageUrl = null
+                        window.asDynamic().URL.revokeObjectURL(objectUrl)
                     }
                 }
 
-                KnowledgeBaseContextTray(
-                    statusMessages = statusMessages,
-                    selection = kbContextSelection,
-                    onSelectionChange = {
-                        kbContextSelectionTouched = true
-                        kbContextSelection = it
-                    },
-                )
-// 输入框容器（用于定位 mention 菜单）
-                Div({
-                    style {
-                        property("position", "relative")
-                        width(100.percent)
-                    }
-                }) {
+                ConversationComposerContext {
+                    KnowledgeBaseContextTray(
+                        statusMessages = statusMessages,
+                        selection = kbContextSelection,
+                        onSelectionChange = {
+                            kbContextSelectionTouched = true
+                            kbContextSelection = it
+                        },
+                    )
+                }
+                ConversationComposerInputRow {
+                ConversationComposerInputSurface {
                     TextArea {
-                        classes(SilkStylesheet.input)
+                        classes(SilkStylesheet.input, "silk-conversation-composer-input")
                         value(messageText)
                         onInput { event ->
                             val newValue = event.value
@@ -3279,17 +2237,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                         attr("placeholder", when {
                             pendingQuestionId != null -> "回答 Claude Code 的问题..."
-                            group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
+                            group.roomKind == com.silk.shared.models.RoomKind.SILK_PRIVATE -> strings.silkChatInputPlaceholder
                             ccConnectInfo != null -> "Message cc-connect agent..."
                             else -> strings.messageInputPlaceholder
                         })
                         attr("rows", "2")
                         attr("id", "chat-input")
-                        style {
-                            width(100.percent)
-                            property("box-sizing", "border-box")
-                            property("resize", "none")
-                        }
                     }
                     
                                         // 粘贴图片处理（存入待发送队列，不立即上传）
@@ -3319,10 +2272,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
 
-                    
                     // $ KB 引用浮动面板
                     if (showKbRefMenu) {
-                        val scope = rememberCoroutineScope()
                         // 搜索延迟 debounce
                         LaunchedEffect(kbRefSearchText) {
                             if (kbRefSearchText.length >= 1) {
@@ -3515,7 +2466,16 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             }
                         }
                     }
-                }
+                } // input surface
+                ConversationComposerPrimaryAction(
+                    isGenerating = isGenerating,
+                    enabled = messageText.isNotBlank() || pendingPasteImage != null,
+                    sendLabel = strings.sendButton,
+                    stopLabel = strings.stopButton,
+                    onSend = sendMessage,
+                    onStop = { chatClient.stopGeneration(user.id, user.fullName) },
+                )
+                } // input row
                 
                 // 添加键盘事件监听
                 DisposableEffect(Unit) {
@@ -3553,269 +2513,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
                 
-                // 第二行：按钮组靠右对齐
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        property("justify-content", "flex-end")
-                        property("gap", "10px")
-                        alignItems(AlignItems.Center)
-                    }
-                }) {
-                    // 📁 上传目录按钮
-                    Button({
-                        style {
-                            padding(12.px, 14.px)
-                            backgroundColor(Color(SilkColors.secondary))
-                            color(Color(SilkColors.textPrimary))
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", if (isUploading) "not-allowed" else "pointer")
-                            fontSize(18.px)
-                            property("transition", "all 0.2s ease")
-                            property("opacity", if (isUploading) "0.6" else "1")
+                ConversationRoomComposerTools(
+                    roomId = group.id,
+                    userId = user.id,
+                    messageText = messageText,
+                    onMessageTextChange = { messageText = it },
+                    onScreenshotCaptured = { blob, objectUrl ->
+                        pendingPasteImageUrl?.let { previousUrl ->
+                            window.asDynamic().URL.revokeObjectURL(previousUrl)
                         }
-                        attr("title", "上传整个目录")
-                        onClick {
-                            if (!isUploading) {
-                                js("""
-                                    var input = document.getElementById('folder-upload-input');
-                                    if (input) input.click();
-                                """)
-                            }
-                        }
-                    }) {
-                        Text(if (isUploading) "⏳" else "📁")
-                    }
-                    
-                    // 📎 上传单文件按钮
-                    Button({
-                        style {
-                            padding(12.px, 14.px)
-                            backgroundColor(Color(SilkColors.secondary))
-                            color(Color(SilkColors.textPrimary))
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", if (isUploading) "not-allowed" else "pointer")
-                            fontSize(18.px)
-                            property("transition", "all 0.2s ease")
-                            property("opacity", if (isUploading) "0.6" else "1")
-                        }
-                        attr("title", "上传单个文件")
-                        onClick {
-                            if (!isUploading) {
-                                js("""
-                                    var input = document.getElementById('file-upload-input');
-                                    if (input) input.click();
-                                """)
-                            }
-                        }
-                    }) {
-                        Text(if (isUploading) "⏳" else "📎")
-                    }
-
-                    // 📷 截屏按钮（区域截图）
-                    Button({
-                        style {
-                            padding(12.px, 14.px)
-                            backgroundColor(Color(SilkColors.secondary))
-                            color(Color(SilkColors.textPrimary))
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", if (isUploading) "not-allowed" else "pointer")
-                            fontSize(18.px)
-                            property("transition", "all 0.2s ease")
-                            property("opacity", if (isUploading) "0.6" else "1")
-                        }
-                        attr("title", "截取屏幕区域")
-                        onClick {
-                            if (!isUploading) {
-                                isScreenshotCrop = true
-                                val sessionId = group.id
-                                val userId = user.id
-                                val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-                                // 注册 JS 回调以重置 Kotlin 状态（保持注册直到 JS 侧使用完毕）
-                                window.asDynamic().__screenshotDone = {
-                                    val blob = js("window.__pendingScreenshotBlob")
-                                    if (blob != null) {
-                                        pendingPasteImage = blob
-                                        pendingPasteImageUrl = js("window.URL.createObjectURL(blob)").toString()
-                                        js("window.__pendingScreenshotBlob = null")
-                                    }
-                                    isScreenshotCrop = false
-                                }
-                                js("""
-                                    (function() {
-                                        var sid = sessionId;
-                                        var uid_ = userId;
-                                        var url = uploadUrl;
-                                        navigator.mediaDevices.getDisplayMedia().then(function(stream) {
-                                            var video = document.createElement('video');
-                                            video.srcObject = stream;
-                                            video.onloadedmetadata = function() {
-                                                video.play();
-                                                var canvas = document.createElement('canvas');
-                                                canvas.width = video.videoWidth;
-                                                canvas.height = video.videoHeight;
-                                                var ctx = canvas.getContext('2d');
-                                                ctx.drawImage(video, 0, 0);
-                                                stream.getTracks().forEach(function(t) { t.stop(); });
-                                                var dataUrl = canvas.toDataURL('image/png');
-                                                window.showCropOverlay(dataUrl, sid, uid_, url);
-                                            };
-                                        }).catch(function(e) {
-                                            console.log('截图取消:', e);
-                                            if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
-                                        });
-                                    })();
-                                """)
-                            }
-                        }
-                    }) {
-                        Text("📷")
-                    }
-
-                    // 🎤 语音输入按钮
-                    if (isTranscribing) {
-                        Button({
-                            style {
-                                padding(12.px, 14.px)
-                                backgroundColor(Color(SilkColors.secondary))
-                                color(Color(SilkColors.textSecondary))
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                fontSize(14.px)
-                                property("cursor", "not-allowed")
-                                property("opacity", "0.7")
-                            }
-                        }) {
-                            Text("识别中...")
-                        }
-                    } else if (isVoiceRecording) {
-                        Button({
-                            style {
-                                padding(12.px, 14.px)
-                                backgroundColor(Color("#FF4D4F"))
-                                color(Color.white)
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", "pointer")
-                                fontSize(14.px)
-                                property("font-weight", "600")
-                                property("transition", "all 0.2s ease")
-                            }
-                            attr("title", "停止录音并识别")
-                            onClick {
-                                isVoiceRecording = false
-                                try {
-                                    val recorder = mediaRecorderJs
-                                    if (recorder != null) {
-                                        recorder.stop()
-                                    }
-                                } catch (e: dynamic) {
-                                    console.log("停止录音失败:", e)
-                                    isTranscribing = false
-                                }
-                            }
-                        }) {
-                            Text("⏹ 停止")
-                        }
-                    } else {
-                        Button({
-                            style {
-                                padding(12.px, 14.px)
-                                backgroundColor(Color(SilkColors.secondary))
-                                color(Color(SilkColors.textPrimary))
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", "pointer")
-                                fontSize(18.px)
-                                property("transition", "all 0.2s ease")
-                            }
-                            attr("title", "语音输入")
-                            onClick {
-                                scope.launch {
-                                    try {
-                                        console.log("[ASR] 请求麦克风...")
-                                        val stream = jsGetUserMedia()
-                                            .unsafeCast<kotlin.js.Promise<dynamic>>().await()
-                                        console.log("[ASR] 获取到音频流")
-                                        val chunks = jsNewArray()
-                                        audioChunksJs = chunks
-                                        val recorder = jsCreateRecorder(stream)
-                                        recorder.ondataavailable = { event: dynamic ->
-                                            chunks.push(event.data)
-                                            Unit
-                                        }
-                                        recorder.onstop = {
-                                            console.log("[ASR] 录音已停止，开始转写...")
-                                            isTranscribing = true
-                                            scope.launch {
-                                                try {
-                                                    val blob = jsCreateBlob(chunks)
-                                                    val arrayBuffer = jsBlobToArrayBuffer(blob)
-                                                        .unsafeCast<kotlin.js.Promise<dynamic>>().await()
-                                                    val base64 = jsArrayBufferToBase64(arrayBuffer) as String
-                                                    console.log("[ASR] base64 长度:", base64.length)
-                                                    val result = ApiClient.transcribeAudio(base64, "webm")
-                                                    console.log("[ASR] 结果: success=${result.success}, text=${result.text.take(50)}")
-                                                    if (result.success && result.text.isNotBlank()) {
-                                                        messageText = if (messageText.isNotBlank()) "$messageText ${result.text}" else result.text
-                                                    } else {
-                                                        console.log("[ASR] 失败:", result.error ?: "未知错误")
-                                                    }
-                                                } catch (t: Throwable) {
-                                                    console.log("[ASR] 识别出错:", t)
-                                                } finally {
-                                                    isTranscribing = false
-                                                    try { jsStopTracks(stream) } catch (_: dynamic) {}
-                                                    console.log("[ASR] 流程结束")
-                                                }
-                                            }
-                                            Unit
-                                        }
-                                        mediaRecorderJs = recorder
-                                        recorder.start()
-                                        isVoiceRecording = true
-                                        console.log("[ASR] 开始录音")
-                                    } catch (e: dynamic) {
-                                        console.log("[ASR] 无法启动录音:", e)
-                                    }
-                                }
-                            }
-                        }) {
-                            Text("🎤")
-                        }
-                    }
-                    
-                    if (isGenerating) {
-                        Button({
-                            style {
-                                padding(12.px, 24.px)
-                                backgroundColor(Color("#FF4D4F"))
-                                color(Color.white)
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", "pointer")
-                                fontSize(14.px)
-                                property("font-weight", "600")
-                                property("transition", "all 0.2s ease")
-                            }
-                            onClick {
-                                chatClient.stopGeneration(user.id, user.fullName)
-                            }
-                        }) {
-                            Text(strings.stopButton)
-                        }
-                    } else {
-                        Button({
-                            classes(SilkStylesheet.button)
-                            onClick { sendMessage() }
-                        }) {
-                            Text(strings.sendButton)
-                        }
-                    }
-                }
+                        pendingPasteImage = blob
+                        pendingPasteImageUrl = objectUrl
+                    },
+                )
             }
         }
     }
@@ -4075,83 +2785,180 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         )
     }
     
-    // 添加成员对话框
-    if (showAddMemberDialog) {
-        AddMemberDialog(
-            contacts = contacts,
-            groupMembers = groupMembers,
-            isLoading = isLoadingContacts,
-            result = addMemberResult,
+    if (showMembersDialog) {
+        val contactIds = contacts.mapTo(mutableSetOf()) { it.contactId }
+        val memberItems = groupMembers.map { member ->
+            val isCurrentUser = member.id == user.id
+            val isContact = member.id in contactIds
+            val isSilkAI = isAgentUserId(member.id)
+            val canManageOperator = ccConnectInfo != null &&
+                group.hostId == user.id &&
+                !isCurrentUser &&
+                member.role != "HOST"
+            ConversationRoomMemberItem(
+                id = member.id,
+                displayName = member.fullName,
+                detail = when {
+                    isSilkAI -> strings.aiAssistant
+                    isCurrentUser -> strings.currentUser
+                    isContact -> strings.contactClickToChat
+                    else -> strings.clickToAddContact
+                },
+                roleLabel = when {
+                    member.id == group.hostId -> "Host"
+                    ccConnectInfo != null && member.role == "OPERATOR" -> "Operator"
+                    else -> ""
+                },
+                avatarText = when {
+                    isSilkAI -> "🤖"
+                    isCurrentUser -> "我"
+                    isContact -> "✓"
+                    else -> member.fullName.firstOrNull()?.toString() ?: "?"
+                },
+                avatarTone = when {
+                    isSilkAI -> ConversationMemberTone.INFO
+                    isCurrentUser -> ConversationMemberTone.PRIMARY
+                    isContact -> ConversationMemberTone.SUCCESS
+                    else -> ConversationMemberTone.MUTED
+                },
+                actionLabel = when {
+                    isCurrentUser || isSilkAI -> null
+                    isContact -> "发消息"
+                    else -> "加联系人"
+                },
+                secondaryActionLabel = if (canManageOperator) {
+                    if (member.role == "OPERATOR") "撤销 @cc" else "授予 @cc"
+                } else {
+                    null
+                },
+            )
+        }
+        val memberIds = groupMembers.mapTo(mutableSetOf()) { it.id }
+        val candidateItems = if (memberSearchQuery.isBlank()) {
+            contacts
+                .filter { it.contactId !in memberIds }
+                .map { contact ->
+                    ConversationRoomMemberCandidateItem(
+                        id = contact.contactId,
+                        displayName = contact.contactName,
+                        detail = contact.contactPhone,
+                    )
+                }
+        } else {
+            memberSearchResults
+                .filter { it.id !in memberIds }
+                .map { candidate ->
+                    ConversationRoomMemberCandidateItem(
+                        id = candidate.id,
+                        displayName = candidate.fullName,
+                        detail = candidate.loginName,
+                    )
+                }
+        }
+        ConversationRoomMembersDialog(
             strings = strings,
-            onAddMember = { contact ->
+            members = memberItems,
+            candidates = candidateItems,
+            canAddMembers = true,
+            query = memberSearchQuery,
+            loading = isLoadingContacts,
+            busy = isLoadingContacts,
+            errorMessage = addMemberResult?.takeIf { it.startsWith("❌") },
+            successMessage = addMemberResult?.takeUnless { it.startsWith("❌") },
+            emptyCandidatesMessage = roomMemberCandidateEmptyMessage(
+                strings = strings,
+                query = memberSearchQuery,
+                searchAttempted = memberSearchAttempted,
+            ),
+            onQueryChange = { query ->
+                memberSearchQuery = query
+                memberSearchResults = emptyList()
+                memberSearchAttempted = false
+                addMemberResult = null
+            },
+            onSearch = {
+                val searchedQuery = memberSearchQuery.trim()
+                memberSearchAttempted = false
                 scope.launch {
-                    val response = ApiClient.addMemberToGroup(group.id, contact.contactId)
-                    addMemberResult = if (response.success) {
-                        // 刷新成员列表
-                        val membersResponse = ApiClient.getGroupMembers(group.id)
-                        // 将群主排在第一位
-                        groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                        strings.memberAdded.replace("{name}", contact.contactName)
-                    } else {
-                        "❌ ${response.message}"
+                    isLoadingContacts = true
+                    addMemberResult = null
+                    try {
+                        val response = ApiClient.searchUsersByName(searchedQuery)
+                        if (memberSearchQuery.trim() != searchedQuery) return@launch
+                        memberSearchAttempted = true
+                        if (response.success) {
+                            memberSearchResults = response.users
+                        } else {
+                            memberSearchResults = emptyList()
+                            addMemberResult = "❌ ${response.message}"
+                        }
+                    } finally {
+                        isLoadingContacts = false
                     }
                 }
             },
-            onDismiss = { 
-                showAddMemberDialog = false
-                addMemberResult = null
-            }
-        )
-    }
-    
-    // 查看成员对话框
-    if (showMembersDialog) {
-        MembersDialog(
-            members = groupMembers,
-            contacts = contacts,
-            currentUserId = user.id,
-            isLoading = isLoadingContacts,
-            strings = strings,
-            isHost = group.hostId == user.id,
-            isCcConnectGroup = ccConnectInfo != null,
-            groupId = group.id,
-            onMemberClick = { member ->
-                // 检查是否是联系人
-                val isContact = contacts.any { it.contactId == member.id }
+            onAdd = { candidateId ->
+                val candidate = candidateItems.firstOrNull { it.id == candidateId }
+                    ?: return@ConversationRoomMembersDialog
+                scope.launch {
+                    isLoadingContacts = true
+                    try {
+                        val response = ApiClient.addMemberToGroup(group.id, candidate.id)
+                        addMemberResult = if (response.success) {
+                            val membersResponse = ApiClient.getGroupMembers(group.id)
+                            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                            strings.memberAdded.replace("{name}", candidate.displayName)
+                        } else {
+                            "❌ ${response.message}"
+                        }
+                    } finally {
+                        isLoadingContacts = false
+                    }
+                }
+            },
+            onMemberAction = { memberId ->
+                val member = groupMembers.firstOrNull { it.id == memberId }
+                    ?: return@ConversationRoomMembersDialog
+                val isContact = member.id in contactIds
                 if (isContact) {
-                    // 是联系人，跳转到与该联系人的对话
                     scope.launch {
                         showMembersDialog = false
-                        // 先断开当前WebSocket
                         try {
                             chatClient.disconnect()
                         } catch (e: dynamic) { /* ignore disconnect errors */ }
-                        
-                        // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
-                        if (response.success && response.group != null) {
-                            // 导航到新的对话
-                            appState.selectGroup(response.group!!)
+                        val privateGroup = response.group
+                        if (response.success && privateGroup != null) {
+                            appState.selectGroup(privateGroup)
                         } else {
-                            console.log("❌ 无法创建对话: ${response.message}")
+                            console.error("无法创建对话: ${response.message}")
                         }
                     }
                 } else {
-                    // 不是联系人，弹出邀请确认
                     selectedMemberForInvite = member
+                }
+            },
+            onSecondaryMemberAction = { memberId ->
+                val member = groupMembers.firstOrNull { it.id == memberId }
+                    ?: return@ConversationRoomMembersDialog
+                scope.launch {
+                    val isOperator = member.role == "OPERATOR"
+                    val updated = ApiClient.setCcConnectOperator(group.id, user.id, member.id, !isOperator)
+                    if (updated) {
+                        val membersResponse = ApiClient.getGroupMembers(group.id)
+                        groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                    }
                 }
             },
             onDismiss = { 
                 showMembersDialog = false
                 selectedMemberForInvite = null
                 inviteMemberResult = null
+                addMemberResult = null
+                memberSearchQuery = ""
+                memberSearchResults = emptyList()
+                memberSearchAttempted = false
             },
-            onMembersChanged = {
-                scope.launch {
-                    val membersResponse = ApiClient.getGroupMembers(group.id)
-                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                }
-            }
         )
     }
     
@@ -4306,161 +3113,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
             }
-        }
-    }
-    
-    // 隐藏的单文件上传输入
-    org.jetbrains.compose.web.dom.Input(org.jetbrains.compose.web.attributes.InputType.File) {
-        id("file-upload-input")
-        style {
-            display(DisplayStyle.None)
-        }
-        attr("accept", "*/*")
-        attr("multiple", "false")
-        onChange {
-            val sessionId = group.id
-            val userId = user.id
-            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-            
-            js("""
-                (function() {
-                    var input = document.getElementById('file-upload-input');
-                    if (input && input.files && input.files.length > 0) {
-                        var file = input.files[0];
-                        console.log('📁 选择文件: ' + file.name + ', 大小: ' + file.size);
-                        
-                        var formData = new FormData();
-                        formData.append('sessionId', sessionId);
-                        formData.append('userId', userId);
-                        formData.append('file', file);
-                        
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('POST', uploadUrl, true);
-                        
-                        xhr.onload = function() {
-                            if (xhr.status === 200) {
-                                var response = JSON.parse(xhr.responseText);
-                                console.log('✅ 上传成功: ' + response.fileName);
-                                window.alert('文件上传成功: ' + response.fileName);
-                            } else {
-                                console.log('❌ 上传失败: ' + xhr.statusText);
-                                window.alert('文件上传失败: ' + xhr.statusText);
-                            }
-                        };
-                        
-                        xhr.onerror = function() {
-                            console.log('❌ 上传错误');
-                            window.alert('文件上传失败，请检查网络连接');
-                        };
-                        
-                        xhr.send(formData);
-                        input.value = '';
-                    }
-                })();
-            """)
-        }
-    }
-    
-    // 隐藏的目录上传输入
-    org.jetbrains.compose.web.dom.Input(org.jetbrains.compose.web.attributes.InputType.File) {
-        id("folder-upload-input")
-        style {
-            display(DisplayStyle.None)
-        }
-        attr("webkitdirectory", "true")
-        attr("directory", "true")
-        attr("multiple", "true")
-        onChange {
-            val sessionId = group.id
-            val userId = user.id
-            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-            
-            js("""
-                (function() {
-                    var input = document.getElementById('folder-upload-input');
-                    if (!input || !input.files || input.files.length === 0) return;
-                    
-                    // 支持的文件扩展名
-                    var supportedExtensions = [
-                        // 文本文件
-                        '.txt', '.md', '.markdown', '.json', '.xml', '.html', '.htm', '.css',
-                        '.yaml', '.yml', '.csv', '.log', '.ini', '.conf', '.cfg',
-                        // 源代码
-                        '.js', '.ts', '.jsx', '.tsx', '.kt', '.kts', '.java', '.py', '.pyw',
-                        '.c', '.cpp', '.cc', '.h', '.hpp', '.cs', '.go', '.rs', '.rb',
-                        '.php', '.swift', '.scala', '.groovy', '.lua', '.r', '.m', '.mm',
-                        '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
-                        '.sql', '.graphql', '.proto',
-                        // 文档
-                        '.pdf'
-                    ];
-                    
-                    var files = input.files;
-                    var filesToUpload = [];
-                    
-                    // 筛选支持的文件
-                    for (var i = 0; i < files.length; i++) {
-                        var file = files[i];
-                        var ext = '.' + file.name.split('.').pop().toLowerCase();
-                        if (supportedExtensions.indexOf(ext) !== -1) {
-                            filesToUpload.push(file);
-                        }
-                    }
-                    
-                    if (filesToUpload.length === 0) {
-                        window.alert('所选目录中没有支持的文件类型');
-                        input.value = '';
-                        return;
-                    }
-                    
-                    console.log('📁 准备上传 ' + filesToUpload.length + ' 个文件（共 ' + files.length + ' 个文件）');
-                    window.alert('准备上传 ' + filesToUpload.length + ' 个文件...');
-                    
-                    var uploaded = 0;
-                    var failed = 0;
-                    
-                    // 逐一上传文件
-                    function uploadNext(index) {
-                        if (index >= filesToUpload.length) {
-                            window.alert('上传完成！成功: ' + uploaded + ', 失败: ' + failed);
-                            input.value = '';
-                            return;
-                        }
-                        
-                        var file = filesToUpload[index];
-                        console.log('📤 上传 (' + (index + 1) + '/' + filesToUpload.length + '): ' + file.name);
-                        
-                        var formData = new FormData();
-                        formData.append('sessionId', sessionId);
-                        formData.append('userId', userId);
-                        formData.append('file', file);
-                        
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('POST', uploadUrl, true);
-                        
-                        xhr.onload = function() {
-                            if (xhr.status === 200) {
-                                uploaded++;
-                                console.log('✅ (' + uploaded + ') ' + file.name);
-                            } else {
-                                failed++;
-                                console.log('❌ ' + file.name + ': ' + xhr.statusText);
-                            }
-                            uploadNext(index + 1);
-                        };
-                        
-                        xhr.onerror = function() {
-                            failed++;
-                            console.log('❌ 网络错误: ' + file.name);
-                            uploadNext(index + 1);
-                        };
-                        
-                        xhr.send(formData);
-                    }
-                    
-                    uploadNext(0);
-                })();
-            """)
         }
     }
     
@@ -7422,509 +6074,6 @@ token  = "${tokenInfo.token ?: ""}"
                     }
                     onClick { onDismiss() }
                 }) { Text("Done") }
-            }
-        }
-    }
-}
-
-/**
- * 添加成员对话框
- */
-@Composable
-fun AddMemberDialog(
-    contacts: List<Contact>,
-    groupMembers: List<GroupMember>,
-    isLoading: Boolean,
-    result: String?,
-    strings: com.silk.shared.i18n.Strings,
-    onAddMember: (Contact) -> Unit,
-    onDismiss: () -> Unit
-) {
-    // 过滤出不在群组中的联系人
-    val memberIds = groupMembers.map { it.id }.toSet()
-    val availableContacts = contacts.filter { it.contactId !in memberIds }
-    
-    // 对话框遮罩
-    Div({
-        style {
-            position(Position.Fixed)
-            top(0.px)
-            left(0.px)
-            width(100.percent)
-            height(100.vh)
-            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
-            display(DisplayStyle.Flex)
-            justifyContent(JustifyContent.Center)
-            alignItems(AlignItems.Center)
-            property("z-index", "1000")
-            property("backdrop-filter", "blur(4px)")
-        }
-        onClick { onDismiss() }
-    }) {
-        Div({
-            style {
-                backgroundColor(Color(SilkColors.surfaceElevated))
-                borderRadius(16.px)
-                padding(28.px)
-                width(480.px)
-                maxWidth(90.vw)
-                maxHeight(70.vh)
-                property("overflow-y", "auto")
-                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.15)")
-            }
-            onClick { it.stopPropagation() }
-        }) {
-            // 标题
-            H3({
-                style {
-                    margin(0.px, 0.px, 20.px, 0.px)
-                    color(Color(SilkColors.textPrimary))
-                    fontSize(20.px)
-                    property("font-weight", "600")
-                }
-            }) {
-                Text(strings.addMembersToGroup)
-            }
-            
-            // 结果提示
-            result?.let {
-                Div({
-                    style {
-                        backgroundColor(
-                            if (it.startsWith("✅")) Color("#F0F7EE") else Color("#FFF5F5")
-                        )
-                        color(if (it.startsWith("✅")) Color(SilkColors.success) else Color(SilkColors.error))
-                        padding(14.px)
-                        borderRadius(8.px)
-                        marginBottom(16.px)
-                        fontSize(13.px)
-                        property("border", "1px solid ${if (it.startsWith("✅")) SilkColors.success else SilkColors.error}")
-                    }
-                }) {
-                    Text(it)
-                }
-            }
-            
-            if (isLoading) {
-                Div({
-                    style {
-                        property("text-align", "center")
-                        padding(40.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text(strings.loading)
-                }
-            } else if (availableContacts.isEmpty()) {
-                Div({
-                    style {
-                        property("text-align", "center")
-                        padding(40.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text(strings.noContactsToAdd)
-                }
-            } else {
-                // 联系人列表
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        flexDirection(FlexDirection.Column)
-                        property("gap", "12px")
-                        maxHeight(400.px)
-                        property("overflow-y", "auto")
-                    }
-                }) {
-                    availableContacts.forEach { contact ->
-                        Div({
-                            style {
-                                display(DisplayStyle.Flex)
-                                justifyContent(JustifyContent.SpaceBetween)
-                                alignItems(AlignItems.Center)
-                                padding(16.px, 20.px)
-                                backgroundColor(Color(SilkColors.surface))
-                                borderRadius(10.px)
-                                property("box-shadow", "0 2px 4px rgba(0,0,0,0.05)")
-                                property("border", "1px solid ${SilkColors.border}")
-                            }
-                        }) {
-                            // 联系人信息
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    flexDirection(FlexDirection.Column)
-                                    property("gap", "4px")
-                                }
-                            }) {
-                                Div({
-                                    style {
-                                        fontSize(15.px)
-                                        color(Color(SilkColors.textPrimary))
-                                        property("font-weight", "500")
-                                    }
-                                }) {
-                                    Text(contact.contactName)
-                                }
-                                Div({
-                                    style {
-                                        fontSize(13.px)
-                                        color(Color(SilkColors.textSecondary))
-                                    }
-                                }) {
-                                    Text(contact.contactPhone)
-                                }
-                            }
-                            
-                            // 添加按钮
-                            Button({
-                                style {
-                                    padding(10.px, 20.px)
-                                    property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
-                                    color(Color.white)
-                                    border { width(0.px) }
-                                    borderRadius(8.px)
-                                    fontSize(14.px)
-                                    property("cursor", "pointer")
-                                    property("font-weight", "500")
-                                    property("transition", "all 0.2s ease")
-                                }
-                                onClick { onAddMember(contact) }
-                            }) {
-                                Text("添加")
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 关闭按钮
-            Div({
-                style {
-                    textAlign("center")
-                    marginTop(24.px)
-                }
-            }) {
-                Button({
-                    style {
-                        padding(12.px, 28.px)
-                        backgroundColor(Color(SilkColors.secondary))
-                        color(Color(SilkColors.textPrimary))
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        property("font-weight", "500")
-                        property("transition", "all 0.2s ease")
-                    }
-                    onClick { onDismiss() }
-                }) {
-                    Text(strings.closeButton)
-                }
-            }
-        }
-    }
-}
-
-/**
- * 群组成员列表对话框
- */
-@Suppress("CyclomaticComplexMethod")
-@Composable
-fun MembersDialog(
-    members: List<GroupMember>,
-    contacts: List<Contact>,
-    currentUserId: String,
-    isLoading: Boolean,
-    strings: com.silk.shared.i18n.Strings,
-    isHost: Boolean = false,
-    isCcConnectGroup: Boolean = false,
-    groupId: String = "",
-    onMemberClick: (GroupMember) -> Unit,
-    onDismiss: () -> Unit,
-    onMembersChanged: () -> Unit = {},
-) {
-    val contactIds = contacts.map { it.contactId }.toSet()
-    val scope = rememberCoroutineScope()
-    
-    Div({
-        style {
-            position(Position.Fixed)
-            top(0.px)
-            left(0.px)
-            width(100.percent)
-            height(100.vh)
-            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
-            display(DisplayStyle.Flex)
-            justifyContent(JustifyContent.Center)
-            alignItems(AlignItems.Center)
-            property("z-index", "1000")
-            property("backdrop-filter", "blur(4px)")
-        }
-        onClick { onDismiss() }
-    }) {
-        Div({
-            style {
-                backgroundColor(Color(SilkColors.surfaceElevated))
-                borderRadius(16.px)
-                padding(28.px)
-                width(420.px)
-                maxWidth(90.vw)
-                maxHeight(70.vh)
-                property("overflow-y", "auto")
-                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.15)")
-            }
-            onClick { it.stopPropagation() }
-        }) {
-            // 标题
-            H3({
-                style {
-                    margin(0.px, 0.px, 20.px, 0.px)
-                    color(Color(SilkColors.textPrimary))
-                    fontSize(20.px)
-                    property("font-weight", "600")
-                    property("text-align", "center")
-                }
-            }) {
-                Text(strings.groupMembersTitleWithCount.replace("{count}", members.size.toString()))
-            }
-            
-            if (isLoading) {
-                Div({
-                    style {
-                        property("text-align", "center")
-                        padding(20.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text(strings.loading)
-                }
-            } else if (members.isEmpty()) {
-                Div({
-                    style {
-                        property("text-align", "center")
-                        padding(20.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text(strings.noMembers)
-                }
-            } else {
-                // 成员列表
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        flexDirection(FlexDirection.Column)
-                        property("gap", "10px")
-                    }
-                }) {
-                    members.forEach { member ->
-                        val isCurrentUser = member.id == currentUserId
-                        val isContact = member.id in contactIds
-                        val isSilkAI = isAgentUserId(member.id)
-                        
-                        Div({
-                            style {
-                                display(DisplayStyle.Flex)
-                                justifyContent(JustifyContent.SpaceBetween)
-                                alignItems(AlignItems.Center)
-                                padding(12.px, 16.px)
-                                backgroundColor(Color(SilkColors.surface))
-                                borderRadius(10.px)
-                                property("box-shadow", "0 2px 4px rgba(0,0,0,0.05)")
-                                if (!isCurrentUser && !isSilkAI) {
-                                    property("cursor", "pointer")
-                                    property("transition", "all 0.2s ease")
-                                }
-                            }
-                            if (!isCurrentUser && !isSilkAI) {
-                                onClick { onMemberClick(member) }
-                            }
-                        }) {
-                            // 成员信息
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "12px")
-                                }
-                            }) {
-                                // 头像/图标
-                                Div({
-                                    style {
-                                        width(40.px)
-                                        height(40.px)
-                                        borderRadius(20.px)
-                                        backgroundColor(
-                                            when {
-                                                isSilkAI -> Color(SilkColors.info)
-                                                isCurrentUser -> Color(SilkColors.primary)
-                                                isContact -> Color(SilkColors.success)
-                                                else -> Color(SilkColors.textSecondary)
-                                            }
-                                        )
-                                        display(DisplayStyle.Flex)
-                                        justifyContent(JustifyContent.Center)
-                                        alignItems(AlignItems.Center)
-                                        color(Color.white)
-                                        fontSize(18.px)
-                                    }
-                                }) {
-                                    Text(
-                                        when {
-                                            isSilkAI -> "🤖"
-                                            isCurrentUser -> "👤"
-                                            isContact -> "✓"
-                                            else -> member.fullName.firstOrNull()?.toString() ?: "?"
-                                        }
-                                    )
-                                }
-                                
-                                // 名字和状态
-                                Div {
-                                    Div({
-                                        style {
-                                            fontSize(15.px)
-                                            color(Color(SilkColors.textPrimary))
-                                            property("font-weight", "500")
-                                        }
-                                    }) {
-                                        Text(member.fullName)
-                                        if (isCurrentUser) {
-                                            Span({
-                                                style {
-                                                    fontSize(12.px)
-                                                    color(Color(SilkColors.textSecondary))
-                                                    marginLeft(8.px)
-                                                }
-                                            }) {
-                                                Text(strings.me)
-                                            }
-                                        }
-                                        if (isCcConnectGroup && !isSilkAI) {
-                                            val roleLabel = when (member.role) {
-                                                "HOST" -> "Host"
-                                                "OPERATOR" -> "Operator"
-                                                else -> null
-                                            }
-                                            if (roleLabel != null) {
-                                                Span({
-                                                    style {
-                                                        fontSize(10.px)
-                                                        marginLeft(8.px)
-                                                        padding(2.px, 6.px)
-                                                        borderRadius(4.px)
-                                                        property("font-weight", "500")
-                                                        if (member.role == "HOST") {
-                                                            backgroundColor(Color("#FFF3E0"))
-                                                            color(Color("#E65100"))
-                                                        } else {
-                                                            backgroundColor(Color("#E3F2FD"))
-                                                            color(Color("#1565C0"))
-                                                        }
-                                                    }
-                                                }) {
-                                                    Text(roleLabel)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Div({
-                                        style {
-                                            fontSize(12.px)
-                                            color(Color(SilkColors.textSecondary))
-                                            marginTop(2.px)
-                                        }
-                                    }) {
-                                        Text(
-                                            when {
-                                                isSilkAI -> strings.aiAssistant
-                                                isCurrentUser -> strings.currentUser
-                                                isContact -> strings.contactClickToChat
-                                                else -> strings.clickToAddContact
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            // 右侧操作提示
-                            if (!isSilkAI) {
-                                Div({
-                                    style {
-                                        display(DisplayStyle.Flex)
-                                        alignItems(AlignItems.Center)
-                                        property("gap", "8px")
-                                    }
-                                }) {
-                                    val canManageOperator = isCcConnectGroup && isHost && !isCurrentUser && member.role != "HOST"
-                                    if (canManageOperator) {
-                                        val isOperator = member.role == "OPERATOR"
-                                        Div({
-                                            style {
-                                                fontSize(11.px)
-                                                padding(4.px, 10.px)
-                                                borderRadius(6.px)
-                                                property("cursor", "pointer")
-                                                property("transition", "all 0.2s ease")
-                                                property("user-select", "none")
-                                                if (isOperator) {
-                                                    backgroundColor(Color("#E3F2FD"))
-                                                    color(Color("#1565C0"))
-                                                    property("border", "1px solid #90CAF9")
-                                                } else {
-                                                    backgroundColor(Color(SilkColors.surface))
-                                                    color(Color(SilkColors.textSecondary))
-                                                    property("border", "1px solid ${SilkColors.border}")
-                                                }
-                                            }
-                                            onClick {
-                                                it.stopPropagation()
-                                                scope.launch {
-                                                    val ok = ApiClient.setCcConnectOperator(
-                                                        groupId, currentUserId, member.id, !isOperator
-                                                    )
-                                                    if (ok) onMembersChanged()
-                                                }
-                                            }
-                                        }) {
-                                            Text(if (isOperator) "Revoke @cc" else "Grant @cc")
-                                        }
-                                    }
-                                    if (!isCurrentUser) {
-                                        Div({
-                                            style {
-                                                fontSize(20.px)
-                                                color(Color(SilkColors.textLight))
-                                            }
-                                        }) {
-                                            Text(if (isContact) "💬" else "➕")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 关闭按钮
-            Button({
-                style {
-                    width(100.percent)
-                    marginTop(20.px)
-                    backgroundColor(Color(SilkColors.textSecondary))
-                    color(Color.white)
-                    border { width(0.px) }
-                    borderRadius(10.px)
-                    padding(12.px)
-                    property("cursor", "pointer")
-                    fontSize(14.px)
-                    property("font-weight", "500")
-                }
-                onClick { onDismiss() }
-            }) {
-                Text("关闭")
             }
         }
     }

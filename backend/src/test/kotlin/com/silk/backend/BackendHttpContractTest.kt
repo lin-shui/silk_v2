@@ -301,6 +301,16 @@ class BackendHttpContractTest {
                 }
                 assertEquals(HttpStatusCode.Created, createdResponse.status)
                 val created = createdResponse.decode<Workflow>()
+                assertEquals("Workflow ACL", GroupRepository.findGroupById(created.groupId)?.name)
+
+                val duplicateResponse = client.post("/api/workflows") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody(createBody)
+                }
+                assertEquals(HttpStatusCode.Created, duplicateResponse.status)
+                val duplicate = duplicateResponse.decode<Workflow>()
+                assertEquals("Workflow ACL(1)", GroupRepository.findGroupById(duplicate.groupId)?.name)
                 assertTrue(GroupRepository.addUserToGroup(created.groupId, memberId))
 
                 val manager = WorkflowManager(workspace.workflowDir.absolutePath)

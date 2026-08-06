@@ -172,42 +172,14 @@ fun ContactsScene(appState: WebAppState) {
                 }
             }
             
-            // 右侧：用户信息和退出
-            Div({
+            Span({
                 style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    gap(16.px)
+                    color(Color.white)
+                    fontSize(14.px)
+                    property("opacity", "0.9")
                 }
             }) {
-                Span({
-                    style {
-                        color(Color.white)
-                        fontSize(14.px)
-                        property("opacity", "0.9")
-                    }
-                }) {
-                    Text(appState.currentUser?.fullName ?: "")
-                }
-                
-                Button({
-                    style {
-                        backgroundColor(Color.transparent)
-                        color(Color.white)
-                        border {
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color.white)
-                        }
-                        padding(6.px, 12.px)
-                        borderRadius(6.px)
-                        property("cursor", "pointer")
-                        fontSize(12.px)
-                    }
-                    onClick { appState.logout() }
-                }) {
-                    Text(strings.logoutButton)
-                }
+                Text(appState.currentUser?.fullName ?: "")
             }
         }
         

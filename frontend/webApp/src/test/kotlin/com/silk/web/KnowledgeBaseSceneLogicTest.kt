@@ -6,6 +6,7 @@ import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageReference
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.SILK_AGENT_USER_ID
+import com.silk.shared.models.RoomKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -17,7 +18,8 @@ class KnowledgeBaseSceneLogicTest {
     fun spaceOptionsKeepPersonalFirstAndFilterWorkflowGroups() {
         val options = buildKnowledgeSpaceOptions(
             listOf(
-                Group(id = "wf-1", name = "wf_hidden", invitationCode = "", hostId = "u1"),
+                Group(id = "wf-1", name = "Project Alpha", invitationCode = "", hostId = "u1",
+                    roomKind = RoomKind.WORKFLOW),
                 Group(id = "g-2", name = "Beta Team", invitationCode = "", hostId = "u1"),
                 Group(id = "g-1", name = "Alpha Team", invitationCode = "", hostId = "u1"),
             )

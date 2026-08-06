@@ -52,7 +52,8 @@ internal data class KnowledgeCaptureContext(
 )
 
 internal suspend fun loadKnowledgeCaptureContext(userId: String): KnowledgeCaptureContext {
-    val groups = (ApiClient.getUserGroups(userId).groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+    val groups = (ApiClient.getUserGroups(userId).groups ?: emptyList())
+        .filterNot { it.roomKind == com.silk.shared.models.RoomKind.WORKFLOW }
     val topics = ApiClient.getKBTopics(userId)
     return KnowledgeCaptureContext(groups = groups, topics = topics)
 }

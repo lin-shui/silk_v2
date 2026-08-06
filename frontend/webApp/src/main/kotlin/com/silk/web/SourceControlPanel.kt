@@ -58,6 +58,7 @@ fun SourceControlPanel(workspaceId: String, refreshSignal: Int, widthPx: Int) {
     LaunchedEffect(workspaceId, refreshSignal) { reload() }
 
     Div({
+        attr("class", "silk-workflow-source-panel")
         style {
             width(widthPx.px)
             property("flex-shrink", "0")

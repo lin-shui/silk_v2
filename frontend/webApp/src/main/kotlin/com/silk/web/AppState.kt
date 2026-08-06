@@ -19,20 +19,14 @@ enum class Scene {
 }
 
 enum class NavTab {
-    SILK,
-    WORKFLOW,
+    CONVERSATIONS,
     KNOWLEDGE_BASE,
     AUDIO_DUPLEX
 }
 
-data class ChatNavigationTarget(
-    val groupId: String,
-    val messageId: String? = null,
-    val requestId: Long,
-)
-
-data class WorkflowNavigationTarget(
-    val workflowId: String,
+data class RoomNavigationTarget(
+    val roomId: String? = null,
+    val legacyWorkflowId: String? = null,
     val messageId: String? = null,
     val requestId: Long,
 )
@@ -56,14 +50,12 @@ class WebAppState {
     var selectedGroup by mutableStateOf<Group?>(null)
         private set
 
-    var currentTab by mutableStateOf(NavTab.SILK)
+    var currentTab by mutableStateOf(NavTab.CONVERSATIONS)
 
     // KB 内联引用：点击聊天里的 [[kb:...]] 链接 → 跳转到知识库对应条目
     var knowledgeBaseNavigationTarget by mutableStateOf<KnowledgeBaseNavigationTarget?>(null)
         private set
-    var chatNavigationTarget by mutableStateOf<ChatNavigationTarget?>(null)
-        private set
-    var workflowNavigationTarget by mutableStateOf<WorkflowNavigationTarget?>(null)
+    var roomNavigationTarget by mutableStateOf<RoomNavigationTarget?>(null)
         private set
 
     // 标记用户是否明确请求了退出登录
@@ -126,6 +118,11 @@ class WebAppState {
         selectedGroup = group
         navigateTo(Scene.CHAT_ROOM)
     }
+
+    fun clearRoomSelection() {
+        selectedGroup = null
+        currentScene = Scene.GROUP_LIST
+    }
     
     fun navigateTo(scene: Scene) {
         if (currentScene != scene) {
@@ -134,10 +131,25 @@ class WebAppState {
         currentScene = scene
     }
 
-    /** Switch top-level tab; if the Settings overlay is open, dismiss it first. */
+    /** Switch top-level tab after dismissing any utility page layered over the main content. */
     fun selectTab(tab: NavTab) {
-        if (currentScene == Scene.SETTINGS) navigateBack()
+        closeUtilityScenes()
         currentTab = tab
+    }
+
+    fun openContacts() {
+        if (currentScene == Scene.CONTACTS && currentTab == NavTab.CONVERSATIONS) return
+        selectTab(NavTab.CONVERSATIONS)
+        navigateTo(Scene.CONTACTS)
+    }
+
+    private fun closeUtilityScenes() {
+        while (currentScene == Scene.SETTINGS || currentScene == Scene.CONTACTS) {
+            if (!navigateBack()) {
+                currentScene = if (selectedGroup != null) Scene.CHAT_ROOM else Scene.GROUP_LIST
+                break
+            }
+        }
     }
 
     fun openKnowledgeBaseEntry(entryId: String, topicId: String? = null) {
@@ -157,35 +169,28 @@ class WebAppState {
     }
 
     fun openChatGroup(group: Group, messageId: String? = null) {
-        chatNavigationTarget = ChatNavigationTarget(
-            groupId = group.id,
+        roomNavigationTarget = RoomNavigationTarget(
+            roomId = group.id,
             messageId = messageId,
             requestId = kotlin.js.Date.now().toLong(),
         )
-        selectTab(NavTab.SILK)
+        selectTab(NavTab.CONVERSATIONS)
         selectGroup(group)
     }
 
     fun openWorkflow(workflowId: String, messageId: String? = null) {
-        workflowNavigationTarget = WorkflowNavigationTarget(
-            workflowId = workflowId,
+        roomNavigationTarget = RoomNavigationTarget(
+            legacyWorkflowId = workflowId,
             messageId = messageId,
             requestId = kotlin.js.Date.now().toLong(),
         )
-        selectTab(NavTab.WORKFLOW)
+        selectTab(NavTab.CONVERSATIONS)
     }
 
-    fun consumeChatNavigationTarget(requestId: Long) {
-        val current = chatNavigationTarget ?: return
+    fun consumeRoomNavigationTarget(requestId: Long) {
+        val current = roomNavigationTarget ?: return
         if (current.requestId == requestId) {
-            chatNavigationTarget = null
-        }
-    }
-
-    fun consumeWorkflowNavigationTarget(requestId: Long) {
-        val current = workflowNavigationTarget ?: return
-        if (current.requestId == requestId) {
-            workflowNavigationTarget = null
+            roomNavigationTarget = null
         }
     }
     
@@ -240,8 +245,7 @@ class WebAppState {
         currentUser = null
         selectedGroup = null
         knowledgeBaseNavigationTarget = null
-        chatNavigationTarget = null
-        workflowNavigationTarget = null
+        roomNavigationTarget = null
         sceneHistory.clear()
         currentScene = Scene.LOGIN
     }

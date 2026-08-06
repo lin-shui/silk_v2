@@ -209,7 +209,7 @@ private data class KnowledgeSpaceOption(
 
 private fun buildKnowledgeSpaceOptions(groups: List<Group>): List<KnowledgeSpaceOption> {
     val teamSpaces = groups
-        .filterNot { it.name.startsWith("wf_") }
+        .filterNot { it.roomKind == com.silk.shared.models.RoomKind.WORKFLOW }
         .sortedBy { it.name.lowercase() }
         .map { group ->
             KnowledgeSpaceOption(
@@ -547,7 +547,8 @@ fun KnowledgeBaseScreen(appState: AppState) {
 
     LaunchedEffect(user.id) {
         isLoading = true
-        groups = ApiClient.getUserGroups(user.id).groups.orEmpty().filterNot { it.name.startsWith("wf_") }
+        groups = ApiClient.getUserGroups(user.id).groups.orEmpty()
+            .filterNot { it.roomKind == com.silk.shared.models.RoomKind.WORKFLOW }
         topics = ApiClient.getKBTopics(user.id)
         isLoading = false
     }

@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
+import com.silk.shared.models.RoomKind
 import java.io.File
 
 /**
@@ -41,7 +42,8 @@ data class Group(
     val invitationCode: String,
     val hostId: String,
     val hostName: String = "",
-    val createdAt: String = ""
+    val createdAt: String = "",
+    val roomKind: RoomKind = RoomKind.CHAT,
 )
 
 /**
@@ -210,4 +212,3 @@ class AppState {
         }
     }
 }
-

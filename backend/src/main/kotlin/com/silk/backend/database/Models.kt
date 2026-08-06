@@ -1,5 +1,6 @@
 package com.silk.backend.database
 
+import com.silk.shared.models.RoomKind
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.LocalDateTime
@@ -26,7 +27,10 @@ data class Group(
     val invitationCode: String,
     val hostId: String,
     val hostName: String = "", // 群主名称（用于显示）
-    val createdAt: String = LocalDateTime.now().toString()
+    val createdAt: String = LocalDateTime.now().toString(),
+    val roomKind: RoomKind = RoomKind.CHAT,
+    val updatedAt: Long = 0L,
+    val lastMessageAt: Long = 0L,
 )
 
 /**

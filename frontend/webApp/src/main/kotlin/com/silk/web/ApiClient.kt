@@ -2,10 +2,16 @@ package com.silk.web
 
 import com.silk.shared.models.CcSettingsResponse
 import com.silk.shared.models.CcStateResponse
+import com.silk.shared.models.CreateRoomRequest
+import com.silk.shared.models.CreateRoomResponse
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.GitChangesResponse
 import com.silk.shared.models.GitFileDiffResponse
 import com.silk.shared.models.Language
+import com.silk.shared.models.RenameRoomRequest
+import com.silk.shared.models.RoomActionResponse
+import com.silk.shared.models.RoomKind
+import com.silk.shared.models.RoomSummaryDto
 import com.silk.shared.models.TrustedDirCheckResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
 import com.silk.shared.models.UserSettingsResponse
@@ -42,7 +48,8 @@ data class Group(
     val invitationCode: String,
     val hostId: String,
     val hostName: String = "",
-    val createdAt: String = ""
+    val createdAt: String = "",
+    val roomKind: RoomKind = RoomKind.CHAT,
 )
 
 @Serializable
@@ -684,6 +691,33 @@ object ApiClient {
             GroupResponse(false, "网络错误")
         }
     }
+
+    suspend fun getVisibleRooms(): List<RoomSummaryDto> {
+        val response = get("/api/rooms/visible")
+        return jsonParser.decodeFromString(response)
+    }
+
+    suspend fun createRoom(request: CreateRoomRequest): CreateRoomResponse? {
+        return try {
+            val body = jsonParser.encodeToString(CreateRoomRequest.serializer(), request)
+            val response = post("/api/rooms", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.error("创建会话失败:", e)
+            null
+        }
+    }
+
+    suspend fun renameRoom(roomId: String, name: String): RoomActionResponse {
+        val body = jsonParser.encodeToString(RenameRoomRequest.serializer(), RenameRoomRequest(name))
+        return requestRoomAction("PUT", "/api/rooms/$roomId", body)
+    }
+
+    suspend fun leaveRoom(roomId: String): RoomActionResponse =
+        requestRoomAction("POST", "/api/rooms/$roomId/leave", "{}")
+
+    suspend fun deleteRoom(roomId: String): RoomActionResponse =
+        requestRoomAction("DELETE", "/api/rooms/$roomId", "{}")
     
     /**
      * 获取用户所有群组的未读消息数
@@ -1235,6 +1269,23 @@ object ApiClient {
         
         val response = fetchWithRetry(endpoint, init)
         return response.text().await()
+    }
+
+    private suspend fun requestRoomAction(
+        method: String,
+        endpoint: String,
+        jsonBody: String,
+    ): RoomActionResponse = try {
+        val response = fetchWithRetry(
+            endpoint,
+            RequestInit(method = method, headers = authHeaders(), body = jsonBody),
+        )
+        val responseBody = response.text().await()
+        runCatching { jsonParser.decodeFromString<RoomActionResponse>(responseBody) }
+            .getOrElse { RoomActionResponse(false, "操作失败（HTTP ${response.status}）") }
+    } catch (e: Exception) {
+        console.error("群组操作失败:", e)
+        RoomActionResponse(false, "网络错误，请稍后重试")
     }
 
     private suspend fun get(endpoint: String): String {

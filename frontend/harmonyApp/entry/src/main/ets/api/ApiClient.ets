@@ -4,7 +4,7 @@
  */
 import http from '@ohos.net.http';
 import { User, LoginResponse, RegisterResponse } from '../models/User';
-import { Group, GroupMember, CreateGroupResponse } from '../models/Group';
+import { Group, GroupMember, CreateGroupResponse, RoomKind } from '../models/Group';
 import { UserSettings, UserSettingsResponse } from '../models/UserSettings';
 import { UserTodoItem } from '../models/UserTodoItem';
 import { API_BASE_URL, API_TIMEOUT } from '../common/Constants';
@@ -108,6 +108,7 @@ interface BackendGroup {
   hostName?: string;
   lastMessage?: string;
   lastMessageTime?: number;
+  roomKind?: string;
 }
 
 interface BackendCreateGroupRequest {
@@ -662,7 +663,10 @@ export class ApiClient {
       createdAt: now,
       updatedAt: now,
       lastMessage: group.lastMessage,
-      lastMessageTime: group.lastMessageTime
+      lastMessageTime: group.lastMessageTime,
+      roomKind: group.roomKind === RoomKind.WORKFLOW || group.roomKind === RoomKind.SILK_PRIVATE
+        ? group.roomKind as RoomKind
+        : RoomKind.CHAT
     };
     if (group.invitationCode !== undefined) {
       normalized.invitationCode = group.invitationCode;

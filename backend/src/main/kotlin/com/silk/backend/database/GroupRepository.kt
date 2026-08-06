@@ -3,7 +3,9 @@ package com.silk.backend.database
 import com.silk.backend.ChatHistoryBackupManager
 import com.silk.backend.search.SessionInfo
 import com.silk.backend.search.WeaviateClient
+import com.silk.shared.models.RoomKind
 import kotlinx.coroutines.runBlocking
+import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.deleteWhere
@@ -14,6 +16,8 @@ import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.time.LocalDateTime
+import java.time.ZoneId
 import java.util.UUID
 import kotlin.random.Random
 
@@ -67,13 +71,34 @@ object GroupRepository {
         return File(configuredRoot, "group_$groupId")
     }
 
+    private fun toGroup(row: ResultRow): Group {
+        val hostUser = UserRepository.findUserById(row[Groups.hostId])
+        val roomKind = runCatching { RoomKind.valueOf(row[Groups.roomKind]) }
+            .getOrDefault(RoomKind.CHAT)
+        return Group(
+            id = row[Groups.id],
+            name = row[Groups.name],
+            invitationCode = row[Groups.invitationCode],
+            hostId = row[Groups.hostId],
+            hostName = hostUser?.fullName ?: "",
+            createdAt = row[Groups.createdAt].toString(),
+            roomKind = roomKind,
+            updatedAt = row[Groups.updatedAt].atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+            lastMessageAt = row[Groups.lastMessageAt]
+                ?.atZone(ZoneId.systemDefault())
+                ?.toInstant()
+                ?.toEpochMilli()
+                ?: 0L,
+        )
+    }
+
     /**
      * 创建新群组
      * @param name 群组名称
      * @param hostId 群主用户ID
      * @return 创建的群组对象
      */
-    fun createGroup(name: String, hostId: String): Group? {
+    fun createGroup(name: String, hostId: String, roomKind: RoomKind = RoomKind.CHAT): Group? {
         return try {
             transaction {
                 // 检查群组名是否已存在
@@ -87,13 +112,17 @@ object GroupRepository {
                 
                 val groupId = UUID.randomUUID().toString()
                 val invitationCode = generateInvitationCode()
+                val now = LocalDateTime.now()
                 
                 // 创建群组
                 Groups.insert {
                     it[id] = groupId
                     it[Groups.name] = name
+                    it[Groups.roomKind] = roomKind.name
                     it[Groups.invitationCode] = invitationCode
                     it[Groups.hostId] = hostId
+                    it[Groups.createdAt] = now
+                    it[Groups.updatedAt] = now
                 }
                 
                 // 将群主添加为成员
@@ -125,17 +154,7 @@ object GroupRepository {
     fun findGroupById(groupId: String): Group? {
         return transaction {
             Groups.select { Groups.id eq groupId }
-                .mapNotNull { row ->
-                    val hostUser = UserRepository.findUserById(row[Groups.hostId])
-                    Group(
-                        id = row[Groups.id],
-                        name = row[Groups.name],
-                        invitationCode = row[Groups.invitationCode],
-                        hostId = row[Groups.hostId],
-                        hostName = hostUser?.fullName ?: "",
-                        createdAt = row[Groups.createdAt].toString()
-                    )
-                }
+                .map(::toGroup)
                 .singleOrNull()
         }
     }
@@ -146,17 +165,7 @@ object GroupRepository {
     fun findGroupByInvitationCode(invitationCode: String): Group? {
         return transaction {
             Groups.select { Groups.invitationCode eq invitationCode }
-                .mapNotNull { row ->
-                    val hostUser = UserRepository.findUserById(row[Groups.hostId])
-                    Group(
-                        id = row[Groups.id],
-                        name = row[Groups.name],
-                        invitationCode = row[Groups.invitationCode],
-                        hostId = row[Groups.hostId],
-                        hostName = hostUser?.fullName ?: "",
-                        createdAt = row[Groups.createdAt].toString()
-                    )
-                }
+                .map(::toGroup)
                 .singleOrNull()
         }
     }
@@ -179,17 +188,7 @@ object GroupRepository {
             // 根据群组ID列表查询群组详情
             Groups
                 .select { Groups.id inList groupIds }
-                .map { row ->
-                    val hostUser = UserRepository.findUserById(row[Groups.hostId])
-                    Group(
-                        id = row[Groups.id],
-                        name = row[Groups.name],
-                        invitationCode = row[Groups.invitationCode],
-                        hostId = row[Groups.hostId],
-                        hostName = hostUser?.fullName ?: "",
-                        createdAt = row[Groups.createdAt].toString()
-                    )
-                }
+                .map(::toGroup)
         }
     }
     
@@ -282,6 +281,46 @@ object GroupRepository {
             Groups.select { Groups.name eq name }.count() > 0
         }
     }
+
+    fun updateGroupName(groupId: String, name: String): Boolean = try {
+        transaction {
+            Groups.update({ Groups.id eq groupId }) {
+                it[Groups.name] = name
+                it[Groups.updatedAt] = LocalDateTime.now()
+            }
+        } > 0
+    } catch (e: Exception) {
+        logger.error("❌ 更新群组名称失败: groupId={}, err={}", groupId, e.message)
+        false
+    }
+
+    fun touchRoom(groupId: String, timestamp: Long = System.currentTimeMillis()): Boolean = try {
+        transaction {
+            val current = Groups.select { Groups.id eq groupId }.singleOrNull() ?: return@transaction 0
+            val messageTime = LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(timestamp),
+                ZoneId.systemDefault(),
+            )
+            Groups.update({ Groups.id eq groupId }) {
+                it[Groups.updatedAt] = maxOf(current[Groups.updatedAt], messageTime)
+                it[Groups.lastMessageAt] = maxOf(current[Groups.lastMessageAt] ?: messageTime, messageTime)
+            }
+        } > 0
+    } catch (e: Exception) {
+        logger.warn("更新 Room 活动时间失败: groupId={}, err={}", groupId, e.message)
+        false
+    }
+
+    fun updateRoomKind(groupId: String, roomKind: RoomKind): Boolean = try {
+        transaction {
+            Groups.update({ Groups.id eq groupId }) {
+                it[Groups.roomKind] = roomKind.name
+            }
+        } > 0
+    } catch (e: Exception) {
+        logger.error("❌ 更新 RoomKind 失败: groupId={}, err={}", groupId, e.message)
+        false
+    }
     
     /**
      * 生成6位邀请码
@@ -332,7 +371,7 @@ object GroupRepository {
                 val memberCount = GroupMembers
                     .select { GroupMembers.groupId eq groupId }
                     .count()
-                val group = findGroupById(groupId)
+                val group = findGroupById(groupId)?.takeIf { it.roomKind == RoomKind.CHAT }
                 if (group != null) Triple(group, memberCount, group.createdAt) else null
             }
             
@@ -364,13 +403,17 @@ object GroupRepository {
             transaction {
                 val groupId = UUID.randomUUID().toString()
                 val invitationCode = generateInvitationCode()
+                val now = LocalDateTime.now()
                 
                 // 创建群组（user1 作为 host）
                 Groups.insert {
                     it[id] = groupId
                     it[name] = groupName
+                    it[roomKind] = RoomKind.CHAT.name
                     it[Groups.invitationCode] = invitationCode
                     it[hostId] = user1Id
+                    it[createdAt] = now
+                    it[updatedAt] = now
                 }
                 
                 // 添加两个成员
@@ -400,6 +443,29 @@ object GroupRepository {
             logger.error("❌ 创建群组失败: {}", e.message)
             null
         }
+    }
+
+    fun findSilkPrivateGroup(userId: String, silkAgentId: String): Group? {
+        return getUserGroups(userId)
+            .asSequence()
+            .filter { it.roomKind == RoomKind.SILK_PRIVATE }
+            .firstOrNull { group ->
+                val memberIds = getGroupMembers(group.id).map { it.userId }
+                memberIds.size == 2 && silkAgentId in memberIds
+            }
+    }
+
+    fun createSilkPrivateGroup(userId: String, userDisplayName: String, silkAgentId: String): Group? {
+        val group = createGroup(
+            name = "[Silk] $userDisplayName 的专属对话",
+            hostId = userId,
+            roomKind = RoomKind.SILK_PRIVATE,
+        ) ?: return null
+        if (!addUserToGroup(group.id, silkAgentId, MemberRole.GUEST)) {
+            deleteGroup(group.id)
+            return null
+        }
+        return findGroupById(group.id)
     }
 
     // ==================== 退出/删除群组 ====================
@@ -552,18 +618,7 @@ object GroupRepository {
      */
     fun getAllGroups(): List<Group> {
         return transaction {
-            Groups.selectAll().mapNotNull { row ->
-                val hostUser = UserRepository.findUserById(row[Groups.hostId])
-                Group(
-                    id = row[Groups.id],
-                    name = row[Groups.name],
-                    invitationCode = row[Groups.invitationCode],
-                    hostId = row[Groups.hostId],
-                    hostName = hostUser?.fullName ?: "",
-                    createdAt = row[Groups.createdAt].toString()
-                )
-            }
+            Groups.selectAll().map(::toGroup)
         }
     }
 }
-

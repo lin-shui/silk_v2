@@ -949,7 +949,7 @@ fun ChatScreen(appState: AppState) {
                                 )
 
                                 // ➕ 添加成员（Silk 专属对话不显示）
-                                if (!group.name.startsWith("[Silk]")) {
+                                if (group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE) {
                                     DropdownMenuItem(
                                         text = { Text("添加成员") },
                                         onClick = {
@@ -969,7 +969,7 @@ fun ChatScreen(appState: AppState) {
                                 }
 
                                 // 👥 查看成员（Silk 专属对话不显示）
-                                if (!group.name.startsWith("[Silk]")) {
+                                if (group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE) {
                                     DropdownMenuItem(
                                         text = { Text("群组成员") },
                                         onClick = {
@@ -1429,7 +1429,7 @@ fun ChatScreen(appState: AppState) {
                             .padding(8.dp)
                     ) {
                         // cc-connect mode/model badges row (above input)
-                        val isSilkPrivateChat = group.name.startsWith("[Silk]")
+                        val isSilkPrivateChat = group.roomKind == com.silk.shared.models.RoomKind.SILK_PRIVATE
                         val isCcConnectGroup = ccConnectInfo != null
                         if (isCcConnectGroup && ccConnectInfo?.connected == true) {
                             val modeKey = ccConnectInfo?.mode ?: ""
