@@ -79,6 +79,7 @@ interface Strings {
     val sendRequest: String
     val addContact: String
     val addMembersToGroup: String
+    val addMemberButton: String
     val noContactsToAdd: String
     val groupMembersTitleWithCount: String  // Format: "Group Members ({count})"
     val inviteToGroup: String

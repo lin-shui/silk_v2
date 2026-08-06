@@ -13,7 +13,7 @@ object SilkChatStyles {
 
         val style = kotlinx.browser.document.createElement("style") as org.w3c.dom.HTMLElement
         style.id = styleId
-        style.textContent = buildStyleSheet()
+        style.textContent = buildStyleSheet() + "\n" + ConversationChromeStyles.buildStyleSheet()
         kotlinx.browser.document.head?.appendChild(style)
     }
 
@@ -304,22 +304,6 @@ object SilkChatStyles {
     min-height: 0;
 }
 
-.silk-workflow-header-title {
-    min-width: 0;
-}
-
-.silk-chat-header-title {
-    min-width: 0;
-    overflow: hidden;
-}
-
-.silk-chat-header-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    min-width: 0;
-}
-
 .silk-workflow-composer-badges {
     flex-wrap: wrap;
 }
@@ -398,20 +382,7 @@ object SilkChatStyles {
 @media (max-width: 760px) {
     .silk-app-shell,
     .silk-nav-rail { height: 100dvh !important; }
-    .silk-workflow-header {
-        flex-wrap: wrap;
-        gap: 7px !important;
-        padding: 10px 12px !important;
-    }
-    .silk-workflow-header-title { flex: 1 1 180px !important; }
     .silk-workflow-toolbar { padding: 6px 10px !important; }
-    .silk-workflow-composer-row { gap: 6px !important; }
-    .silk-chat-header {
-        flex-wrap: wrap;
-        gap: 8px !important;
-        padding: 8px 10px !important;
-    }
-    .silk-chat-composer { padding: 10px !important; }
 }
 """.trimIndent()
 }

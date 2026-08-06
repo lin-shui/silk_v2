@@ -228,7 +228,6 @@ fun ConversationScene(appState: WebAppState) {
             onQueryChange = { query = it },
             onFilterChange = { filter = it },
             onAdd = { showAddDialog = true },
-            onContacts = { appState.navigateTo(Scene.CONTACTS) },
             onSelectRoom = { room ->
                 scope.launch {
                     if (selectedRoom?.roomId == room.roomId && room.roomKind == RoomKind.WORKFLOW) {
@@ -331,6 +330,7 @@ fun ConversationScene(appState: WebAppState) {
                         onWorkspaceDeleted = { deletedId ->
                             workspaces = workspaces.filterNot { it.workspaceId == deletedId }
                         },
+                        onInvite = { invitationRoom = selectedRoom },
                         onRoomActivity = { timestamp -> recordRoomActivity(selectedRoom.roomId, timestamp) },
                     )
                     else -> ChatRoomView(
@@ -405,7 +405,6 @@ private fun RoomListPanel(
     onQueryChange: (String) -> Unit,
     onFilterChange: (RoomFilter) -> Unit,
     onAdd: () -> Unit,
-    onContacts: () -> Unit,
     onSelectRoom: (RoomSummaryDto) -> Unit,
     onSelectWorkspace: (String) -> Unit,
     onCreateWorkspace: () -> Unit,
@@ -464,7 +463,6 @@ private fun RoomListPanel(
                         onClick = { onCollapsedChange(true) },
                         cssClass = "silk-conversation-collapse-control",
                     )
-                    RoomHeaderIcon("联系人", "◎", onContacts)
                     RoomHeaderIcon("添加会话", "+", onAdd, primary = true)
                 }
             }
@@ -1088,17 +1086,32 @@ private fun AddConversationDialog(
                 }
                 return@createDialogContent
             }
-            Div({ style { display(DisplayStyle.Flex); property("gap", "6px"); marginBottom(14.px) } }) {
+            Div({
+                attr("role", "tablist")
+                attr("aria-label", "添加会话方式")
+                style {
+                    display(DisplayStyle.Flex)
+                    marginBottom(18.px)
+                    property("border-bottom", "1px solid ${SilkColors.border}")
+                }
+            }) {
                 listOf(
                     AddConversationMode.CREATE to "创建群组",
                     AddConversationMode.JOIN to "通过邀请码加入",
                 ).forEach { (value, label) ->
                     Button({
+                        attr("role", "tab")
+                        attr("aria-selected", (mode == value).toString())
                         style {
-                            property("flex", "1"); padding(9.px); borderRadius(5.px)
-                            border(1.px, LineStyle.Solid, Color(if (mode == value) SilkColors.primary else SilkColors.border))
-                            backgroundColor(Color(if (mode == value) "rgba(201, 168, 108, 0.16)" else "transparent"))
-                            color(Color(SilkColors.textPrimary)); property("cursor", if (isSubmitting) "default" else "pointer")
+                            property("flex", "1")
+                            padding(10.px, 8.px)
+                            border(0.px)
+                            borderRadius(0.px)
+                            property("border-bottom", "2px solid ${if (mode == value) SilkColors.primary else "transparent"}")
+                            backgroundColor(Color("transparent"))
+                            color(Color(if (mode == value) SilkColors.primary else SilkColors.textSecondary))
+                            fontWeight(if (mode == value) "600" else "400")
+                            property("cursor", if (isSubmitting) "default" else "pointer")
                         }
                         onClick {
                             if (!isSubmitting) {
@@ -1156,14 +1169,35 @@ private fun AddConversationDialog(
                 }
                 return@createDialogContent
             }
-            Div({ style { display(DisplayStyle.Flex); property("gap", "6px"); marginBottom(14.px) } }) {
+            Div({
+                style {
+                    color(Color(SilkColors.textSecondary))
+                    fontSize(12.px)
+                    fontWeight("600")
+                    marginBottom(8.px)
+                }
+            }) { Text("群组类型") }
+            Div({
+                attr("role", "radiogroup")
+                attr("aria-label", "群组类型")
+                style { display(DisplayStyle.Flex); property("gap", "8px"); marginBottom(14.px) }
+            }) {
                 listOf(RoomKind.CHAT to "聊天群组", RoomKind.WORKFLOW to "工作群组").forEach { (value, label) ->
                     Button({
+                        attr("role", "radio")
+                        attr("aria-checked", (kind == value).toString())
                         style {
-                            property("flex", "1"); padding(9.px); borderRadius(5.px)
+                            property("flex", "1")
+                            padding(10.px)
+                            borderRadius(5.px)
                             border(1.px, LineStyle.Solid, Color(if (kind == value) SilkColors.primary else SilkColors.border))
-                            backgroundColor(Color(if (kind == value) "rgba(201, 168, 108, 0.16)" else "transparent"))
-                            color(Color(SilkColors.textPrimary)); property("cursor", "pointer")
+                            backgroundColor(Color(if (kind == value) "rgba(201, 168, 108, 0.12)" else SilkColors.surfaceElevated))
+                            color(Color(SilkColors.textPrimary))
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            justifyContent(JustifyContent.FlexStart)
+                            property("gap", "7px")
+                            property("cursor", if (isSubmitting) "default" else "pointer")
                         }
                         onClick {
                             if (!isSubmitting) {
@@ -1171,7 +1205,15 @@ private fun AddConversationDialog(
                                 if (value == RoomKind.WORKFLOW) ccConnect = false
                             }
                         }
-                    }) { Text(label) }
+                    }) {
+                        Span({
+                            style {
+                                color(Color(if (kind == value) SilkColors.primary else SilkColors.textLight))
+                                fontSize(13.px)
+                            }
+                        }) { Text(if (kind == value) "●" else "○") }
+                        Text(label)
+                    }
                 }
             }
             Input(InputType.Text) {

@@ -75,6 +75,7 @@ object Strings_ZH : Strings {
     override val sendRequest = "发送请求"
     override val addContact = "添加联系人"
     override val addMembersToGroup = "➕ 添加成员到群组"
+    override val addMemberButton = "添加成员"
     override val noContactsToAdd = "没有可添加的联系人\n（所有联系人已在群组中）"
     override val groupMembersTitleWithCount = "👥 群组成员 ({count})"  // {count} will be replaced
     override val inviteToGroup = "邀请入群"

@@ -896,6 +896,37 @@ fun SettingsScene(appState: WebAppState) {
                     }
                 }
 
+                Div({
+                    style {
+                        marginTop(40.px)
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        justifyContent(JustifyContent.SpaceBetween)
+                        gap(16.px)
+                    }
+                }) {
+                    Span({
+                        style {
+                            color(Color(SilkColors.textPrimary))
+                            fontSize(16.px)
+                            fontWeight("600")
+                        }
+                    }) { Text("账户") }
+                    Button({
+                        style {
+                            padding(10.px, 20.px)
+                            backgroundColor(Color(SilkColors.surfaceElevated))
+                            color(Color(SilkColors.textPrimary))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            borderRadius(8.px)
+                            property("cursor", "pointer")
+                            fontSize(13.px)
+                            fontWeight("500")
+                        }
+                        onClick { appState.logout() }
+                    }) { Text(strings.logoutButton) }
+                }
+
                 // 分隔线
                 Div({
                     style {

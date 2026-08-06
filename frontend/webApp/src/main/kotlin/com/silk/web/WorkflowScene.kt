@@ -76,11 +76,15 @@ import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
 
 
-private fun shouldSubmitWorkflowMessage(event: org.jetbrains.compose.web.events.SyntheticKeyboardEvent, messageText: String): Boolean {
+private fun shouldSubmitWorkflowMessage(
+    event: org.jetbrains.compose.web.events.SyntheticKeyboardEvent,
+    messageText: String,
+    hasPendingImage: Boolean = false,
+): Boolean {
     if (event.key != "Enter") return false
     if (event.shiftKey) return false
     val isComposing = event.nativeEvent.asDynamic().isComposing == true
-    return !isComposing && messageText.isNotBlank()
+    return !isComposing && (messageText.isNotBlank() || hasPendingImage)
 }
 
 @Composable
@@ -93,6 +97,7 @@ fun WorkflowRoomView(
     onWorkspaceCreated: (WorkspaceDto) -> Unit = {},
     onWorkspaceUpdated: (WorkspaceDto) -> Unit = {},
     onWorkspaceDeleted: (String) -> Unit = {},
+    onInvite: () -> Unit = {},
     onRoomActivity: (Long) -> Unit = {},
 ) {
     val user = appState.currentUser ?: return
@@ -119,6 +124,7 @@ fun WorkflowRoomView(
             onWorkspaceCreated = onWorkspaceCreated,
             onWorkspaceUpdated = onWorkspaceUpdated,
             onWorkspaceDeleted = onWorkspaceDeleted,
+            onInvite = onInvite,
             onRoomActivity = onRoomActivity,
         )
     }
@@ -141,6 +147,7 @@ private fun WorkflowChatPanel(
     onWorkspaceCreated: (WorkspaceDto) -> Unit = {},
     onWorkspaceUpdated: (WorkspaceDto) -> Unit = {},
     onWorkspaceDeleted: (String) -> Unit = {},
+    onInvite: () -> Unit = {},
     onRoomActivity: (Long) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
@@ -157,6 +164,12 @@ private fun WorkflowChatPanel(
         if (latestMessageTimestamp > 0L) onRoomActivity(latestMessageTimestamp)
     }
     var messageText by remember(groupId) { mutableStateOf("") }
+    var pendingRoomImage by remember(groupId) { mutableStateOf<dynamic>(null) }
+    var pendingRoomImageUrl by remember(groupId) { mutableStateOf<String?>(null) }
+    var userLanguage by remember(userId) {
+        mutableStateOf(com.silk.shared.models.Language.CHINESE)
+    }
+    val strings = com.silk.shared.i18n.getStrings(userLanguage)
     var showKbRefMenu by remember(groupId) { mutableStateOf(false) }
     var kbRefSearchText by remember(groupId) { mutableStateOf("") }
     var kbRefStartIndex by remember(groupId) { mutableStateOf(-1) }
@@ -205,6 +218,9 @@ private fun WorkflowChatPanel(
     var memberBusy by remember(groupId) { mutableStateOf(false) }
     var memberError by remember(groupId) { mutableStateOf<String?>(null) }
     var memberFeedback by remember(groupId) { mutableStateOf<String?>(null) }
+    var showFolderExplorer by remember(groupId) { mutableStateOf(false) }
+    var isExportingMarkdown by remember(groupId) { mutableStateOf(false) }
+    var exportMarkdownHint by remember(groupId) { mutableStateOf<String?>(null) }
 
     suspend fun refreshRoomMembers() {
         val response = ApiClient.getWorkflowRoomMembers(workflowId)
@@ -246,6 +262,33 @@ private fun WorkflowChatPanel(
     val canControlActiveWorkspace = activeWorkspace?.lifecycleState == "ACTIVE" &&
         (activeWorkspace.role == "OWNER" || activeWorkspace.role == "COPILOT")
     val canSendToActiveTab = activeTab == "team" || canControlActiveWorkspace
+    val hasPendingRoomImage = activeTab == "team" && pendingRoomImage != null
+    val sendActiveMessage: () -> Unit = {
+        val text = messageText.trim()
+        val image = if (activeTab == "team") pendingRoomImage else null
+        if (canSendToActiveTab && (text.isNotBlank() || image != null)) {
+            messageText = ""
+            if (image != null) {
+                pendingRoomImage = null
+                pendingRoomImageUrl?.let { objectUrl ->
+                    window.asDynamic().URL.revokeObjectURL(objectUrl)
+                }
+                pendingRoomImageUrl = null
+                uploadConversationImage(groupId, userId, image, text)
+            } else {
+                scope.launch {
+                    chatClient.sendMessage(
+                        userId = userId,
+                        userName = userName,
+                        content = text,
+                        kbContextSelection = kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                        scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
+                        workspaceId = activeTab.takeUnless { it == "team" },
+                    )
+                }
+            }
+        }
+    }
     val activeStreamKey = messageStreamKey(
         if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
         activeWorkspaceId,
@@ -349,6 +392,12 @@ private fun WorkflowChatPanel(
     LaunchedEffect(groupId, userId) {
         refreshRoomMembers()
         availableAgents = ApiClient.listAgents(userId)
+    }
+    LaunchedEffect(userId) {
+        val response = ApiClient.getUserSettings(userId)
+        if (response.success && response.settings != null) {
+            userLanguage = response.settings!!.language
+        }
     }
     LaunchedEffect(messages.size, userId, kbPersistentExcludedSpaceIds, kbPersistentDownrankedSpaceIds, kbContextSelectionTouched) {
         if (kbContextSelectionTouched) return@LaunchedEffect
@@ -472,135 +521,102 @@ private fun WorkflowChatPanel(
     ConversationDetailScaffold(ConversationDetailVariant.WORKFLOW) {
     // 聊天列（保留原有 header/messages/input 纵向布局）
     ConversationPaneScaffold("silk-workflow-chat-column") {
-    // Header
-    Div({
-        attr("class", "silk-workflow-header silk-conversation-fixed-region")
-        style {
-            property("flex-shrink", "0")
-            padding(14.px, 20.px)
-            property("border-bottom", "1px solid ${SilkColors.border}")
-            display(DisplayStyle.Flex)
-            alignItems(AlignItems.Center)
-            property("gap", "12px")
-            backgroundColor(Color(SilkColors.surfaceElevated))
-        }
-    }) {
-        Span({ attr("class", "silk-workflow-header-icon"); style { fontSize(20.px) } }) { Text("\uD83E\uDD16") }
-        Div({
-            attr("class", "silk-workflow-header-title")
-            style {
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                property("gap", "2px")
-                property("flex", "1")
-                property("min-width", "0")
+    ConversationHeader(
+        icon = if (activeTab == "team") "#" else "▣",
+        title = workflowName,
+        className = "silk-workflow-header",
+        titleSuffix = if (connectionState == ConnectionState.CONNECTED) null else {
+            {
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(
+                            if (connectionState == ConnectionState.CONNECTING) Color("#D98600")
+                            else Color(SilkColors.error)
+                        )
+                    }
+                }) {
+                    Text(if (connectionState == ConnectionState.CONNECTING) "● 连接中" else "● 连接失败")
+                }
             }
-        }) {
-            Span({
-                style {
-                    fontSize(16.px)
-                    fontWeight("600")
-                    color(Color(SilkColors.textPrimary))
-                    property("overflow", "hidden")
-                    property("text-overflow", "ellipsis")
-                    property("white-space", "nowrap")
+        },
+        subtitle = {
+            if (activeTab == "team") {
+                Text("Team Channel")
+            } else {
+                activeWorkspace?.let { workspace ->
+                    Span { Text("${workspace.ownerDisplayName} / ${workspace.name}") }
                 }
-            }) { Text(workflowName) }
-            // Owner 统一管理工作区设置；Co-pilot 仍可管理其获授权的本地目录。
-            if (activeWorkspace?.role == "OWNER" || canControlActiveWorkspace) Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
-                    property("min-width", "0")
-                }
-            }) {
                 if (workingDir.isNotBlank()) {
                     Span({
+                        attr("title", workingDir)
                         style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
-                            fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
                             property("overflow", "hidden")
                             property("text-overflow", "ellipsis")
                             property("white-space", "nowrap")
-                            property("min-width", "0")
+                            fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
                         }
-                        attr("title", workingDir)
-                    }) { Text("\uD83D\uDCC1 $workingDir") }
-                }
-                Button({
-                    style {
-                        width(26.px)
-                        fontSize(11.px)
-                        color(Color(SilkColors.primary))
-                        property("cursor", "pointer")
-                        property("flex-shrink", "0")
-                        property("white-space", "nowrap")
-                        property("user-select", "none")
-                        height(26.px)
-                        padding(0.px)
-                        borderRadius(5.px)
-                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                        backgroundColor(Color.white)
-                    }
-                    attr("title", if (activeWorkspace?.role == "OWNER") "工作区设置" else "设置工作目录")
-                    onClick {
-                        if (activeWorkspace?.role == "OWNER") {
-                            workspaceManageTarget = activeWorkspace
-                        } else {
-                            showFolderPicker = true
-                        }
-                    }
-                }) {
-                    Text("⚙")
+                    }) { Text("· $workingDir") }
                 }
             }
-        }
-        Button({
-            attr("title", "Room 成员")
-            style {
-                height(32.px)
-                padding(0.px, 10.px)
-                borderRadius(6.px)
-                border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                backgroundColor(Color.white)
-                color(Color(SilkColors.textSecondary))
-                property("cursor", "pointer")
-                property("flex-shrink", "0")
+        },
+    ) {
+        if (activeTab == "team") {
+            ConversationRoomHeaderActions(
+                inviteLabel = strings.inviteButton,
+                membersLabel = strings.membersButton,
+                isExporting = isExportingMarkdown,
+                exportHint = exportMarkdownHint,
+                onOpenFiles = { showFolderExplorer = true },
+                onExport = {
+                    scope.launch {
+                        isExportingMarkdown = true
+                        try {
+                            exportConversationMarkdown(groupId, workflowName, userId) {
+                                exportMarkdownHint = it
+                            }
+                        } finally {
+                            isExportingMarkdown = false
+                        }
+                    }
+                },
+                onChooseVault = {
+                    scope.launch { chooseConversationVault { exportMarkdownHint = it } }
+                },
+                onInvite = onInvite,
+                onMembers = {
+                    showRoomMembers = true
+                    scope.launch { refreshRoomMembers() }
+                },
+            )
+        } else {
+            // Owner 管理完整工作区；Co-pilot 只管理获授权目录。
+            if (activeWorkspace?.role == "OWNER" || canControlActiveWorkspace) {
+                ConversationHeaderActionButton(
+                    label = if (activeWorkspace?.role == "OWNER") "工作区设置" else "设置工作目录",
+                    icon = "⚙",
+                ) {
+                    if (activeWorkspace?.role == "OWNER") {
+                        workspaceManageTarget = activeWorkspace
+                    } else {
+                        showFolderPicker = true
+                    }
+                }
             }
-            onClick {
+            ConversationHeaderActionButton(label = "Room 成员", icon = "👥") {
                 showRoomMembers = true
                 scope.launch { refreshRoomMembers() }
             }
-        }) { Text("成员") }
-        // Connection status indicator - only show when not connected
-        if (connectionState != ConnectionState.CONNECTED) {
-            Span({
-                style {
-                    fontSize(12.px)
-                    color(
-                        when (connectionState) {
-                            ConnectionState.CONNECTING -> Color("#FF9800")
-                            else -> Color("#F44336")
-                        }
-                    )
+            if (canControlActiveWorkspace) {
+                ConversationHeaderActionButton(
+                    label = if (sourcePanelOpen) "关闭代码审查" else "打开代码审查",
+                    icon = if (sourcePanelOpen) "×" else "⌥",
+                    tone = if (sourcePanelOpen) ConversationActionTone.PRIMARY else ConversationActionTone.DEFAULT,
+                ) {
+                    sourcePanelOpen = !sourcePanelOpen
+                    if (sourcePanelOpen) diffRefreshSignal += 1
                 }
-            }) {
-                Text(
-                    when (connectionState) {
-                        ConnectionState.CONNECTING -> "● 连接中..."
-                        else -> "● 会话连接失败"
-                    }
-                )
             }
-        }
-        // 源代码管理面板开关（D5）：打开时立即触发一次刷新
-        if (canControlActiveWorkspace) {
-            Button({
-                onClick { sourcePanelOpen = !sourcePanelOpen; if (sourcePanelOpen) diffRefreshSignal += 1 }
-                style { property("cursor", "pointer"); property("margin-left", "auto") }
-            }) { Text(if (sourcePanelOpen) "✕ 审查" else "⌥ 审查") }
         }
     }
 
@@ -887,36 +903,28 @@ private fun WorkflowChatPanel(
 
     // Input area is absent in observer and archived modes, so cards and composer cannot imply control.
     if (canSendToActiveTab) {
-    Div({
-        attr("class", "silk-workflow-composer silk-conversation-fixed-region")
-        style {
-            property("flex-shrink", "0")
-            padding(12.px, 16.px)
-            property("border-top", "1px solid ${SilkColors.border}")
-            backgroundColor(Color(SilkColors.surfaceElevated))
-            display(DisplayStyle.Flex)
-            flexDirection(FlexDirection.Column)
-            property("gap", "6px")
-        }
-    }) {
-        KnowledgeBaseContextTray(
-            statusMessages = statusMessages.filter(belongsToActiveTab),
-            selection = kbContextSelection,
-            onSelectionChange = {
-                kbContextSelectionTouched = true
-                kbContextSelection = it
-            },
-        )
-        // Badge row: new session + permission mode + agent quick-switch
-        Div({
-            attr("class", "silk-workflow-composer-badges")
-            style {
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                property("gap", "6px")
-                property("position", "relative")
+    ConversationComposerScaffold("silk-workflow-composer") {
+        if (activeTab == "team") {
+            pendingRoomImageUrl?.let { objectUrl ->
+                ConversationComposerImagePreview(objectUrl) {
+                    pendingRoomImage = null
+                    pendingRoomImageUrl = null
+                    window.asDynamic().URL.revokeObjectURL(objectUrl)
+                }
             }
-        }) {
+        }
+        ConversationComposerContext {
+            KnowledgeBaseContextTray(
+                statusMessages = statusMessages.filter(belongsToActiveTab),
+                selection = kbContextSelection,
+                onSelectionChange = {
+                    kbContextSelectionTouched = true
+                    kbContextSelection = it
+                },
+            )
+        }
+        // Badge row: new session + permission mode + agent quick-switch
+        ConversationComposerAccessoryRow("silk-workflow-composer-badges") {
             if (activeTab == "team") {
                 SilkMentionButton(
                     inputElementId = "wf-composer-input",
@@ -1135,14 +1143,8 @@ private fun WorkflowChatPanel(
         }
 
         // Input row
-        Div({
-            attr("class", "silk-workflow-composer-row")
-            style {
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                property("gap", "10px")
-            }
-        }) {
+        ConversationComposerInputRow {
+        ConversationComposerInputSurface {
         TextArea {
             if (!canSendToActiveTab) attr("disabled", "")
             value(messageText)
@@ -1177,37 +1179,16 @@ private fun WorkflowChatPanel(
                 }
             }
             attr("id", "wf-composer-input")
-            attr("placeholder", "向 Agent 发送消息...（Shift+Enter 换行）")
+            attr(
+                "placeholder",
+                if (activeTab == "team") "发送消息...（Shift+Enter 换行）" else "向 Agent 发送消息...（Shift+Enter 换行）",
+            )
+            attr("class", "silk-conversation-composer-input")
             onKeyDown { event ->
-                if (canSendToActiveTab && shouldSubmitWorkflowMessage(event, messageText)) {
+                if (canSendToActiveTab && shouldSubmitWorkflowMessage(event, messageText, hasPendingRoomImage)) {
                     event.preventDefault()
-                    val text = messageText.trim()
-                    messageText = ""
-                    scope.launch {
-                        chatClient.sendMessage(
-                            userId = userId,
-                            userName = userName,
-                            content = text,
-                            kbContextSelection = kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
-                            scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
-                            workspaceId = activeTab.takeUnless { it == "team" },
-                        )
-                    }
+                    sendActiveMessage()
                 }
-            }
-            style {
-                property("flex", "1")
-                minHeight(40.px)
-                maxHeight(160.px)
-                borderRadius(8.px)
-                border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                padding(8.px, 12.px)
-                fontSize(14.px)
-                property("box-sizing", "border-box")
-                property("outline", "none")
-                property("resize", "none")
-                property("white-space", "pre-wrap")
-                property("line-height", "1.5")
             }
         }
 
@@ -1311,62 +1292,40 @@ private fun WorkflowChatPanel(
             }
         }
 
-        if (isActiveStreamGenerating && canSendToActiveTab) {
-            Button({
-                style {
-                    backgroundColor(Color("#FF4D4F"))
-                    color(Color.white)
-                    border(0.px)
-                    borderRadius(8.px)
-                    padding(8.px, 16.px)
-                    property("cursor", "pointer")
-                    fontSize(14.px)
-                    property("font-weight", "600")
-                    property("transition", "all 0.2s ease")
-                }
-                onClick {
-                    scope.launch {
-                        chatClient.stopGeneration(
-                            userId = userId,
-                            userName = userName,
-                            scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
-                            workspaceId = activeTab.takeUnless { it == "team" },
-                        )
-                    }
-                }
-            }) { Text("停止") }
-        } else {
-            Button({
-                style {
-                    backgroundColor(
-                        if (messageText.isNotBlank() && canSendToActiveTab) Color(SilkColors.primary) else Color(SilkColors.primaryLight)
+        } // input surface
+        ConversationComposerPrimaryAction(
+            isGenerating = isActiveStreamGenerating,
+            enabled = (messageText.isNotBlank() || hasPendingRoomImage) && canSendToActiveTab,
+            sendLabel = "发送",
+            stopLabel = "停止",
+            onStop = {
+                scope.launch {
+                    chatClient.stopGeneration(
+                        userId = userId,
+                        userName = userName,
+                        scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
+                        workspaceId = activeTab.takeUnless { it == "team" },
                     )
-                    color(Color.white)
-                    border(0.px)
-                    borderRadius(8.px)
-                    padding(8.px, 16.px)
-                    property("cursor", if (messageText.isNotBlank() && canSendToActiveTab) "pointer" else "default")
-                    fontSize(14.px)
                 }
-                onClick {
-                    if (messageText.isNotBlank() && canSendToActiveTab) {
-                        val text = messageText.trim()
-                        messageText = ""
-                        scope.launch {
-                            chatClient.sendMessage(
-                                userId = userId,
-                                userName = userName,
-                                content = text,
-                                kbContextSelection = kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
-                                scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
-                                workspaceId = activeTab.takeUnless { it == "team" },
-                            )
-                        }
-                    }
-                }
-            }) { Text("发送") }
-        }
+            },
+            onSend = sendActiveMessage,
+        )
         } // close input row Div
+        if (activeTab == "team") {
+            ConversationRoomComposerTools(
+                roomId = groupId,
+                userId = userId,
+                messageText = messageText,
+                onMessageTextChange = { messageText = it },
+                onScreenshotCaptured = { blob, objectUrl ->
+                    pendingRoomImageUrl?.let { previousUrl ->
+                        window.asDynamic().URL.revokeObjectURL(previousUrl)
+                    }
+                    pendingRoomImage = blob
+                    pendingRoomImageUrl = objectUrl
+                },
+            )
+        }
     }
     } else {
         Div({
@@ -1569,14 +1528,39 @@ private fun WorkflowChatPanel(
     }
 
     if (showRoomMembers) {
-        WorkflowRoomMembersDialog(
-            isOwner = workflowRole == "OWNER",
-            members = roomMembers,
-            candidates = memberCandidates,
+        val memberItems = roomMembers.map { member ->
+            ConversationRoomMemberItem(
+                id = member.id,
+                displayName = member.fullName,
+                roleLabel = if (member.role == "OWNER") "Owner" else "Member",
+                avatarText = member.fullName.firstOrNull()?.toString() ?: "?",
+                avatarTone = if (member.role == "OWNER") {
+                    ConversationMemberTone.PRIMARY
+                } else {
+                    ConversationMemberTone.MUTED
+                },
+                canRemove = workflowRole == "OWNER" && member.role != "OWNER",
+            )
+        }
+        val candidateItems = memberCandidates.map { candidate ->
+            ConversationRoomMemberCandidateItem(
+                id = candidate.id,
+                displayName = candidate.fullName,
+                detail = "${candidate.loginName} · ${candidate.phoneNumber}",
+            )
+        }
+        ConversationRoomMembersDialog(
+            strings = strings,
+            members = memberItems,
+            candidates = candidateItems,
+            canAddMembers = workflowRole == "OWNER",
+            usesCandidateSearch = true,
             query = memberQuery,
+            loading = memberBusy && roomMembers.isEmpty(),
             busy = memberBusy,
             errorMessage = memberError,
             successMessage = memberFeedback,
+            emptyCandidatesMessage = "未找到可添加的用户",
             onQueryChange = {
                 memberQuery = it
                 memberCandidates = emptyList()
@@ -1599,7 +1583,9 @@ private fun WorkflowChatPanel(
                     }
                 }
             },
-            onAdd = { candidate ->
+            onAdd = { candidateId ->
+                val candidate = memberCandidates.firstOrNull { it.id == candidateId }
+                    ?: return@ConversationRoomMembersDialog
                 scope.launch {
                     memberBusy = true
                     memberError = null
@@ -1621,7 +1607,9 @@ private fun WorkflowChatPanel(
                     }
                 }
             },
-            onRemove = { member ->
+            onRemove = { memberId ->
+                val member = roomMembers.firstOrNull { it.id == memberId }
+                    ?: return@ConversationRoomMembersDialog
                 scope.launch {
                     memberBusy = true
                     memberError = null
@@ -1646,246 +1634,20 @@ private fun WorkflowChatPanel(
             onDismiss = {
                 showRoomMembers = false
                 memberCandidates = emptyList()
+                memberQuery = ""
                 memberError = null
                 memberFeedback = null
             },
         )
     }
-}
 
-@Composable
-private fun WorkflowRoomMembersDialog(
-    isOwner: Boolean,
-    members: List<WorkflowRoomMember>,
-    candidates: List<WorkflowMemberCandidate>,
-    query: String,
-    busy: Boolean,
-    errorMessage: String?,
-    successMessage: String?,
-    onQueryChange: (String) -> Unit,
-    onSearch: () -> Unit,
-    onAdd: (WorkflowMemberCandidate) -> Unit,
-    onRemove: (WorkflowRoomMember) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalOverlay(onDismiss = onDismiss) {
-        Div({
-            style {
-                width(520.px)
-                property("max-width", "calc(100vw - 32px)")
-                property("max-height", "calc(100vh - 48px)")
-                property("overflow-y", "auto")
-                backgroundColor(Color.white)
-                borderRadius(8.px)
-                padding(20.px)
-                property("box-sizing", "border-box")
-                property("box-shadow", "0 12px 36px rgba(0,0,0,0.18)")
-            }
-        }) {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    alignItems(AlignItems.Center)
-                    marginBottom(18.px)
-                }
-            }) {
-                H3({
-                    style {
-                        marginTop(0.px)
-                        marginBottom(0.px)
-                        color(Color(SilkColors.textPrimary))
-                        fontSize(18.px)
-                    }
-                }) {
-                    Text("Room 成员")
-                }
-                Button({
-                    attr("type", "button")
-                    attr("title", "关闭")
-                    style {
-                        width(32.px); height(32.px); padding(0.px)
-                        border(0.px); backgroundColor(Color("transparent"))
-                        color(Color(SilkColors.textSecondary)); fontSize(20.px)
-                        property("cursor", "pointer")
-                    }
-                    onClick { onDismiss() }
-                }) { Text("×") }
-            }
-
-            WorkflowMemberSearchSection(isOwner, query, busy, onQueryChange, onSearch)
-
-            if (errorMessage != null) {
-                Div({
-                    style {
-                        color(Color(SilkColors.error))
-                        fontSize(13.px)
-                        marginBottom(12.px)
-                    }
-                }) { Text(errorMessage) }
-            }
-            if (successMessage != null) {
-                Div({
-                    style {
-                        color(Color("#2E7D32"))
-                        fontSize(13.px)
-                        marginBottom(12.px)
-                    }
-                }) { Text(successMessage) }
-            }
-
-            WorkflowMemberCandidatesSection(candidates, busy, onAdd)
-            WorkflowCurrentMembersSection(isOwner, members, busy, onRemove)
-        }
-    }
-}
-
-@Composable
-private fun WorkflowMemberSearchSection(
-    isOwner: Boolean,
-    query: String,
-    busy: Boolean,
-    onQueryChange: (String) -> Unit,
-    onSearch: () -> Unit,
-) {
-    if (!isOwner) return
-    val disabled = busy || query.isBlank()
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            property("gap", "8px")
-            marginBottom(12.px)
-        }
-    }) {
-        Input(InputType.Text) {
-            value(query)
-            onInput { onQueryChange(it.value) }
-            attr("placeholder", "用户名、姓名或电话号码")
-            style {
-                property("flex", "1")
-                property("min-width", "0")
-                height(36.px)
-                padding(0.px, 10.px)
-                borderRadius(6.px)
-                border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                property("box-sizing", "border-box")
-            }
-        }
-        Button({
-            attr("type", "button")
-            if (disabled) attr("disabled", "")
-            style {
-                height(36.px)
-                padding(0.px, 14.px)
-                border(0.px)
-                borderRadius(6.px)
-                backgroundColor(Color(SilkColors.primary))
-                color(Color.white)
-                property("cursor", if (disabled) "default" else "pointer")
-                property("opacity", if (disabled) "0.55" else "1")
-            }
-            onClick { onSearch() }
-        }) { Text("搜索") }
-    }
-}
-
-@Composable
-private fun WorkflowMemberCandidatesSection(
-    candidates: List<WorkflowMemberCandidate>,
-    busy: Boolean,
-    onAdd: (WorkflowMemberCandidate) -> Unit,
-) {
-    if (candidates.isEmpty()) return
-    Div({ style { marginBottom(16.px) } }) {
-        candidates.forEach { candidate ->
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    property("gap", "12px")
-                    padding(10.px, 0.px)
-                    property("border-bottom", "1px solid ${SilkColors.border}")
-                }
-            }) {
-                Div({ style { property("min-width", "0") } }) {
-                    Div({ style { color(Color(SilkColors.textPrimary)); fontSize(14.px) } }) {
-                        Text(candidate.fullName)
-                    }
-                    Div({ style { color(Color(SilkColors.textSecondary)); fontSize(12.px) } }) {
-                        Text("${candidate.loginName} · ${candidate.phoneNumber}")
-                    }
-                }
-                Button({
-                    attr("type", "button")
-                    if (busy) attr("disabled", "")
-                    style {
-                        height(30.px); padding(0.px, 12.px)
-                        borderRadius(6.px); border(0.px)
-                        backgroundColor(Color(SilkColors.primary)); color(Color.white)
-                        property("cursor", if (busy) "default" else "pointer")
-                        property("opacity", if (busy) "0.55" else "1")
-                    }
-                    onClick { onAdd(candidate) }
-                }) { Text(if (busy) "添加中..." else "添加") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorkflowCurrentMembersSection(
-    isOwner: Boolean,
-    members: List<WorkflowRoomMember>,
-    busy: Boolean,
-    onRemove: (WorkflowRoomMember) -> Unit,
-) {
-    var pendingRemovalId by remember { mutableStateOf<String?>(null) }
-    Div({ style { color(Color(SilkColors.textSecondary)); fontSize(12.px); marginBottom(6.px) } }) {
-        Text("当前成员 · ${members.size}")
-    }
-    members.forEach { member ->
-        val canRemove = isOwner && member.role != "OWNER"
-        val confirming = pendingRemovalId == member.id
-        Div({
-            style {
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                justifyContent(JustifyContent.SpaceBetween)
-                property("gap", "12px")
-                property("min-height", "42px")
-                property("border-bottom", "1px solid ${SilkColors.border}")
-            }
-        }) {
-            Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); property("gap", "8px") } }) {
-                Span({ style { color(Color(SilkColors.textPrimary)); fontSize(14.px) } }) { Text(member.fullName) }
-                if (member.role == "OWNER") {
-                    Span({ style { color(Color(SilkColors.primary)); fontSize(11.px) } }) { Text("Owner") }
-                }
-            }
-            if (canRemove) {
-                Button({
-                    attr("type", "button")
-                    if (busy) attr("disabled", "")
-                    style {
-                        height(30.px); padding(0.px, 10.px)
-                        borderRadius(6.px)
-                        border(1.px, LineStyle.Solid, Color(SilkColors.error))
-                        backgroundColor(if (confirming) Color(SilkColors.error) else Color.white)
-                        color(if (confirming) Color.white else Color(SilkColors.error))
-                        property("cursor", if (busy) "default" else "pointer")
-                    }
-                    onClick {
-                        if (confirming) {
-                            pendingRemovalId = null
-                            onRemove(member)
-                        } else {
-                            pendingRemovalId = member.id
-                        }
-                    }
-                }) { Text(if (confirming) "确认移除" else "移除") }
-            }
-        }
+    if (showFolderExplorer) {
+        FolderExplorerDialog(
+            groupId = groupId,
+            userId = userId,
+            strings = strings,
+            onDismiss = { showFolderExplorer = false },
+        )
     }
 }
 
@@ -3189,7 +2951,7 @@ private fun FolderRow(name: String, subtle: Boolean = false, onClick: () -> Unit
  * z-index 通过 [zIndex] 控制（FolderPicker 比 Create dialog 高，便于嵌套打开）。
  */
 @Composable
-private fun ModalOverlay(
+internal fun ModalOverlay(
     onDismiss: () -> Unit,
     zIndex: Int = 1000,
     content: @Composable () -> Unit,
