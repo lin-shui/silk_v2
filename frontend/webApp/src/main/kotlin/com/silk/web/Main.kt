@@ -1143,6 +1143,9 @@ fun ChatAppWithGroup(
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var isLoadingContacts by remember { mutableStateOf(false) }
     var addMemberResult by remember { mutableStateOf<String?>(null) }
+    var memberSearchQuery by remember { mutableStateOf("") }
+    var memberSearchResults by remember { mutableStateOf<List<UserSearchItem>>(emptyList()) }
+    var memberSearchAttempted by remember { mutableStateOf(false) }
     
     // 查看成员列表相关状态
     var showMembersDialog by remember { mutableStateOf(false) }
@@ -2837,40 +2840,82 @@ fun ChatAppWithGroup(
             )
         }
         val memberIds = groupMembers.mapTo(mutableSetOf()) { it.id }
-        val candidateItems = contacts
-            .filter { it.contactId !in memberIds }
-            .map { contact ->
-                ConversationRoomMemberCandidateItem(
-                    id = contact.contactId,
-                    displayName = contact.contactName,
-                    detail = contact.contactPhone,
-                )
-            }
+        val candidateItems = if (memberSearchQuery.isBlank()) {
+            contacts
+                .filter { it.contactId !in memberIds }
+                .map { contact ->
+                    ConversationRoomMemberCandidateItem(
+                        id = contact.contactId,
+                        displayName = contact.contactName,
+                        detail = contact.contactPhone,
+                    )
+                }
+        } else {
+            memberSearchResults
+                .filter { it.id !in memberIds }
+                .map { candidate ->
+                    ConversationRoomMemberCandidateItem(
+                        id = candidate.id,
+                        displayName = candidate.fullName,
+                        detail = candidate.loginName,
+                    )
+                }
+        }
         ConversationRoomMembersDialog(
             strings = strings,
             members = memberItems,
             candidates = candidateItems,
             canAddMembers = true,
-            usesCandidateSearch = false,
-            query = "",
+            query = memberSearchQuery,
             loading = isLoadingContacts,
             busy = isLoadingContacts,
             errorMessage = addMemberResult?.takeIf { it.startsWith("❌") },
             successMessage = addMemberResult?.takeUnless { it.startsWith("❌") },
-            emptyCandidatesMessage = strings.noContactsToAdd,
-            onQueryChange = {},
-            onSearch = {},
-            onAdd = { contactId ->
-                val contact = contacts.firstOrNull { it.contactId == contactId }
+            emptyCandidatesMessage = if (memberSearchQuery.isBlank()) {
+                strings.noContactsToAdd
+            } else if (!memberSearchAttempted) {
+                "点击搜索或按 Enter 查看匹配用户"
+            } else {
+                "未找到可添加的用户"
+            },
+            onQueryChange = { query ->
+                memberSearchQuery = query
+                memberSearchResults = emptyList()
+                memberSearchAttempted = false
+                addMemberResult = null
+            },
+            onSearch = {
+                val searchedQuery = memberSearchQuery.trim()
+                memberSearchAttempted = false
+                scope.launch {
+                    isLoadingContacts = true
+                    addMemberResult = null
+                    try {
+                        val response = ApiClient.searchUsersByName(searchedQuery)
+                        if (memberSearchQuery.trim() != searchedQuery) return@launch
+                        memberSearchAttempted = true
+                        if (response.success) {
+                            memberSearchResults = response.users
+                        } else {
+                            memberSearchResults = emptyList()
+                            addMemberResult = "❌ ${response.message}"
+                        }
+                    } finally {
+                        isLoadingContacts = false
+                    }
+                }
+            },
+            onAdd = { candidateId ->
+                val candidate = candidateItems.firstOrNull { it.id == candidateId }
                     ?: return@ConversationRoomMembersDialog
                 scope.launch {
                     isLoadingContacts = true
                     try {
-                        val response = ApiClient.addMemberToGroup(group.id, contact.contactId)
+                        val response = ApiClient.addMemberToGroup(group.id, candidate.id)
                         addMemberResult = if (response.success) {
                             val membersResponse = ApiClient.getGroupMembers(group.id)
                             groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                            strings.memberAdded.replace("{name}", contact.contactName)
+                            strings.memberAdded.replace("{name}", candidate.displayName)
                         } else {
                             "❌ ${response.message}"
                         }
@@ -2917,6 +2962,9 @@ fun ChatAppWithGroup(
                 selectedMemberForInvite = null
                 inviteMemberResult = null
                 addMemberResult = null
+                memberSearchQuery = ""
+                memberSearchResults = emptyList()
+                memberSearchAttempted = false
             },
         )
     }

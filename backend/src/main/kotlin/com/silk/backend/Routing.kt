@@ -1758,9 +1758,9 @@ private fun Route.groupContactRoutes() {
         
         // 按名称关键词搜索用户（用于知识库分享等场景）
         get("/api/users/search-by-name") {
-            val query = call.request.queryParameters["q"] ?: ""
-            if (query.isBlank() || query.length < 2) {
-                call.respond(UserSearchByNameResponse(success = false, message = "请输入至少2个字符"))
+            val query = call.request.queryParameters["q"].orEmpty().trim()
+            if (query.isBlank()) {
+                call.respond(UserSearchByNameResponse(success = false, message = "请输入搜索内容"))
                 return@get
             }
             

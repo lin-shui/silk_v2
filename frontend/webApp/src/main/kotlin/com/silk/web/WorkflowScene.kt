@@ -213,8 +213,10 @@ private fun WorkflowChatPanel(
     var groupMembers by remember(groupId) { mutableStateOf<List<GroupMember>>(emptyList()) }
     var showRoomMembers by remember(groupId) { mutableStateOf(false) }
     var roomMembers by remember(groupId) { mutableStateOf<List<WorkflowRoomMember>>(emptyList()) }
+    var roomContacts by remember(groupId) { mutableStateOf<List<Contact>>(emptyList()) }
     var memberCandidates by remember(groupId) { mutableStateOf<List<WorkflowMemberCandidate>>(emptyList()) }
     var memberQuery by remember(groupId) { mutableStateOf("") }
+    var memberSearchAttempted by remember(groupId) { mutableStateOf(false) }
     var memberBusy by remember(groupId) { mutableStateOf(false) }
     var memberError by remember(groupId) { mutableStateOf<String?>(null) }
     var memberFeedback by remember(groupId) { mutableStateOf<String?>(null) }
@@ -232,6 +234,10 @@ private fun WorkflowChatPanel(
             memberError = null
         } else {
             memberError = response.message.ifBlank { "成员加载失败" }
+        }
+        if (workflowRole == "OWNER") {
+            val contactsResponse = ApiClient.getContacts(userId)
+            roomContacts = contactsResponse.contacts ?: emptyList()
         }
     }
     val currentWorkspaces = workspaces.filterNot { it.historyOnly }
@@ -1542,37 +1548,62 @@ private fun WorkflowChatPanel(
                 canRemove = workflowRole == "OWNER" && member.role != "OWNER",
             )
         }
-        val candidateItems = memberCandidates.map { candidate ->
-            ConversationRoomMemberCandidateItem(
-                id = candidate.id,
-                displayName = candidate.fullName,
-                detail = "${candidate.loginName} · ${candidate.phoneNumber}",
-            )
+        val memberIds = roomMembers.mapTo(mutableSetOf()) { it.id }
+        val candidateItems = if (memberQuery.isBlank()) {
+            roomContacts
+                .filter { it.contactId !in memberIds }
+                .map { contact ->
+                    ConversationRoomMemberCandidateItem(
+                        id = contact.contactId,
+                        displayName = contact.contactName,
+                        detail = contact.contactPhone,
+                    )
+                }
+        } else {
+            memberCandidates
+                .filter { it.id !in memberIds }
+                .map { candidate ->
+                    ConversationRoomMemberCandidateItem(
+                        id = candidate.id,
+                        displayName = candidate.fullName,
+                        detail = "${candidate.loginName} · ${candidate.phoneNumber}",
+                    )
+                }
         }
         ConversationRoomMembersDialog(
             strings = strings,
             members = memberItems,
             candidates = candidateItems,
             canAddMembers = workflowRole == "OWNER",
-            usesCandidateSearch = true,
             query = memberQuery,
-            loading = memberBusy && roomMembers.isEmpty(),
+            loading = memberBusy,
             busy = memberBusy,
             errorMessage = memberError,
             successMessage = memberFeedback,
-            emptyCandidatesMessage = "未找到可添加的用户",
+            emptyCandidatesMessage = if (memberQuery.isBlank()) {
+                strings.noContactsToAdd
+            } else if (!memberSearchAttempted) {
+                "点击搜索或按 Enter 查看匹配用户"
+            } else {
+                "未找到可添加的用户"
+            },
             onQueryChange = {
                 memberQuery = it
                 memberCandidates = emptyList()
+                memberSearchAttempted = false
                 memberFeedback = null
             },
             onSearch = {
+                val searchedQuery = memberQuery.trim()
+                memberSearchAttempted = false
                 scope.launch {
                     memberBusy = true
                     memberError = null
                     memberFeedback = null
                     try {
-                        val response = ApiClient.searchWorkflowMemberCandidates(workflowId, memberQuery.trim())
+                        val response = ApiClient.searchWorkflowMemberCandidates(workflowId, searchedQuery)
+                        if (memberQuery.trim() != searchedQuery) return@launch
+                        memberSearchAttempted = true
                         if (response.success) {
                             memberCandidates = response.candidates
                         } else {
@@ -1584,7 +1615,7 @@ private fun WorkflowChatPanel(
                 }
             },
             onAdd = { candidateId ->
-                val candidate = memberCandidates.firstOrNull { it.id == candidateId }
+                val candidate = candidateItems.firstOrNull { it.id == candidateId }
                     ?: return@ConversationRoomMembersDialog
                 scope.launch {
                     memberBusy = true
@@ -1598,7 +1629,7 @@ private fun WorkflowChatPanel(
                                 GroupMember(id = it.id, fullName = it.fullName, role = it.role)
                             }
                             memberCandidates = memberCandidates.filterNot { it.id == candidate.id }
-                            memberFeedback = "已添加 ${candidate.fullName}"
+                            memberFeedback = "已添加 ${candidate.displayName}"
                         } else {
                             memberError = response.message.ifBlank { "添加成员失败" }
                         }
@@ -1635,6 +1666,7 @@ private fun WorkflowChatPanel(
                 showRoomMembers = false
                 memberCandidates = emptyList()
                 memberQuery = ""
+                memberSearchAttempted = false
                 memberError = null
                 memberFeedback = null
             },

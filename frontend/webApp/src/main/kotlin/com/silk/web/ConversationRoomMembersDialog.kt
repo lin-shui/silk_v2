@@ -67,7 +67,6 @@ internal fun ConversationRoomMembersDialog(
     members: List<ConversationRoomMemberItem>,
     candidates: List<ConversationRoomMemberCandidateItem>,
     canAddMembers: Boolean,
-    usesCandidateSearch: Boolean,
     query: String,
     loading: Boolean,
     busy: Boolean,
@@ -157,47 +156,46 @@ internal fun ConversationRoomMembersDialog(
                         property("border-bottom", "1px solid ${SilkColors.border}")
                     }
                 }) {
-                    if (usesCandidateSearch) {
-                        Div({
-                            style {
-                                display(DisplayStyle.Flex)
-                                property("gap", "8px")
-                                marginBottom(12.px)
-                            }
-                        }) {
-                            Input(InputType.Text) {
-                                value(query)
-                                onInput { onQueryChange(it.value) }
-                                attr("placeholder", "用户名、姓名或电话号码")
-                                style {
-                                    property("flex", "1")
-                                    property("min-width", "0")
-                                    height(36.px)
-                                    padding(0.px, 10.px)
-                                    borderRadius(6.px)
-                                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                                    property("box-sizing", "border-box")
+                    val searchDisabled = busy || query.isBlank()
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            property("gap", "8px")
+                            marginBottom(12.px)
+                        }
+                    }) {
+                        Input(InputType.Text) {
+                            value(query)
+                            onInput { onQueryChange(it.value) }
+                            onKeyDown { event ->
+                                if (event.key == "Enter" && !searchDisabled) {
+                                    event.preventDefault()
+                                    onSearch()
                                 }
                             }
-                            MemberPanelButton(
-                                label = strings.searchButton,
-                                primary = true,
-                                disabled = busy || query.isBlank(),
-                                onClick = onSearch,
-                            )
+                            attr("placeholder", "用户名、姓名或电话号码")
+                            style {
+                                property("flex", "1")
+                                property("min-width", "0")
+                                height(36.px)
+                                padding(0.px, 10.px)
+                                borderRadius(6.px)
+                                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                                property("box-sizing", "border-box")
+                            }
                         }
+                        MemberPanelButton(
+                            label = strings.searchButton,
+                            primary = true,
+                            disabled = searchDisabled,
+                            onClick = onSearch,
+                        )
                     }
 
                     if (loading) {
                         MemberPanelEmptyText(strings.loading)
                     } else if (candidates.isEmpty()) {
-                        MemberPanelEmptyText(
-                            if (usesCandidateSearch && query.isBlank()) {
-                                "输入用户名、姓名或电话号码搜索"
-                            } else {
-                                emptyCandidatesMessage
-                            }
-                        )
+                        MemberPanelEmptyText(emptyCandidatesMessage)
                     } else {
                         candidates.forEach { candidate ->
                             MemberCandidateRow(candidate, busy) { onAdd(candidate.id) }
