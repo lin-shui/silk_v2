@@ -39,6 +39,8 @@ import com.silk.backend.kb.resolveKnowledgeBasePromptContext
 import com.silk.backend.kb.buildMemoryKey
 import com.silk.backend.models.KnowledgeBaseContextSelection
 import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.git.GitContextBuilder
+import com.silk.backend.git.GitEventStore
 import com.silk.backend.workspace.WorkspaceManager
 import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceVisibility
@@ -244,6 +246,7 @@ class ChatServer(
     }
     // 直接调用模型的 Agent（简化流程：让模型自动使用 tool 能力）
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
+    private val gitEventStore = GitEventStore()
     // 用户历史回忆 Agent（/recall 命令使用）
     private val userHistoryAgent = com.silk.backend.ai.UserHistoryAgent()
     private var messagesSinceAgentResponse = 0
@@ -2054,6 +2057,13 @@ class ChatServer(
             )
         }
 
+        val gitContext = if (roomKind == RoomKind.WORKFLOW && sessionName.startsWith("group_")) {
+            val roomId = sessionName.removePrefix("group_")
+            GitContextBuilder.buildForRoom(roomId, gitEventStore.getBinding(roomId), gitEventStore)
+        } else ""
+        val additionalPromptContext = listOfNotNull(kbContext.promptBlock, gitContext.takeIf { it.isNotBlank() })
+            .joinToString("\n\n")
+
         val streamState = AgentStreamState()
         try {
             val activeWorkflowId = sessionName.removePrefix("group_")
@@ -2065,7 +2075,7 @@ class ChatServer(
                 accessibleSessionIds = accessibleSessionIds,
                 historyUserId = userId,
                 availableReferences = kbContext.availableReferences,
-                additionalContext = kbContext.promptBlock,
+                additionalContext = additionalPromptContext.takeIf { it.isNotBlank() },
             ) { stepType, content, isComplete ->
                 handleAgentStepUpdate(callId, stepType, content, streamState)
             }

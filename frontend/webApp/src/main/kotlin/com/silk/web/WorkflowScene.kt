@@ -17,6 +17,7 @@ import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Message
+import com.silk.shared.models.MessageType
 import com.silk.shared.models.MessageScope
 import com.silk.shared.models.RoomSummaryDto
 import com.silk.web.workspace.WorkspaceDto
@@ -85,6 +86,16 @@ private fun shouldSubmitWorkflowMessage(
     if (event.shiftKey) return false
     val isComposing = event.nativeEvent.asDynamic().isComposing == true
     return !isComposing && (messageText.isNotBlank() || hasPendingImage)
+}
+
+internal fun parseGithubIssueAction(action: String, expectedRoomId: String): Int? {
+    val prefix = "github:issue-to-workspace:"
+    if (!action.startsWith(prefix)) return null
+    val payload = action.removePrefix(prefix)
+    val separator = payload.lastIndexOf(':')
+    if (separator <= 0) return null
+    if (payload.take(separator) != expectedRoomId) return null
+    return payload.substring(separator + 1).toIntOrNull()?.takeIf { it > 0 }
 }
 
 @Composable
@@ -223,6 +234,8 @@ private fun WorkflowChatPanel(
     var showFolderExplorer by remember(groupId) { mutableStateOf(false) }
     var isExportingMarkdown by remember(groupId) { mutableStateOf(false) }
     var exportMarkdownHint by remember(groupId) { mutableStateOf<String?>(null) }
+    var showGitIntegration by remember(groupId) { mutableStateOf(false) }
+    var githubIssueNumber by remember(groupId) { mutableStateOf<Int?>(null) }
 
     suspend fun refreshRoomMembers() {
         val response = ApiClient.getWorkflowRoomMembers(workflowId)
@@ -361,6 +374,14 @@ private fun WorkflowChatPanel(
             kbCaptureContent = message.content
             kbCaptureSaving = false
             kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+        }
+    }
+    val onGithubIssueAction: (String) -> Unit = { action ->
+        val issueNumber = parseGithubIssueAction(action, groupId)
+        if (issueNumber == null) {
+            switchError = "GitHub Issue 操作无效，请刷新卡片后重试。"
+        } else {
+            githubIssueNumber = issueNumber
         }
     }
     LaunchedEffect(userId, groupId) {
@@ -594,6 +615,12 @@ private fun WorkflowChatPanel(
                     showRoomMembers = true
                     scope.launch { refreshRoomMembers() }
                 },
+            )
+            ConversationHeaderActionButton(
+                label = "GitHub 集成",
+                icon = "◈",
+                tone = if (showGitIntegration) ConversationActionTone.PRIMARY else ConversationActionTone.DEFAULT,
+                onClick = { showGitIntegration = true },
             )
         } else {
             // Owner 管理完整工作区；Co-pilot 只管理获授权目录。
@@ -832,6 +859,7 @@ private fun WorkflowChatPanel(
                         } == true,
                     onCopy = { content -> copyTextToClipboard(content) },
                     onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+                    onGithubIssueAction = onGithubIssueAction,
                 )
             }
         }
@@ -884,6 +912,7 @@ private fun WorkflowChatPanel(
                     canInteractWithCards = canControlActiveWorkspace,
                     onCopy = { content -> copyTextToClipboard(content) },
                     onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+                    onGithubIssueAction = onGithubIssueAction,
                 )
             } else {
                 TransientMessageItem(message)
@@ -1679,6 +1708,44 @@ private fun WorkflowChatPanel(
             onDismiss = { showFolderExplorer = false },
         )
     }
+    if (showGitIntegration) {
+        GitHubIntegrationDialog(
+            roomId = groupId,
+            canManage = workflowRole == "OWNER",
+            onDismiss = { showGitIntegration = false },
+        )
+    }
+    githubIssueNumber?.let { issueNumber ->
+        GithubIssueWorkspaceDialog(
+            userId = userId,
+            roomId = groupId,
+            issueNumber = issueNumber,
+            agents = availableAgents,
+            initialWorkingDir = activeWorkspace?.workingDir.orEmpty().ifBlank {
+                currentWorkspaces.firstOrNull { it.ownerId == userId && it.lifecycleState == "ACTIVE" }
+                    ?.workingDir.orEmpty()
+            },
+            onDismiss = { githubIssueNumber = null },
+            onCreated = { response ->
+                val created = response.workspace
+                workspaces = workspaces.filterNot { it.workspaceId == created.workspaceId } + created
+                activeTab = created.workspaceId
+                onWorkspaceCreated(created)
+                githubIssueNumber = null
+                workspaceRefreshVersion += 1
+                scope.launch {
+                    chatClient.sendMessage(
+                        userId = userId,
+                        userName = userName,
+                        content = response.issueSummary,
+                        type = MessageType.SYSTEM,
+                        scope = MessageScope.WORKSPACE,
+                        workspaceId = created.workspaceId,
+                    )
+                }
+            },
+        )
+    }
 }
 
 @Suppress("CyclomaticComplexMethod", "LongMethod", "TooGenericExceptionCaught")
@@ -2195,7 +2262,7 @@ private fun WorkspaceManageDialog(
 }
 
 @Composable
-private fun WorkspaceFormLabel(label: String) {
+internal fun WorkspaceFormLabel(label: String) {
     Span({
         style {
             property("display", "block")
@@ -2207,7 +2274,7 @@ private fun WorkspaceFormLabel(label: String) {
     }) { Text(label) }
 }
 
-private fun org.jetbrains.compose.web.css.StyleScope.workspaceFormInputStyle(flex: Boolean = false) {
+internal fun org.jetbrains.compose.web.css.StyleScope.workspaceFormInputStyle(flex: Boolean = false) {
     if (flex) property("flex", "1") else width(100.percent)
     height(40.px)
     borderRadius(6.px)
@@ -2219,7 +2286,7 @@ private fun org.jetbrains.compose.web.css.StyleScope.workspaceFormInputStyle(fle
 }
 
 @Composable
-private fun WorkspacePrimaryButton(label: String, disabled: Boolean, onClick: () -> Unit) {
+internal fun WorkspacePrimaryButton(label: String, disabled: Boolean, onClick: () -> Unit) {
     Button({
         if (disabled) attr("disabled", "")
         style {
@@ -2236,7 +2303,7 @@ private fun WorkspacePrimaryButton(label: String, disabled: Boolean, onClick: ()
 }
 
 @Composable
-private fun WorkspaceSecondaryButton(label: String, disabled: Boolean, onClick: () -> Unit) {
+internal fun WorkspaceSecondaryButton(label: String, disabled: Boolean, onClick: () -> Unit) {
     Button({
         if (disabled) attr("disabled", "")
         style {
@@ -2253,7 +2320,7 @@ private fun WorkspaceSecondaryButton(label: String, disabled: Boolean, onClick: 
 }
 
 @Composable
-private fun WorkspaceDangerButton(label: String, disabled: Boolean, onClick: () -> Unit) {
+internal fun WorkspaceDangerButton(label: String, disabled: Boolean, onClick: () -> Unit) {
     Button({
         if (disabled) attr("disabled", "")
         style {
@@ -2684,9 +2751,10 @@ private fun WorkflowSettingsDialog(
  */
 @Suppress("CyclomaticComplexMethod")
 @Composable
-private fun FolderPickerDialog(
+internal fun FolderPickerDialog(
     userId: String,
     workspaceId: String? = null,
+    zIndex: Int = 2000,
     initialPath: String?,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
@@ -2723,7 +2791,7 @@ private fun FolderPickerDialog(
         onDispose { loadJob?.cancel() }
     }
 
-    ModalOverlay(onDismiss = onDismiss, zIndex = 2000) {
+    ModalOverlay(onDismiss = onDismiss, zIndex = zIndex) {
         Div({
             style {
                 backgroundColor(Color.white)
@@ -3036,7 +3104,7 @@ private fun joinPath(parent: String, child: String, separator: String): String {
  * 使用 ModalOverlay 遮罩层 + 自定义样式按钮，与整体 UI 一致。
  */
 @Composable
-private fun TrustConfirmDialog(
+internal fun TrustConfirmDialog(
     path: String,
     bridgeId: String?,
     onDismiss: () -> Unit,

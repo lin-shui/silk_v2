@@ -262,6 +262,37 @@ data class WorkflowRoomMembersResponse(
 )
 
 @Serializable
+data class GitBindingSummary(
+    val enabled: Boolean = false,
+    val provider: String? = null,
+    val owner: String? = null,
+    val repo: String? = null,
+    val events: List<String> = emptyList(),
+    val lastDeliveryAt: Long? = null,
+    val status: String? = null,
+)
+
+@Serializable
+private data class GitBindingRequestBody(
+    val provider: String = "GITHUB",
+    val repositoryUrl: String,
+    val token: String,
+)
+
+@Serializable
+private data class GitErrorBody(
+    val errorCode: String = "",
+    val message: String = "",
+)
+
+data class GitBindingOperationResult(
+    val success: Boolean,
+    val binding: GitBindingSummary? = null,
+    val errorCode: String = "",
+    val message: String = "",
+)
+
+@Serializable
 data class WorkflowMemberCandidatesResponse(
     val success: Boolean,
     val candidates: List<WorkflowMemberCandidate> = emptyList(),
@@ -695,6 +726,68 @@ object ApiClient {
     suspend fun getVisibleRooms(): List<RoomSummaryDto> {
         val response = get("/api/rooms/visible")
         return jsonParser.decodeFromString(response)
+    }
+
+    suspend fun getGitBinding(roomId: String): GitBindingSummary = try {
+        val response = fetchWithRetry(
+            "/api/rooms/${encodeUri(roomId)}/git/binding",
+            RequestInit(method = "GET", headers = authHeaders()),
+        )
+        val body = response.text().await()
+        if (response.ok) jsonParser.decodeFromString(body) else GitBindingSummary()
+    } catch (e: Exception) {
+        console.log("获取 GitHub 集成状态失败:", e)
+        GitBindingSummary()
+    }
+
+    suspend fun bindGitHub(
+        roomId: String,
+        repositoryUrl: String,
+        token: String,
+    ): GitBindingOperationResult = try {
+        val body = jsonParser.encodeToString(
+            GitBindingRequestBody.serializer(),
+            GitBindingRequestBody(repositoryUrl = repositoryUrl, token = token),
+        )
+        val response = fetchWithRetry(
+            "/api/rooms/${encodeUri(roomId)}/git/binding",
+            RequestInit(method = "POST", headers = authHeaders(), body = body),
+        )
+        val responseBody = response.text().await()
+        if (response.ok) {
+            GitBindingOperationResult(true, binding = jsonParser.decodeFromString(responseBody))
+        } else {
+            val error = runCatching { jsonParser.decodeFromString<GitErrorBody>(responseBody) }.getOrNull()
+            GitBindingOperationResult(
+                false,
+                errorCode = error?.errorCode.orEmpty(),
+                message = error?.message ?: "GitHub 绑定失败（HTTP ${response.status}）",
+            )
+        }
+    } catch (e: Exception) {
+        console.error("绑定 GitHub 失败:", e)
+        GitBindingOperationResult(false, message = "网络错误")
+    }
+
+    suspend fun unbindGitHub(roomId: String): GitBindingOperationResult = try {
+        val response = fetchWithRetry(
+            "/api/rooms/${encodeUri(roomId)}/git/binding",
+            RequestInit(method = "DELETE", headers = authHeaders()),
+        )
+        val responseBody = response.text().await()
+        if (response.ok) {
+            GitBindingOperationResult(true)
+        } else {
+            val error = runCatching { jsonParser.decodeFromString<GitErrorBody>(responseBody) }.getOrNull()
+            GitBindingOperationResult(
+                false,
+                errorCode = error?.errorCode.orEmpty(),
+                message = error?.message ?: "GitHub 解绑失败（HTTP ${response.status}）",
+            )
+        }
+    } catch (e: Exception) {
+        console.error("解绑 GitHub 失败:", e)
+        GitBindingOperationResult(false, message = "网络错误")
     }
 
     suspend fun createRoom(request: CreateRoomRequest): CreateRoomResponse? {

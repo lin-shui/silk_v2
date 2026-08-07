@@ -7,7 +7,7 @@
 
 **最近完成**：Phase 2.5 于 2026-08-05 完成统一 Room 导航、显式 RoomKind、跨端合同兼容和自动化验证。
 
-**下一步计划**：完成 [Unified Room Navigation 与显式 RoomKind](2026-08-04-unified-room-navigation.md) 的双账号、窄屏和 cc-connect 手工验收，再进入 Phase 3 GitHub 集成 MVP。
+**下一步计划**：完成 Unified Room Navigation 的双账号、窄屏和 cc-connect 手工验收后，按 [Phase 3：Workflow Room GitHub 集成 MVP](2026-08-06-phase3-github-integration-mvp.md) 开始 GitHub 集成；功能默认关闭，只有 Workflow Room Owner 主动绑定仓库后才注册 Webhook、推送事件和注入 GitHub 上下文。
 
 ---
 
@@ -639,6 +639,8 @@ backend/src/main/kotlin/com/silk/backend/
 ### Phase 3：GitHub 集成 MVP
 
 **目标**：GitHub 事件自动推送到 Team Channel，支持 Issue 一键开启工作区。
+
+详细执行计划：[Phase 3：Workflow Room GitHub 集成 MVP](2026-08-06-phase3-github-integration-mvp.md)。Phase 3 的产品边界是可选开启：没有 active binding 时，Team Channel 保持现有行为。
 
 - [ ] `GitHubClient` + 仓库绑定 API（PAT）
 - [ ] Webhook 接收端点（HMAC 验证 + 事件解析）

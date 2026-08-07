@@ -27,6 +27,7 @@ data class PersonalWorkspace(
     val copilots: List<String> = emptyList(),
     val lifecycleState: WorkspaceLifecycleState = WorkspaceLifecycleState.ACTIVE,
     val archivedAt: Long? = null,
+    val linkedGithubRef: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )

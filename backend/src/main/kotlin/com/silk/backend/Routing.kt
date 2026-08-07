@@ -91,6 +91,13 @@ import com.silk.backend.routes.obsidianRoutes
 import com.silk.backend.routes.roomRoutes
 import com.silk.backend.routes.workspaceRoutes
 import com.silk.backend.routes.workflowRoomRoutes
+import com.silk.backend.routes.gitRoutes
+import com.silk.backend.git.GitEventBroadcaster
+import com.silk.backend.git.GitEventStore
+import com.silk.backend.git.GitEventSummaryService
+import com.silk.backend.git.GitEncryption
+import com.silk.backend.git.GitHubClient
+import com.silk.backend.git.GitHubRepositoryRef
 import com.silk.backend.workspace.WorkspaceManager
 import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceLifecycleState
@@ -167,6 +174,7 @@ import org.slf4j.LoggerFactory
 // 群组聊天服务器映射（每个群组一个ChatServer实例）
 private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
+private val gitEventSummaryService = GitEventSummaryService()
 private data class WorkflowStorageManagers(
     val workflowManager: WorkflowManager,
     val workspaceManager: WorkspaceManager,
@@ -301,7 +309,11 @@ internal fun getGroupChatServer(groupId: String): ChatServer {
         val sessionName = "group_$groupId"
         val group = GroupRepository.findGroupById(groupId)
         val isWorkflowRoom = com.silk.backend.rooms.isWorkflowRoom(groupId, workflowManager, workspaceManager)
-        ChatServer(sessionName, workspaceManager, group?.roomKind ?: RoomKind.CHAT).also {
+        ChatServer(
+            sessionName,
+            workspaceManager,
+            if (isWorkflowRoom) RoomKind.WORKFLOW else group?.roomKind ?: RoomKind.CHAT,
+        ).also {
             logger.info("🆕 创建新的群组聊天服务器: {} (workflowRoom={})", sessionName, isWorkflowRoom)
         }
     }
@@ -434,6 +446,24 @@ fun Application.configureRouting() {
                 groupChatServers[roomId]?.revokeRoomMember(userId)
             },
             onRoomDeleted = { roomId, memberIds ->
+                val gitStore = GitEventStore()
+                val gitBinding = gitStore.getBinding(roomId)
+                if (gitBinding?.hookId != null) {
+                    runCatching {
+                        val key = GitEncryption.configuredKey()
+                        val token = GitEncryption.decrypt(gitBinding.tokenEncrypted, key)
+                        GitHubClient().use { client ->
+                            client.deleteHook(
+                                GitHubRepositoryRef(gitBinding.owner, gitBinding.repo),
+                                gitBinding.hookId,
+                                token,
+                            )
+                        }
+                    }.onFailure {
+                        logger.warn("Unable to remove GitHub webhook while deleting room {}: {}", roomId, it.message)
+                    }
+                }
+                gitStore.removeBinding(roomId)
                 groupChatServers.remove(roomId)?.let { chatServer ->
                     memberIds.forEach { userId -> chatServer.revokeRoomMember(userId) }
                 }
@@ -451,6 +481,26 @@ fun Application.configureRouting() {
             workspaceManager = workspaceManager,
             onMemberRevoked = { roomId, userId ->
                 groupChatServers[roomId]?.revokeRoomMember(userId)
+            },
+        )
+        gitRoutes(
+            workflowManager = workflowManager,
+            workspaceManager = workspaceManager,
+            trustedDirManager = trustedDirManager,
+            onEvent = { event ->
+                if (GroupRepository.findGroupById(event.roomId) != null) {
+                    val chatServer = getGroupChatServer(event.roomId)
+                    chatServer.broadcast(GitEventBroadcaster.message(event))
+                    runCatching { gitEventSummaryService.summarize(event) }
+                        .onSuccess { summary ->
+                            if (!summary.isNullOrBlank()) {
+                                chatServer.broadcast(GitEventBroadcaster.summaryMessage(event, summary))
+                            }
+                        }
+                        .onFailure { error ->
+                            logger.warn("GitHub AI summary failed for delivery {}: {}", event.deliveryId, error.message)
+                        }
+                }
             },
         )
         chatWebSocketRoute()

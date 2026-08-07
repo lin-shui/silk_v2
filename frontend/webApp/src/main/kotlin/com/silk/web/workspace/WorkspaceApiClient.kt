@@ -34,12 +34,28 @@ data class WorkspaceDto(
     val activity: WorkspaceActivityDto = WorkspaceActivityDto(),
     val createdAt: Long = 0L,
     val recentActivityAt: Long = 0L,
+    val linkedGithubRef: String? = null,
     val historyOnly: Boolean = false,
+)
+
+@Serializable
+data class IssueToWorkspaceResponse(
+    val workspace: WorkspaceDto,
+    val issueSummary: String,
 )
 
 @Serializable
 private data class CreateWorkspaceRequest(
     val name: String,
+    val workingDir: String,
+    val agentType: String,
+    val visibility: String,
+)
+
+@Serializable
+private data class IssueToWorkspaceRequest(
+    val issueNumber: Int,
+    val name: String? = null,
     val workingDir: String,
     val agentType: String,
     val visibility: String,
@@ -119,6 +135,28 @@ suspend fun createWorkspace(
             headers = authHeaders(authToken, jsonBody = true),
             body = workspaceJson.encodeToString(
                 CreateWorkspaceRequest(name, workingDir, agentType, visibility)
+            ),
+        ),
+    ).await().requireSuccess()
+    return workspaceJson.decodeFromString(response.text().await())
+}
+
+suspend fun createWorkspaceFromGithubIssue(
+    roomId: String,
+    authToken: String,
+    issueNumber: Int,
+    workingDir: String,
+    agentType: String = "claude-code",
+    visibility: String = "PRIVATE",
+    name: String? = null,
+): IssueToWorkspaceResponse {
+    val response = window.fetch(
+        "${backendHttpOrigin()}/api/rooms/$roomId/git/issue-to-workspace",
+        RequestInit(
+            method = "POST",
+            headers = authHeaders(authToken, jsonBody = true),
+            body = workspaceJson.encodeToString(
+                IssueToWorkspaceRequest(issueNumber, name, workingDir, agentType, visibility)
             ),
         ),
     ).await().requireSuccess()
