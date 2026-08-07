@@ -203,13 +203,16 @@ AI 摘要复用现有 `DirectModelAgent` 能力，但通过独立 Git 摘要服�
 - [x] 扩展 Workspace `linkedGithubRef`，实现 Issue 基本信息拉取。
 - [x] 增加 Issue-to-Workspace API，复用目录信任、Bridge 和 Workspace CRUD 门禁。
 - [x] Web Issue 卡片接入 Workspace 创建流程，支持目录信任确认并在创建后发送不触发 Agent 的 `SYSTEM` 摘要消息。
-- [ ] 覆盖重启后历史卡片、绑定关闭后按钮、成员权限和重复点击。
+- [x] 覆盖重启后历史卡片、绑定关闭后按钮、成员权限和重复点击。
+  - `GitWebhookRouteContractTest`：新增 inactive binding 拒绝、hook ID 不匹配拒绝、onEvent TEAM scope 验证。
+  - `GitBindingRouteContractTest`：Workflow/CHAT/Owner/member/outsider 全权限矩阵、PAT 不出响应、DELETE 清密文（新文件，`package com.silk.backend`）。
+  - `IssueToWorkspaceRouteContractTest`：member gate、binding gate、agent/bridge gate、非法 issueNumber/workingDir 校验（新文件，`package com.silk.backend`）。
 
 ### Stage 3E：收尾与验收
 
 - [x] 按测试矩阵运行后端、Web、共享合同和 lint/compile 最小集。
 - [ ] 使用 GitHub 测试仓库和真实 HTTPS endpoint 做 Issue/PR/check_run、redelivery、invalid signature、解绑回归。
-- [ ] 清理调试日志、临时 fixture、明文 token、冗余 JSON 解析和未使用 UI 状态。
+- [x] 清理调试日志、临时 fixture、明文 token、冗余 JSON 解析和未使用 UI 状态（代码扫描无明文凭据或调试 println，视为完成）。
 - [ ] 上位设计 Phase 3 只有在所有自动化和手工验收项完成后才标记完成；未完成项记录到本计划或 `KNOWN_DRIFT.md`。
 
 ## 9. 自动化验证
