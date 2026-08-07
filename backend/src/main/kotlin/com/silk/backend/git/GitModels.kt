@@ -6,6 +6,15 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class GitProvider { GITHUB }
 
+/**
+ * How events reach a room. Decided once at bind time and persisted: re-deciding
+ * per event would silently switch an existing binding when the deployment adds
+ * GITHUB_WEBHOOK_BASE_URL later, and GitHub would have no hook registered.
+ * Bindings written before Phase 3F have no value and default to WEBHOOK.
+ */
+@Serializable
+enum class GitIntegrationMode { WEBHOOK, POLLING }
+
 @Serializable
 data class RoomGitBinding(
     val roomId: String,
@@ -21,6 +30,12 @@ data class RoomGitBinding(
     val updatedAt: Long,
     val lastDeliveryAt: Long? = null,
     val status: GitBindingStatus = GitBindingStatus.ACTIVE,
+    val mode: GitIntegrationMode = GitIntegrationMode.WEBHOOK,
+    /** Highest processed updated_at watermark, epoch millis. POLLING only. */
+    val pollCursor: Long? = null,
+    /** ETag of the last /issues response; a 304 reply costs no rate limit. */
+    val issuesEtag: String? = null,
+    val lastPolledAt: Long? = null,
 )
 
 @Serializable
@@ -58,6 +73,10 @@ data class GitBindingDto(
     val events: List<String> = listOf("issues", "pull_request", "check_run"),
     val lastDeliveryAt: Long? = null,
     val status: GitBindingStatus? = null,
+    val mode: GitIntegrationMode? = null,
+    val lastPolledAt: Long? = null,
+    /** Lets the client show the actual sync cadence instead of hardcoding it. */
+    val pollIntervalSeconds: Int? = null,
 )
 
 @Serializable
@@ -88,6 +107,13 @@ fun RoomGitBinding.toDto(): GitBindingDto = GitBindingDto(
     provider = provider,
     owner = owner,
     repo = repo,
+    events = when (mode) {
+        GitIntegrationMode.POLLING -> listOf("issues", "pull_request")
+        else -> listOf("issues", "pull_request", "check_run")
+    },
     lastDeliveryAt = lastDeliveryAt,
     status = status,
+    mode = mode,
+    lastPolledAt = lastPolledAt,
+    pollIntervalSeconds = if (mode == GitIntegrationMode.POLLING) GitConfig.pollIntervalSeconds else null,
 )

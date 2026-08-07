@@ -98,6 +98,7 @@ import com.silk.backend.git.GitEventSummaryService
 import com.silk.backend.git.GitEncryption
 import com.silk.backend.git.GitHubClient
 import com.silk.backend.git.GitHubRepositoryRef
+import com.silk.backend.git.GitPollingScheduler
 import com.silk.backend.workspace.WorkspaceManager
 import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceLifecycleState
@@ -175,6 +176,17 @@ import org.slf4j.LoggerFactory
 private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
 private val gitEventSummaryService = GitEventSummaryService()
+private val gitPollingScheduler = GitPollingScheduler(
+    store = GitEventStore(),
+    onEvent = { event ->
+        val chatServer = groupChatServers[event.roomId] ?: return@GitPollingScheduler
+        chatServer.broadcast(GitEventBroadcaster.message(event))
+        runCatching { gitEventSummaryService.summarize(event) }
+            .onSuccess { summary ->
+                if (!summary.isNullOrBlank()) chatServer.broadcast(GitEventBroadcaster.summaryMessage(event, summary))
+            }
+    },
+)
 private data class WorkflowStorageManagers(
     val workflowManager: WorkflowManager,
     val workspaceManager: WorkspaceManager,
@@ -505,6 +517,13 @@ fun Application.configureRouting() {
         )
         chatWebSocketRoute()
         audioDuplexRoute()
+        val routingScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO +
+            kotlinx.coroutines.SupervisorJob())
+        gitPollingScheduler.start(routingScope)
+        environment?.monitor?.subscribe(io.ktor.server.application.ApplicationStopping) {
+            gitPollingScheduler.stop()
+            routingScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        }
     }
 }
 

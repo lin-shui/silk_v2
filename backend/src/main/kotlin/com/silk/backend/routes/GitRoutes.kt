@@ -16,6 +16,7 @@ import com.silk.backend.git.GitEventParser
 import com.silk.backend.git.GitEventRecord
 import com.silk.backend.git.GitEventStore
 import com.silk.backend.git.GitHubApiException
+import com.silk.backend.git.GitIntegrationMode
 import com.silk.backend.git.GitHubClient
 import com.silk.backend.git.GitHubRepositoryRef
 import com.silk.backend.git.RoomGitBinding
@@ -161,11 +162,8 @@ private fun Route.routeBindingRoutes(
             return@post call.respond(HttpStatusCode.PreconditionFailed, GitErrorResponse("ENCRYPTION_NOT_CONFIGURED", it.message.orEmpty()))
         }
         val callbackBase = GitConfig.webhookBaseUrl?.trimEnd('/')
-            ?: return@post call.respond(HttpStatusCode.PreconditionFailed, GitErrorResponse("WEBHOOK_URL_REQUIRED", "未配置 GITHUB_WEBHOOK_BASE_URL"))
-        if (!isUsableCallbackBase(callbackBase)) {
-            return@post call.respond(HttpStatusCode.PreconditionFailed, GitErrorResponse("WEBHOOK_URL_REQUIRED", "Webhook 地址必须是公开 HTTPS URL"))
-        }
-        val callbackUrl = callbackBase + DEFAULT_CALLBACK_PATH + roomId
+        val useWebhook = callbackBase != null && isUsableCallbackBase(callbackBase)
+        val callbackUrl = if (useWebhook) callbackBase!! + DEFAULT_CALLBACK_PATH + roomId else ""
         val secret = ByteArray(GitConfig.webhookSecretBytes).also(SecureRandom()::nextBytes)
         val secretText = Base64.getEncoder().encodeToString(secret)
         val oldBinding = store.getBinding(roomId)
@@ -173,23 +171,34 @@ private fun Route.routeBindingRoutes(
         var createdHookId: Long? = null
         try {
             githubClient.getRepository(ref, request.token)
-            val hook = githubClient.reconcileHook(ref, request.token, callbackUrl, secretText)
-            if (hook.created) createdHookId = hook.hook.id
+            val hookId: Long?
+            if (useWebhook) {
+                val hook = githubClient.reconcileHook(ref, request.token, callbackUrl, secretText)
+                if (hook.created) createdHookId = hook.hook.id
+                hookId = hook.hook.id
+            } else {
+                hookId = null
+            }
             val now = System.currentTimeMillis()
+            val mode = if (useWebhook) GitIntegrationMode.WEBHOOK else GitIntegrationMode.POLLING
             val binding = RoomGitBinding(
                 roomId = roomId,
                 owner = ref.owner,
                 repo = ref.repo,
-                hookId = hook.hook.id,
+                hookId = hookId,
                 webhookUrl = callbackUrl,
                 tokenEncrypted = GitEncryption.encrypt(request.token, encryptionKey),
                 webhookSecretEncrypted = GitEncryption.encrypt(secretText, encryptionKey),
                 createdBy = oldBinding?.createdBy ?: caller,
                 createdAt = oldBinding?.createdAt ?: now,
                 updatedAt = now,
+                mode = mode,
+                pollCursor = if (mode == GitIntegrationMode.POLLING) now else null,
             )
             store.putBinding(binding)
-            if (oldBinding != null && (oldBinding.hookId != hook.hook.id || oldRef?.fullName != ref.fullName)) {
+            val oldWasWebhook = oldBinding != null && oldBinding.mode == GitIntegrationMode.WEBHOOK
+            val hookChanged = oldBinding?.hookId != hookId || oldRef?.fullName != ref.fullName
+            if (oldWasWebhook && hookChanged) {
                 runCatching {
                     val oldToken = GitEncryption.decrypt(oldBinding.tokenEncrypted, encryptionKey)
                     oldRef?.let { oldBinding.hookId?.let { id -> githubClient.deleteHook(it, id, oldToken) } }

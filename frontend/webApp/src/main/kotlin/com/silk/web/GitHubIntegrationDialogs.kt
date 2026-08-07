@@ -117,11 +117,26 @@ internal fun GitHubIntegrationDialog(
                             Text("${current.owner}/${current.repo}")
                         }
                         Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(4.px) } }) {
+                            Text("同步方式：${transportModeLabel(current)}")
+                        }
+                        Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(2.px) } }) {
                             Text("事件：${current.events.joinToString(", ").ifBlank { "issues" }}")
                         }
-                        current.lastDeliveryAt?.let { timestamp ->
+                        if (isPollingMode(current.mode)) {
+                            Div({
+                                style {
+                                    fontSize(11.px); color(Color("#B26A00")); marginTop(4.px)
+                                    property("background", "#FFF8E6")
+                                    property("padding", "4px 6px")
+                                    borderRadius(4.px)
+                                }
+                            }) {
+                                Text("ℹ CI 检查事件不可用（无公网入口）。需要配置 GITHUB_WEBHOOK_BASE_URL 后重新绑定可启用。")
+                            }
+                        }
+                        lastActivityAt(current)?.let { timestamp ->
                             Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(2.px) } }) {
-                                Text("最近接收：$timestamp")
+                                Text("最近同步：$timestamp")
                             }
                         }
                     }

@@ -15,4 +15,9 @@ object GitConfig {
         get() = value("GITHUB_API_TIMEOUT_MS")?.toLongOrNull()?.takeIf { it > 0 } ?: 15_000L
 
     val webhookSecretBytes: Int get() = 32
+
+    /** Polling interval in seconds. Floor of 20 guards against secondary rate limits. */
+    val pollIntervalSeconds: Int
+        get() = (value("GITHUB_POLL_INTERVAL_SECONDS")?.toIntOrNull()?.takeIf { it > 0 } ?: 60)
+            .coerceAtLeast(20)
 }

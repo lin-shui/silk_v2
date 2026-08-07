@@ -108,6 +108,30 @@ class GitEventStore(
 
     private fun deliveryKey(roomId: String, deliveryId: String): String = "$roomId\u0000$deliveryId"
 
+    @Synchronized
+    fun listPollableBindings(): List<RoomGitBinding> =
+        load().bindings.filter {
+            it.mode == GitIntegrationMode.POLLING && it.status == GitBindingStatus.ACTIVE
+        }
+
+    /** Advance poll watermark. Cursor only moves forward; etag/timestamp always overwrite. */
+    @Synchronized
+    fun updatePollState(roomId: String, cursor: Long?, etag: String?, polledAt: Long): RoomGitBinding? {
+        val store = load()
+        val idx = store.bindings.indexOfFirst { it.roomId == roomId }
+        if (idx < 0) return null
+        val current = store.bindings[idx]
+        val updated = current.copy(
+            pollCursor = if (cursor != null && (current.pollCursor == null || cursor > current.pollCursor)) cursor
+                         else current.pollCursor,
+            issuesEtag = etag ?: current.issuesEtag,
+            lastPolledAt = polledAt,
+            updatedAt = maxOf(current.updatedAt, polledAt),
+        )
+        save(store.copy(bindings = store.bindings.toMutableList().also { it[idx] = updated }))
+        return updated
+    }
+
     private fun prune(store: GitIntegrationStoreData, currentTime: Long): GitIntegrationStoreData {
         val cutoff = currentTime - deliveryTtlMs
         val ids = store.processedDeliveryIds.filterValues { it >= cutoff }

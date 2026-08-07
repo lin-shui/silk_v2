@@ -89,4 +89,84 @@ object GitEventParser {
         runCatching { it.jsonObject.string("name") }.getOrNull() ?: it.jsonPrimitive.contentOrNull
     }.map { it.bounded(80) }
     private fun String?.bounded(limit: Int = MAX_FIELD_LENGTH): String = this.orEmpty().trim().take(limit)
+
+    // ── Polling-mode API list parsing ──────────────────────────────────────────
+
+    /**
+     * Parse GitHub API list items (from [GitHubClient.listIssuesAndPulls]) into
+     * [GitEventRecord]s.  The shape differs from webhook payloads so this is a
+     * separate path; the [parse] method is not involved.
+     */
+    fun parseIssueList(
+        items: List<GitHubIssueListItem>,
+        roomId: String,
+        pollCursorMs: Long,
+        createdAt: Long = System.currentTimeMillis(),
+    ): List<GitEventRecord> = items.mapNotNull { item ->
+        runCatching { parseIssueListItem(item, roomId, pollCursorMs, createdAt) }.getOrNull()
+    }
+
+    /**
+     * Whether this action warrants a Team Channel CARD broadcast.
+     * `updated` events are recorded for cursor/dedup but not broadcast — title or
+     * label changes would flood the channel.
+     */
+    fun shouldBroadcast(action: String): Boolean = action != "updated"
+
+    /**
+     * Stable synthetic delivery ID for polling dedup.
+     * Same resource + same updated_at → same key → [GitEventStore.recordDelivery] deduplicates.
+     */
+    fun pollDeliveryId(event: String, number: Int, updatedAt: String): String =
+        "poll:$event:$number:${updatedAt.take(50)}".take(200)
+
+    private fun parseIssueListItem(
+        item: GitHubIssueListItem,
+        roomId: String,
+        pollCursorMs: Long,
+        createdAt: Long,
+    ): GitEventRecord? {
+        if (item.number <= 0) return null
+        val event = if (item.pull_request != null) "pull_request" else "issues"
+        val action = inferAction(item, pollCursorMs)
+        val actor = item.user.login.take(MAX_FIELD_LENGTH)
+        val labels = item.labels.joinToString(", ") { it.name.take(80) }
+        val summary = buildString {
+            append(event).append('/').append(action)
+            if (item.title.isNotBlank()) append(" | ").append(item.title.take(MAX_FIELD_LENGTH))
+            if (actor.isNotBlank()) append(" | by ").append(actor)
+            if (item.state.isNotBlank()) append(" | state=").append(item.state)
+            if (labels.isNotBlank()) append(" | labels=").append(labels.take(MAX_FIELD_LENGTH))
+        }.take(MAX_FIELD_LENGTH)
+        return GitEventRecord(
+            deliveryId = pollDeliveryId(event, item.number, item.updated_at),
+            roomId = roomId.take(200),
+            event = event,
+            action = action,
+            repository = "",
+            issueNumber = item.number,
+            title = item.title.take(MAX_FIELD_LENGTH),
+            htmlUrl = item.html_url.take(MAX_FIELD_LENGTH),
+            summary = summary,
+            createdAt = createdAt,
+        )
+    }
+
+    internal fun inferAction(item: GitHubIssueListItem, pollCursorMs: Long): String {
+        fun isoToMs(s: String?): Long? = s?.let {
+            runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull()
+        }
+        val createdMs = isoToMs(item.created_at)
+        val closedMs = isoToMs(item.closed_at)
+        // New: created within this poll window and currently open
+        if (createdMs != null && createdMs > pollCursorMs && item.state == "open") return "opened"
+        // Reopened: only detectable on issues via state_reason; PRs lack this field
+        if (item.pull_request == null && item.state_reason == "reopened") return "reopened"
+        // Merged PR: merged_at is visible even through the /issues endpoint
+        if (item.pull_request?.merged_at != null) return "merged"
+        // Closed within poll window
+        if (item.state == "closed" && closedMs != null && closedMs > pollCursorMs) return "closed"
+        // Default: title/label/body/comment change — not worth a card
+        return "updated"
+    }
 }

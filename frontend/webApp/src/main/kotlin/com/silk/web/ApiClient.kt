@@ -270,7 +270,26 @@ data class GitBindingSummary(
     val events: List<String> = emptyList(),
     val lastDeliveryAt: Long? = null,
     val status: String? = null,
+    val mode: String? = null,
+    val lastPolledAt: Long? = null,
+    val pollIntervalSeconds: Int? = null,
 )
+
+/** POLLING 绑定不注册 Webhook，CI 检查事件不可用；文案需让用户理解这个差异。 */
+internal fun transportModeLabel(binding: GitBindingSummary): String =
+    if (isPollingMode(binding.mode)) {
+        "定时同步（约 ${binding.pollIntervalSeconds ?: DEFAULT_POLL_INTERVAL_SECONDS} 秒）"
+    } else {
+        "实时推送（Webhook）"
+    }
+
+internal fun isPollingMode(mode: String?): Boolean = mode == "POLLING"
+
+/** 已连接区块的「最近接收」时间：Webhook 用投递时间，POLLING 用轮询完成时间。 */
+internal fun lastActivityAt(binding: GitBindingSummary): Long? =
+    binding.lastDeliveryAt ?: binding.lastPolledAt
+
+private const val DEFAULT_POLL_INTERVAL_SECONDS = 60
 
 @Serializable
 private data class GitBindingRequestBody(

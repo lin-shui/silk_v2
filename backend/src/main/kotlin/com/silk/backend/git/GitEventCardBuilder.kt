@@ -10,12 +10,25 @@ object GitEventCardBuilder {
         val template = when {
             event.event == "check_run" && event.summary.contains("conclusion=failure") -> "red"
             event.event == "check_run" -> "green"
+            event.event == "pull_request" && event.action == "merged" -> "green"
             event.event == "pull_request" -> "purple"
             else -> "blue"
         }
         val title = when (event.event) {
-            "issues" -> "GitHub Issue ${event.action}"
-            "pull_request" -> "GitHub Pull Request ${event.action}"
+            "issues" -> when (event.action) {
+                "opened" -> "GitHub Issue 已创建"
+                "closed" -> "GitHub Issue 已关闭"
+                "reopened" -> "GitHub Issue 已重新打开"
+                else -> "GitHub Issue ${event.action}"
+            }
+            "pull_request" -> when (event.action) {
+                "opened" -> "GitHub Pull Request 已创建"
+                "merged" -> "GitHub Pull Request 已合并"
+                "closed" -> "GitHub Pull Request 已关闭"
+                "reopened" -> "GitHub Pull Request 已重新打开"
+                "ready_for_review" -> "GitHub Pull Request 可供审查"
+                else -> "GitHub Pull Request ${event.action}"
+            }
             "check_run" -> "GitHub Check Run ${event.action}"
             else -> "GitHub event"
         }

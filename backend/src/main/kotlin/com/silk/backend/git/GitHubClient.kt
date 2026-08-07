@@ -79,6 +79,35 @@ data class GitHubCommentResponse(
     val created_at: String = "",
 )
 
+@Serializable
+data class GitHubIssueListItem(
+    val number: Int = 0,
+    val title: String = "",
+    val html_url: String = "",
+    val state: String = "",
+    val state_reason: String? = null,
+    val created_at: String = "",
+    val updated_at: String = "",
+    val closed_at: String? = null,
+    val user: GitHubUser = GitHubUser(),
+    val labels: List<GitHubLabel> = emptyList(),
+    /** Present on items that are pull requests. */
+    val pull_request: GitHubPrRef? = null,
+)
+
+@Serializable
+data class GitHubPrRef(
+    val url: String = "",
+    val merged_at: String? = null,
+)
+
+/** Result of a conditional GET. `request()` is NOT involved; this path is polling-only. */
+sealed interface ConditionalGetResult {
+    data class Modified(val etag: String?, val items: List<GitHubIssueListItem>) : ConditionalGetResult
+    /** GitHub returned 304 — no quota consumed. */
+    data object NotModified : ConditionalGetResult
+}
+
 class GitHubApiException(val status: HttpStatusCode, message: String) : RuntimeException(message)
 
 data class GitHubHookReconcileResult(val hook: GitHubHook, val created: Boolean)
@@ -142,6 +171,35 @@ class GitHubClient(
         request("GET", "/repos/${ref.owner}/${ref.repo}/issues/$issueNumber/comments?per_page=20", token).body()
 
     override fun close() = client.close()
+
+    /**
+     * Polling-only conditional GET for /issues (returns both issues and PRs).
+     * Uses a separate code path so the existing [request] method and all Hook
+     * calls are completely unaffected.  A 304 response costs no primary quota.
+     */
+    suspend fun listIssuesAndPulls(
+        ref: GitHubRepositoryRef,
+        token: String,
+        sinceEpochMs: Long,
+        etag: String? = null,
+    ): ConditionalGetResult {
+        require(token.isNotBlank()) { "GitHub token must not be blank" }
+        val since = java.time.Instant.ofEpochMilli(sinceEpochMs)
+            .toString()          // ISO-8601, e.g. 2026-08-07T10:00:00Z
+        val path = "/repos/${ref.owner}/${ref.repo}/issues" +
+            "?since=$since&state=all&sort=updated&direction=desc&per_page=50"
+        val response = client.get(url(path)) {
+            headers(token)
+            if (etag != null) header(HttpHeaders.IfNoneMatch, etag)
+        }
+        if (response.status == HttpStatusCode.NotModified) return ConditionalGetResult.NotModified
+        if (response.status.value !in 200..299) {
+            throw GitHubApiException(response.status, "GitHub issues list failed (${response.status.value})")
+        }
+        val newEtag = response.headers[HttpHeaders.ETag]
+        val items = response.body<List<GitHubIssueListItem>>()
+        return ConditionalGetResult.Modified(newEtag, items)
+    }
 
     private fun hookRequest(callbackUrl: String, secret: String) = GitHubHookRequest(
         config = GitHubHookConfig(url = callbackUrl, content_type = "json", insecure_ssl = "0", secret = secret),

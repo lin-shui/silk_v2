@@ -10,6 +10,7 @@ import com.silk.backend.git.GitBindingDto
 import com.silk.backend.git.GitBindingRequest
 import com.silk.backend.git.GitBindingStatus
 import com.silk.backend.git.GitEncryption
+import com.silk.backend.git.GitErrorResponse
 import com.silk.backend.git.GitEventStore
 import com.silk.backend.git.RoomGitBinding
 import com.silk.shared.models.CreateRoomRequest
@@ -35,6 +36,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class GitBindingRouteContractTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -179,6 +181,55 @@ class GitBindingRouteContractTest {
                         header(HttpHeaders.Authorization, "Bearer $ownerToken")
                     }.status)
                 assertNull(gitStore.getBinding(roomId), "Binding must be cleared from store after unbind")
+            }
+        }
+    }
+
+    /**
+     * Phase 3F: when GITHUB_WEBHOOK_BASE_URL is absent (as in every test env),
+     * the bind request must NO LONGER return 412 WEBHOOK_URL_REQUIRED.
+     * Instead it falls through to GitHub validation and fails on the fake PAT
+     * with a GitHub API error — proving the polling-mode branch is taken.
+     */
+    @Test
+    fun `binding without webhook url falls through to polling mode not 412`() {
+        TestWorkspace().use { _ ->
+            testApplication {
+                application { module() }
+
+                val owner = makeUser("poll-mode-owner", "13905000001")
+                val ownerToken = JwtProvider.generateAccessToken(owner.id)
+
+                val workflowResp = client.post("/api/rooms") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(CreateRoomRequest("Poll Room", RoomKind.WORKFLOW)))
+                }.decode<CreateRoomResponse>()
+                val roomId = workflowResp.room.roomId
+
+                // No GITHUB_WEBHOOK_BASE_URL in test env → must NOT get 412 WEBHOOK_URL_REQUIRED.
+                // GitHub validation rejects the fake PAT with 4xx, confirming the polling branch ran.
+                val response = client.post("/api/rooms/$roomId/git/binding") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(
+                        GitBindingRequest(repositoryUrl = "https://github.com/octo/demo", token = "fake-pat")))
+                }
+                val body = response.bodyAsText()
+                val errorCode = runCatching {
+                    json.decodeFromString<GitErrorResponse>(body).errorCode
+                }.getOrDefault("")
+
+                // Must not be the webhook-URL error from pre-3F behaviour
+                assertFalse(
+                    errorCode == "WEBHOOK_URL_REQUIRED",
+                    "Expected polling-mode fallback, got WEBHOOK_URL_REQUIRED: $body",
+                )
+                // Should be a GitHub API error (fake PAT → 401) or bad-gateway
+                assertTrue(
+                    response.status.value in 400..502,
+                    "Expected a GitHub-related error, got: ${response.status}",
+                )
             }
         }
     }
