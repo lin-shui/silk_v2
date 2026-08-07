@@ -27,6 +27,7 @@
 | Workflow store | `~/.silk-data/workflows/workflow_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `WorkflowManager` |
 | Personal workspace store | `~/.silk-data/workflows/workspace_store.json`, override 同上 | `WorkspaceManager`（Agent runtime、可见性、Co-pilot、ACTIVE/ARCHIVED 生命周期、最近活动） |
 | Trusted directories | `~/.silk-data/workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |
+| GitHub integration | `~/.silk-data/workflows/git_integration_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `git/GitEventStore`（binding 密文、截断事件、delivery 去重；旧文件不存在等价于关闭） |
 | KB store | `knowledge_base/kb_store.json` (JSON) or PostgreSQL (`SILK_KB_STORE=postgres` + `docker-compose-pg.yml`) | `KnowledgeBaseManager`（topic-level personal/team scope、ACL、旧 store 兼容读取；PG 后端通过 `PgKnowledgeBaseRepository` 实现） |
 | KB context preferences | `knowledge_base/context_preferences.json` (co-located with KB store) | `KnowledgeBaseContextPreferenceStore`（用户级 `excludedSpaceIds` 长期偏好，以及 `memoryEnabled` / `autoCaptureEnabled` / `ephemeralSessionEnabled` 开关；`GET/PUT /api/kb/context-preferences`） |
 | Web static / APK / HAP | `backend/static/` | 后端静态分发 |

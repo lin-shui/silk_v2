@@ -2,6 +2,7 @@ package com.silk.web
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.NoLiveLiterals
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -34,6 +35,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.coroutines.launch
+import kotlinx.browser.window
 
 // ── Card JSON models (frontend parsing, mirrors backend CardModels) ──
 
@@ -78,6 +80,7 @@ private val cardJson = Json { ignoreUnknownKeys = true }
 // ── Main Composable ──
 
 @Suppress("CyclomaticComplexMethod")
+@NoLiveLiterals
 @Composable
 fun CardMessageRenderer(
     message: Message,
@@ -85,6 +88,7 @@ fun CardMessageRenderer(
     currentUserId: String,
     userName: String,
     canInteract: Boolean = true,
+    onGithubIssueAction: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
 
@@ -159,6 +163,17 @@ fun CardMessageRenderer(
                         disabled = isDisabled,
                         onSubmit = { buttonValue ->
                             if (isDisabled) return@CardButtonElement
+                            if (buttonValue.startsWith("github:url:")) {
+                                val url = buttonValue.removePrefix("github:url:")
+                                if (url.startsWith("https://github.com/")) {
+                                    window.asDynamic().open(url, "_blank", "noopener,noreferrer")
+                                }
+                                return@CardButtonElement
+                            }
+                            if (buttonValue.startsWith("github:issue-to-workspace:")) {
+                                onGithubIssueAction(buttonValue)
+                                return@CardButtonElement
+                            }
                             // Custom button with empty input — do nothing
                             if (buttonValue.startsWith("__custom__")) {
                                 // Extract question index from value (e.g. "__custom__0" → "0")

@@ -60,3 +60,4 @@
 - 端口与公网/内网分离时，需要特别注意 `BACKEND_HTTP_PORT` 与 `BACKEND_INTERNAL_PORT`
 - Backend SQLite 默认使用 `./silk_database.db`；测试或隔离运行可通过 JVM 参数 `-Dsilk.databasePath=...` 覆盖
 - Workflow / TrustedDir 默认写到 `~/.silk-data/workflows`；`silk.sh` 会通过 `SILK_WORKFLOW_DIR` / `-Dsilk.workflowDir=...` 注入同一目录
+- Workflow Room GitHub 集成使用同目录的 `git_integration_store.json`；开启前必须配置 Base64 32 字节 `SILK_ENCRYPTION_KEY`，并配置公开稳定的 `GITHUB_WEBHOOK_BASE_URL`（可回退 `BACKEND_BASE_URL`）。回调入口为 `POST /api/git/webhook/{roomId}`；生产环境要求 HTTPS。GitHub fine-grained PAT 只需要目标仓库 `Webhooks: write`、`Issues: read` 和 Metadata 读取权限。

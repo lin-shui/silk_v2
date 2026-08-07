@@ -31,6 +31,18 @@ class WorkspaceManagerTest {
         assertNotNull(mgr.getWorkspace(ws.workspaceId))
     }
 
+    @Test fun `linked github reference persists and legacy workspaces default to null`() {
+        val linked = "https://github.com/octo/demo/issues/42"
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+        val ws = mgr.createWorkspace("room1", "user1", "issue", linkedGithubRef = linked)
+        assertEquals(linked, mgr.getWorkspace(ws.workspaceId)!!.linkedGithubRef)
+
+        File(tempDir, "workspace_store.json").writeText(
+            """{"workspaces":[{"workspaceId":"legacy","roomId":"room1","ownerId":"user1","name":"old"}]}"""
+        )
+        assertNull(WorkspaceManager(tempDir.absolutePath).getWorkspace("legacy")!!.linkedGithubRef)
+    }
+
     @Test fun `getOrCreateDefaultWorkspace is idempotent`() {
         val mgr = WorkspaceManager(tempDir.absolutePath)
         val ws1 = mgr.getOrCreateDefaultWorkspace("user1", "room1")

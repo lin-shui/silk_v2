@@ -223,7 +223,6 @@ data class WorkflowItem(
     val updatedAt: Long = 0,
 )
 
-@Serializable
 data class WorkspaceDto(
     val workspaceId: String,
     val roomId: String,
@@ -233,6 +232,7 @@ data class WorkspaceDto(
     val agentType: String = "claude-code",
     val visibility: String = "PRIVATE",
     val role: String = "OBSERVER",
+    val linkedGithubRef: String? = null,
 )
 
 sealed class CreateWorkflowResult {

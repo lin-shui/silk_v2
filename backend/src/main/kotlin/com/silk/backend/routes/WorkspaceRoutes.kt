@@ -65,6 +65,7 @@ data class WorkspaceDto(
     val activity: WorkspaceActivityDto,
     val createdAt: Long,
     val recentActivityAt: Long,
+    val linkedGithubRef: String? = null,
     val historyOnly: Boolean = false,
 )
 
@@ -93,7 +94,7 @@ private fun PersonalWorkspace.ownerDisplayName(callerId: String): String =
     UserRepository.findUserById(ownerId)?.fullName?.takeIf { it.isNotBlank() }
         ?: if (ownerId == callerId) "You" else "Room member"
 
-private fun PersonalWorkspace.toDto(callerId: String): WorkspaceDto {
+internal fun PersonalWorkspace.toDto(callerId: String): WorkspaceDto {
     val canInspectRuntime = ownerId == callerId || callerId in copilots
     return WorkspaceDto(
         workspaceId = workspaceId,
@@ -114,6 +115,7 @@ private fun PersonalWorkspace.toDto(callerId: String): WorkspaceDto {
         activity = activityDto(),
         createdAt = createdAt,
         recentActivityAt = updatedAt,
+        linkedGithubRef = linkedGithubRef,
     )
 }
 
@@ -133,6 +135,7 @@ private fun PersonalWorkspace.toHistoricalDto(callerId: String): WorkspaceDto =
         activity = WorkspaceActivityDto(WorkspaceActivityState.OFFLINE, 0L),
         createdAt = 0L,
         recentActivityAt = 0L,
+        linkedGithubRef = null,
         historyOnly = true,
     )
 

@@ -4773,6 +4773,7 @@ fun MessageItem(
     isRecalling: Boolean = false,
     chatClient: com.silk.shared.ChatClient? = null,
     canInteractWithCards: Boolean = true,
+    onGithubIssueAction: (String) -> Unit = {},
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onCaptureToKnowledgeBase: (Message) -> Unit = {},
@@ -5702,6 +5703,7 @@ fun MessageItem(
                         currentUserId,
                         currentUserName,
                         canInteract = canInteractWithCards,
+                        onGithubIssueAction = onGithubIssueAction,
                     )
                 }
             }

@@ -43,6 +43,7 @@ class WorkspaceManager(
         agentType: String = "claude-code",
         workingDir: String = "",
         visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
+        linkedGithubRef: String? = null,
     ): PersonalWorkspace {
         val store = load()
         val ws = PersonalWorkspace(
@@ -54,6 +55,7 @@ class WorkspaceManager(
             activeAgent = agentType,
             workingDir = workingDir,
             visibility = visibility,
+            linkedGithubRef = linkedGithubRef,
             lastSharedName = name.takeIf { visibility == WorkspaceVisibility.SHARED },
         )
         store.workspaces.add(0, ws)
