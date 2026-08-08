@@ -9,7 +9,6 @@ import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.git.GitBindingDto
 import com.silk.backend.git.GitBindingRequest
 import com.silk.backend.git.GitBindingStatus
-import com.silk.backend.git.GitConfig
 import com.silk.backend.git.GitEncryption
 import com.silk.backend.git.GitErrorResponse
 import com.silk.backend.git.GitEventParser
@@ -18,6 +17,10 @@ import com.silk.backend.git.GitEventStore
 import com.silk.backend.git.GitHubApiException
 import com.silk.backend.git.GitHubClient
 import com.silk.backend.git.GitHubRepositoryRef
+import com.silk.backend.git.GitIngestionMode
+import com.silk.backend.git.GitIngestionModeResolver
+import com.silk.backend.git.GitIngestionSelection
+import com.silk.backend.git.GitPollingService
 import com.silk.backend.git.RoomGitBinding
 import com.silk.backend.git.toDto
 import com.silk.backend.resolveAuthenticatedUserId
@@ -69,8 +72,20 @@ fun Route.gitRoutes(
     onEvent: suspend (GitEventRecord) -> Unit = {},
     encryptionKeyProvider: () -> ByteArray = { GitEncryption.configuredKey() },
     trustedDirManager: TrustedDirManager = TrustedDirManager(),
+    pollingService: GitPollingService? = null,
+    ingestionSelectionProvider: () -> GitIngestionSelection = { GitIngestionModeResolver.resolve() },
 ) {
-    routeBindingRoutes(workflowManager, workspaceManager, trustedDirManager, store, githubClient, encryptionKeyProvider)
+    val effectivePollingService = pollingService ?: GitPollingService(store, githubClient, onEvent, encryptionKeyProvider)
+    routeBindingRoutes(
+        workflowManager,
+        workspaceManager,
+        trustedDirManager,
+        store,
+        githubClient,
+        encryptionKeyProvider,
+        effectivePollingService,
+        ingestionSelectionProvider,
+    )
     post("/api/git/webhook/{roomId}") {
         val roomId = call.parameters["roomId"].orEmpty()
         val contentLength = call.request.headers["Content-Length"]?.toLongOrNull()
@@ -82,11 +97,13 @@ fun Route.gitRoutes(
         }
         if (body.size > GitEventParser.MAX_BODY_BYTES) return@post call.respond(HttpStatusCode.PayloadTooLarge)
         val binding = store.getBinding(roomId)
-            ?.takeIf { it.status == GitBindingStatus.ACTIVE }
+            ?.takeIf { it.status == GitBindingStatus.ACTIVE && it.ingestionMode == GitIngestionMode.WEBHOOK }
             ?: return@post call.respond(HttpStatusCode.Unauthorized)
         val key = runCatching { encryptionKeyProvider() }.getOrNull()
             ?: return@post call.respond(HttpStatusCode.Unauthorized)
-        val secret = runCatching { GitEncryption.decrypt(binding.webhookSecretEncrypted, key) }.getOrNull()
+        val secretEncrypted = binding.webhookSecretEncrypted
+            ?: return@post call.respond(HttpStatusCode.Unauthorized)
+        val secret = runCatching { GitEncryption.decrypt(secretEncrypted, key) }.getOrNull()
             ?: return@post call.respond(HttpStatusCode.Unauthorized)
         if (!com.silk.backend.git.GitHubWebhookVerifier.verify(body, call.request.headers["X-Hub-Signature-256"], secret)) {
             return@post call.respond(HttpStatusCode.Unauthorized)
@@ -120,6 +137,8 @@ private fun Route.routeBindingRoutes(
     store: GitEventStore,
     githubClient: GitHubClient,
     encryptionKeyProvider: () -> ByteArray,
+    pollingService: GitPollingService,
+    ingestionSelectionProvider: () -> GitIngestionSelection,
 ) {
     get("/api/rooms/{roomId}/git/binding") {
         val caller = call.resolveAuthenticatedUserId()
@@ -132,9 +151,9 @@ private fun Route.routeBindingRoutes(
         if (binding == null) return@get call.respond(GitBindingDto(enabled = false))
         if (binding.status == GitBindingStatus.ACTIVE && !bindingCredentialsDecryptable(binding, encryptionKeyProvider)) {
             val errored = store.updateBindingStatus(roomId, GitBindingStatus.ERROR) ?: binding.copy(status = GitBindingStatus.ERROR)
-            return@get call.respond(errored.toDto())
+            return@get call.respond(errored.toDto(store.getPollingState(roomId)))
         }
-        call.respond(binding.toDto())
+        call.respond(binding.toDto(store.getPollingState(roomId)))
     }
 
     post("/api/rooms/{roomId}/git/binding") {
@@ -152,60 +171,98 @@ private fun Route.routeBindingRoutes(
         val request = runCatching { call.receive<GitBindingRequest>() }.getOrElse {
             return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("INVALID_REQUEST", "请求格式错误"))
         }
-        if (request.provider.name != "GITHUB" || request.token.isBlank()) {
-            return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("INVALID_REQUEST", "provider 和 token 必填"))
+        if (request.provider.name != "GITHUB") {
+            return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("INVALID_REQUEST", "provider 无效"))
         }
         val ref = GitHubRepositoryRef.parse(request.repositoryUrl)
             ?: return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("INVALID_REPOSITORY_URL", "只支持 github.com/{owner}/{repo}"))
         val encryptionKey = runCatching { encryptionKeyProvider() }.getOrElse {
             return@post call.respond(HttpStatusCode.PreconditionFailed, GitErrorResponse("ENCRYPTION_NOT_CONFIGURED", it.message.orEmpty()))
         }
-        val callbackBase = GitConfig.webhookBaseUrl?.trimEnd('/')
-            ?: return@post call.respond(HttpStatusCode.PreconditionFailed, GitErrorResponse("WEBHOOK_URL_REQUIRED", "未配置 GITHUB_WEBHOOK_BASE_URL"))
-        if (!isUsableCallbackBase(callbackBase)) {
-            return@post call.respond(HttpStatusCode.PreconditionFailed, GitErrorResponse("WEBHOOK_URL_REQUIRED", "Webhook 地址必须是公开 HTTPS URL"))
-        }
-        val callbackUrl = callbackBase + DEFAULT_CALLBACK_PATH + roomId
-        val secret = ByteArray(GitConfig.webhookSecretBytes).also(SecureRandom()::nextBytes)
-        val secretText = Base64.getEncoder().encodeToString(secret)
         val oldBinding = store.getBinding(roomId)
+        val githubToken = request.token.trim().takeIf { it.isNotEmpty() }
+            ?: oldBinding?.let { runCatching { GitEncryption.decrypt(it.tokenEncrypted, encryptionKey) }.getOrNull() }
+            ?: return@post call.respond(
+                HttpStatusCode.BadRequest,
+                GitErrorResponse("TOKEN_REQUIRED", "首次绑定必须提供 GitHub PAT"),
+            )
+        val selection = ingestionSelectionProvider()
+        if (selection.mode == GitIngestionMode.WEBHOOK && selection.callbackBase == null) {
+            return@post call.respond(
+                HttpStatusCode.PreconditionFailed,
+                GitErrorResponse("WEBHOOK_URL_REQUIRED", selection.warning ?: "未配置公开 HTTPS Webhook 地址"),
+            )
+        }
+        selection.warning?.let { gitRouteLogger.warn("GitHub binding mode fallback for room {}: {}", roomId, it) }
         val oldRef = oldBinding?.let { GitHubRepositoryRef(it.owner, it.repo) }
         var createdHookId: Long? = null
         try {
-            githubClient.getRepository(ref, request.token)
-            val hook = githubClient.reconcileHook(ref, request.token, callbackUrl, secretText)
-            if (hook.created) createdHookId = hook.hook.id
+            githubClient.getRepository(ref, githubToken)
             val now = System.currentTimeMillis()
-            val binding = RoomGitBinding(
-                roomId = roomId,
-                owner = ref.owner,
-                repo = ref.repo,
-                hookId = hook.hook.id,
-                webhookUrl = callbackUrl,
-                tokenEncrypted = GitEncryption.encrypt(request.token, encryptionKey),
-                webhookSecretEncrypted = GitEncryption.encrypt(secretText, encryptionKey),
-                createdBy = oldBinding?.createdBy ?: caller,
-                createdAt = oldBinding?.createdAt ?: now,
-                updatedAt = now,
-            )
-            store.putBinding(binding)
-            if (oldBinding != null && (oldBinding.hookId != hook.hook.id || oldRef?.fullName != ref.fullName)) {
-                runCatching {
-                    val oldToken = GitEncryption.decrypt(oldBinding.tokenEncrypted, encryptionKey)
-                    oldRef?.let { oldBinding.hookId?.let { id -> githubClient.deleteHook(it, id, oldToken) } }
-                }.onFailure { gitRouteLogger.warn("Unable to remove old GitHub webhook for room {}", roomId) }
+            val encryptedToken = GitEncryption.encrypt(githubToken, encryptionKey)
+            val binding = if (selection.mode == GitIngestionMode.WEBHOOK) {
+                val callbackUrl = selection.callbackBase!!.trimEnd('/') + DEFAULT_CALLBACK_PATH + roomId
+                val secret = ByteArray(com.silk.backend.git.GitConfig.webhookSecretBytes).also(SecureRandom()::nextBytes)
+                val secretText = Base64.getEncoder().encodeToString(secret)
+                val hook = githubClient.reconcileHook(ref, githubToken, callbackUrl, secretText)
+                if (hook.created) createdHookId = hook.hook.id
+                RoomGitBinding(
+                    roomId = roomId,
+                    owner = ref.owner,
+                    repo = ref.repo,
+                    hookId = hook.hook.id,
+                    webhookUrl = callbackUrl,
+                    tokenEncrypted = encryptedToken,
+                    webhookSecretEncrypted = GitEncryption.encrypt(secretText, encryptionKey),
+                    createdBy = oldBinding?.createdBy ?: caller,
+                    createdAt = oldBinding?.createdAt ?: now,
+                    updatedAt = now,
+                    ingestionMode = GitIngestionMode.WEBHOOK,
+                ).also {
+                    store.putWebhookBinding(it)
+                }
+            } else {
+                val baseline = pollingService.prepareBaseline(ref, githubToken)
+                RoomGitBinding(
+                    roomId = roomId,
+                    owner = ref.owner,
+                    repo = ref.repo,
+                    tokenEncrypted = encryptedToken,
+                    createdBy = oldBinding?.createdBy ?: caller,
+                    createdAt = oldBinding?.createdAt ?: now,
+                    updatedAt = now,
+                    ingestionMode = GitIngestionMode.POLLING,
+                ).also { store.putPollingBinding(it, baseline.state, baseline.snapshots) }
             }
-            call.respond(binding.toDto())
+            val shouldDeleteOldHook = oldBinding?.hookId != null &&
+                (binding.ingestionMode != GitIngestionMode.WEBHOOK ||
+                    oldBinding.hookId != binding.hookId || oldRef?.fullName != ref.fullName)
+            if (shouldDeleteOldHook) {
+                oldBinding?.let { previous ->
+                    runCatching {
+                        val oldToken = GitEncryption.decrypt(previous.tokenEncrypted, encryptionKey)
+                        oldRef?.let { previous.hookId?.let { id -> githubClient.deleteHook(it, id, oldToken) } }
+                    }.onFailure { gitRouteLogger.warn("Unable to remove old GitHub webhook for room {}", roomId) }
+                }
+            }
+            call.respond(binding.toDto(store.getPollingState(roomId)))
         } catch (e: GitHubApiException) {
-            createdHookId?.let { hookId -> runCatching { githubClient.deleteHook(ref, hookId, request.token) } }
+            createdHookId?.let { hookId -> runCatching { githubClient.deleteHook(ref, hookId, githubToken) } }
             call.respond(e.status.toClientStatus(), GitErrorResponse(e.status.toErrorCode(), "GitHub 请求失败"))
         } catch (e: GitEncryption.ConfigurationException) {
-            createdHookId?.let { hookId -> runCatching { githubClient.deleteHook(ref, hookId, request.token) } }
+            createdHookId?.let { hookId -> runCatching { githubClient.deleteHook(ref, hookId, githubToken) } }
             call.respond(HttpStatusCode.PreconditionFailed, GitErrorResponse("ENCRYPTION_NOT_CONFIGURED", e.message.orEmpty()))
         } catch (e: Exception) {
-            createdHookId?.let { hookId -> runCatching { githubClient.deleteHook(ref, hookId, request.token) } }
+            createdHookId?.let { hookId -> runCatching { githubClient.deleteHook(ref, hookId, githubToken) } }
             gitRouteLogger.warn("GitHub binding failed for room {}: {}", roomId, e.message)
-            call.respond(HttpStatusCode.BadGateway, GitErrorResponse("WEBHOOK_REGISTRATION_FAILED", "GitHub Webhook 注册失败"))
+            val polling = selection.mode == GitIngestionMode.POLLING
+            call.respond(
+                HttpStatusCode.BadGateway,
+                GitErrorResponse(
+                    if (polling) "POLLING_INITIALIZATION_FAILED" else "WEBHOOK_REGISTRATION_FAILED",
+                    if (polling) "GitHub 轮询初始化失败" else "GitHub Webhook 注册失败",
+                ),
+            )
         }
     }
 
@@ -331,14 +388,10 @@ private fun isWorkflowMember(roomId: String, caller: String, workflowManager: Wo
 private fun bindingCredentialsDecryptable(binding: RoomGitBinding, keyProvider: () -> ByteArray): Boolean = runCatching {
     val key = keyProvider()
     GitEncryption.decrypt(binding.tokenEncrypted, key)
-    GitEncryption.decrypt(binding.webhookSecretEncrypted, key)
+    if (binding.ingestionMode == GitIngestionMode.WEBHOOK) {
+        GitEncryption.decrypt(binding.webhookSecretEncrypted ?: error("Missing webhook secret"), key)
+    }
 }.isSuccess
-
-private fun isUsableCallbackBase(value: String): Boolean = runCatching {
-    val uri = java.net.URI(value)
-    uri.scheme.equals("https", ignoreCase = true) ||
-        (uri.scheme.equals("http", ignoreCase = true) && uri.host in setOf("localhost", "127.0.0.1"))
-}.getOrDefault(false)
 
 private fun HttpStatusCode.toClientStatus(): HttpStatusCode = when (value) {
     401 -> HttpStatusCode.Unauthorized
@@ -351,5 +404,7 @@ private fun HttpStatusCode.toClientStatus(): HttpStatusCode = when (value) {
 private fun HttpStatusCode.toErrorCode(): String = when (value) {
     401 -> "GITHUB_UNAUTHORIZED"
     403 -> "GITHUB_FORBIDDEN"
-    else -> "WEBHOOK_REGISTRATION_FAILED"
+    404 -> "GITHUB_NOT_FOUND"
+    429 -> "GITHUB_RATE_LIMITED"
+    else -> "GITHUB_REQUEST_FAILED"
 }

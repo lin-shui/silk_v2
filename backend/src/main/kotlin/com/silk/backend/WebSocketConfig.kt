@@ -40,7 +40,6 @@ import com.silk.backend.kb.buildMemoryKey
 import com.silk.backend.models.KnowledgeBaseContextSelection
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.git.GitContextBuilder
-import com.silk.backend.git.GitEventStore
 import com.silk.backend.workspace.WorkspaceManager
 import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceVisibility
@@ -246,7 +245,7 @@ class ChatServer(
     }
     // 直接调用模型的 Agent（简化流程：让模型自动使用 tool 能力）
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
-    private val gitEventStore = GitEventStore()
+    private val gitEventStore = sharedGitEventStore()
     // 用户历史回忆 Agent（/recall 命令使用）
     private val userHistoryAgent = com.silk.backend.ai.UserHistoryAgent()
     private var messagesSinceAgentResponse = 0

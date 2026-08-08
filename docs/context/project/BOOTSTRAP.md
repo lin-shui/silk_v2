@@ -60,4 +60,5 @@
 - 端口与公网/内网分离时，需要特别注意 `BACKEND_HTTP_PORT` 与 `BACKEND_INTERNAL_PORT`
 - Backend SQLite 默认使用 `./silk_database.db`；测试或隔离运行可通过 JVM 参数 `-Dsilk.databasePath=...` 覆盖
 - Workflow / TrustedDir 默认写到 `~/.silk-data/workflows`；`silk.sh` 会通过 `SILK_WORKFLOW_DIR` / `-Dsilk.workflowDir=...` 注入同一目录
-- Workflow Room GitHub 集成使用同目录的 `git_integration_store.json`；开启前必须配置 Base64 32 字节 `SILK_ENCRYPTION_KEY`，并配置公开稳定的 `GITHUB_WEBHOOK_BASE_URL`（可回退 `BACKEND_BASE_URL`）。回调入口为 `POST /api/git/webhook/{roomId}`；生产环境要求 HTTPS。GitHub fine-grained PAT 只需要目标仓库 `Webhooks: write`、`Issues: read` 和 Metadata 读取权限。
+- Workflow Room GitHub 集成使用同目录的 `git_integration_store.json`；开启前必须配置 Base64 32 字节 `SILK_ENCRYPTION_KEY`。`GITHUB_INGESTION_MODE` 默认 `AUTO`：只有显式配置可用的公开 HTTPS `GITHUB_WEBHOOK_BASE_URL` 时才注册 Webhook，否则随 Ktor 启动无需公网入口的 Polling；也可强制设为 `POLLING` 或 `WEBHOOK`。Polling 默认每 120 秒查询一次，可用 `GITHUB_POLL_INTERVAL_SECONDS` 调整（最小 60 秒），并根据 ETag、额度响应头和失败情况自动退避。同一 Workflow 存储目录由 `.git_polling.lock` 保证只有一个后端进程执行轮询。
+- GitHub fine-grained PAT 在 Polling 模式需要目标仓库 `Issues: read`、`Pull requests: read` 和 Metadata 读取权限；Webhook 模式另外需要 `Webhooks: write`。Polling 覆盖 Issue/PR 提醒，不通用轮询 Check Runs；完整 CI `check_run` 卡片继续使用 Webhook。普通用户绑定时仍只提交仓库 URL 与 PAT。

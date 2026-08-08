@@ -66,6 +66,16 @@
   - `BackendHttpContractTest` — Workflow Room Owner 增删成员、非成员鉴权、成员发现 Room 与移除后 Co-pilot 清理
   - `BackendWebSocketContractTest` — 普通 Room WebSocket 回放/广播/成员校验，以及 Workflow Room 双用户、双连接、PRIVATE/SHARED、Observer/Co-pilot 动态授权与同用户多工作区隔离
 
+## GitHub Integration
+
+- Command: `./gradlew :backend:test`
+- Primary tests:
+  - `GitBindingRouteContractTest` / `GitWebhookRouteContractTest` — Workflow/Owner 权限、脱敏 binding 与 HMAC Webhook 合同
+  - `git/GitIngestionModeResolverTest` — `AUTO|WEBHOOK|POLLING` 选择和公网 HTTPS 校验
+  - `git/GitHubClientTest` — Hook reconcile、Issues/PR Polling、ETag、分页和额度响应头
+  - `git/GitPollingServiceTest` — 静默 baseline、Issue/PR snapshot diff、pending 投递和限流退避
+  - `git/GitEventStoreTest` — delivery 与 Webhook/Polling 跨来源语义去重
+
 ## Web File Contract / Parser
 
 - Commands:

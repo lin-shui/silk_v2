@@ -268,7 +268,10 @@ data class GitBindingSummary(
     val owner: String? = null,
     val repo: String? = null,
     val events: List<String> = emptyList(),
+    val ingestionMode: String? = null,
     val lastDeliveryAt: Long? = null,
+    val lastSuccessfulPollAt: Long? = null,
+    val syncError: String? = null,
     val status: String? = null,
 )
 

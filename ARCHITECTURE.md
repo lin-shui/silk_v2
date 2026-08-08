@@ -58,7 +58,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | AI/tools/search | `ai/`（AnthropicClient + DirectModelAgent）, `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Card system | `card/CardBuilder.kt`, `card/CardReplyRouter.kt`, `card/CardModels.kt` | 交互卡片构造、JSON schema、回复路由 |
-| Domain modules | `todos/`, `workflow/`, `workspace/`, `trust/`, `kb/`, `git/`, `export/`, `pdf/` | Todo/Workflow/PersonalWorkspace/TrustedDir/KB/GitHub integration（含 `[[kb:...]]` 内联引用）混合文件存储 + 可选 PostgreSQL（`SILK_KB_STORE=postgres`） |
+| Domain modules | `todos/`, `workflow/`, `workspace/`, `trust/`, `kb/`, `git/`, `export/`, `pdf/` | Todo/Workflow/PersonalWorkspace/TrustedDir/KB/GitHub integration（GitHub 支持 Webhook/Polling 双接收；含 `[[kb:...]]` 内联引用）混合文件存储 + 可选 PostgreSQL（`SILK_KB_STORE=postgres`） |
 | Shared client contract | `frontend/shared/` | 三端消息/文件/Audio Duplex 合同面 |
 | Web | `frontend/webApp/` | 当前最完整的桌面浏览器 UI |
 | Android | `frontend/androidApp/` | 四 Tab + 移动端流程 |

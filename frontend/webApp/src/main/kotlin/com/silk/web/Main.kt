@@ -5813,7 +5813,7 @@ fun generateRandomId(): String {
         .joinToString("")
 }
 
-private fun formatMessageTimestampForWeb(
+internal fun formatMessageTimestampForWeb(
     timestamp: Long,
     referenceTimestamp: Long = Date.now().toLong(),
     includeSeconds: Boolean = true

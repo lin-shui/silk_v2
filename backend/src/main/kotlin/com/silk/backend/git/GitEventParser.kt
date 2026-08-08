@@ -58,6 +58,7 @@ object GitEventParser {
         } else ""
         val checkName = if (event == "check_run") subject.string("name").bounded() else ""
         val conclusion = if (event == "check_run") subject.string("conclusion").bounded() else ""
+        val resourceUpdatedAt = subject.string("updated_at").bounded(100)
         val summary = buildString {
             append(event).append('/').append(action)
             if (title.isNotBlank()) append(" | ").append(title)
@@ -79,6 +80,12 @@ object GitEventParser {
             htmlUrl = url,
             summary = summary,
             createdAt = createdAt,
+            source = GitEventSource.WEBHOOK,
+            dedupeKey = if (issueNumber != null && resourceUpdatedAt.isNotBlank()) {
+                "$repository:$event:$issueNumber:$action:$resourceUpdatedAt"
+            } else {
+                ""
+            },
         )
     }
 

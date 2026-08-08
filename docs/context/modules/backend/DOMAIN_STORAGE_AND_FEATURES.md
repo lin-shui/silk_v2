@@ -34,9 +34,11 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
   - `WorkspaceAccessPolicy` 统一 Owner/Co-pilot/Observer 的控制与消息读取判定；PRIVATE 后端强制清空/拒绝 Co-pilot，历史使用发送时 `observerVisible` 快照
   - `PersonalWorkspace.linkedGithubRef` 为可选 GitHub Issue 来源引用，旧 `workspace_store.json` 缺少该字段时按 `null` 兼容读取；`routes/WorkspaceRoutes.kt` 提供 JWT + Room membership 保护的发现/CRUD，返回裁剪后的 Owner 展示名、`RUNNING/WAITING/IDLE/OFFLINE` 活动状态与生命周期；有历史的工作区只能归档，不能硬删除。Observer 合法保留的历史共享流以 `historyOnly` 元数据返回，只含 Owner 与最后共享名称，runtime 字段保持脱敏；旧记录缺少 `lastSharedName` 时会在首次历史发现时冻结当前可用名称，避免后续 PRIVATE 重命名继续外泄
 - `git/`:
-  - `GitEventStore.kt` 在 Workflow 目录原子写 `git_integration_store.json`，绑定凭据只存 AES-GCM 密文，事件字段有长度限制，delivery ID 具备 30 天 TTL 与数量上限
+  - `GitEventStore.kt` 在 Workflow 目录原子写 `git_integration_store.json`，绑定凭据只存 AES-GCM 密文，事件字段有长度限制，delivery/semantic dedupe key 具备 30 天 TTL 与数量上限；Webhook、路由、ChatServer 与 Poller 复用进程级 store
   - `GitEncryption.kt` 使用 `SILK_ENCRYPTION_KEY` 的 Base64 32 字节密钥，缺失或错误时 fail-closed；`GitHubRepositoryRef`、`GitHubWebhookVerifier` 和 `GitEventParser` 提供 URL、原始 body HMAC 和事件 action 的纯逻辑安全合同
-  - `GitHubClient.kt` 集中 GitHub REST headers、超时、有限重试和 Repository Hook 幂等 reconcile；`GitEventSummaryService.kt` 对 PR/失败 CI 做可选异步摘要，失败不阻塞原始事件卡片；`routes/GitRoutes.kt` 提供 binding GET/POST/DELETE、Issue-to-Workspace（复用 Bridge/目录信任门禁）与无 JWT 的 HMAC Webhook 快速路径
+  - `GitHubClient.kt` 集中 GitHub REST headers、超时、有限重试、Repository Hook reconcile，以及 repository Issues/PR 的 `since`/分页/ETag/rate-limit 查询；`GitPollingService.kt` 用 baseline、60 秒重叠游标、资源快照和 pending event 原子提交生成与 Webhook 相同的事件记录
+  - `GitPollingScheduler.kt` 随 Ktor 生命周期启停，串行扫描 Polling binding，并用 Workflow 目录下的 `.git_polling.lock` 阻止多进程重复轮询；`AUTO` 模式仅在显式配置公开 HTTPS `GITHUB_WEBHOOK_BASE_URL` 时使用 Webhook，否则默认 Polling
+  - `GitEventSummaryService.kt` 对 PR/失败 CI 做可选异步摘要，失败不阻塞原始事件卡片；`routes/GitRoutes.kt` 提供 binding GET/POST/DELETE、Issue-to-Workspace（复用 Bridge/目录信任门禁）与无 JWT 的 HMAC Webhook 快速路径。Polling 覆盖 Issue/PR，通用 `check_run` 仍只由 Webhook 覆盖
   - `GitContextBuilder` 仅在 active binding 的 Workflow Team Channel `@Silk` 请求中注入近期截断事件；解绑、密钥错误或普通 Room 均不注入
 - `kb/KnowledgeBaseManager.kt`:
   - `knowledge_base/kb_store.json`
@@ -115,7 +117,7 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
 - 统一 Room 发现/创建在 `routes/RoomRoutes.kt`（`GET /api/rooms/visible`、`POST /api/rooms`）；Workflow 元数据兼容 HTTP 在 `Routing.kt` 的 `/api/workflows`；成员可见 Workflow 列表与 Room 成员管理在 `routes/WorkflowRoomRoutes.kt`，PersonalWorkspace HTTP 在 `routes/WorkspaceRoutes.kt` 的 `/api/rooms/{roomId}/workspaces`
 - 移除 Workflow Room 成员会同步撤销其在该 Room 所有 Workspace 中的 Co-pilot 权限，关闭当前 WebSocket 连接，并拒绝旧连接继续发送消息
 - Trusted directory HTTP 在 `Routing.kt` 的 `/users/{userId}/trusted-dirs/*`
-- GitHub binding HTTP 在 `routes/GitRoutes.kt` 的 `/api/rooms/{roomId}/git/binding`；公开 Webhook 在 `/api/git/webhook/{roomId}`，仅依赖原始 body HMAC，不依赖 JWT
+- GitHub binding HTTP 在 `routes/GitRoutes.kt` 的 `/api/rooms/{roomId}/git/binding`；请求仍只包含仓库 URL 与 PAT，接收模式由后端配置决定，响应增加脱敏的 `ingestionMode/lastSuccessfulPollAt/syncError`。公开 Webhook 在 `/api/git/webhook/{roomId}`，仅依赖原始 body HMAC，不依赖 JWT
 - GitHub Issue → Workspace 在 `routes/GitRoutes.kt` 的 `/api/rooms/{roomId}/git/issue-to-workspace`，创建工作区后仅返回仓库、Issue 标题和链接摘要；Web 端以 `SYSTEM` 消息展示摘要，不触发 Workspace Agent
 - KB HTTP 在 `Routing.kt` 的 `/api/kb/*`（含 `PUT /api/kb/topics/{id}` 改主题/访问策略、`POST /api/kb/captures` 入库候选、`PUT /api/kb/entries/{entryId}` 支持移动条目到同 space 内其他 topic、`GET /api/kb/entries/search`（$ 快捷引用 KB 文档的搜索端点）、`POST /api/kb/copilot`（同步）和 `POST /api/kb/copilot/stream`（SSE 流式）在 KB 页面内生成/应用 AI 编辑草稿——支持条目级 `update_entry` 和主题级 `create_entry` 两种模式，`entryId` 可选填；流式端点通过 `thinking`/`text`/`draft`/`applied`/`error`/`done` 事件逐帧推送；草稿 `KnowledgeBaseCopilotDraft` 新增 `diffChunks: List<DiffChunk>` 字段（后端 LCS 行级 diff 算法生成），供前端 `DiffReviewPane` 逐块接受/拒绝；前端 `KnowledgeCopilotSidebar` 按 `CopilotSidebarState`（INPUT/PREVIEW/REVIEW）三状态渲染，每个状态一个主按钮，审阅控制在侧栏而非编辑区；`GET/POST/DELETE /api/kb/memory*` 管理显式长期记忆、`GET /api/kb/memory/{entryId}` 带访问追踪读取单条记忆、`POST /api/kb/memory/consolidate` 触发去重合并与 TTL 衰减、`GET/PUT /api/kb/context-preferences` 读写用户级空间与 memory 偏好；既有路由按调用方 userId 做读写/成员可见性鉴权）
 - ACP 外部 agent 的 KB 后处理在 `AgentRuntime.kt`：最终回复会先抽取 `silk_kb_action` 再广播，从而让 workflow 内的 Claude Code / Codex / Cursor 与内建 Silk AI 共享同一套 KB 落库路径

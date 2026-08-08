@@ -93,11 +93,14 @@ import com.silk.backend.routes.workspaceRoutes
 import com.silk.backend.routes.workflowRoomRoutes
 import com.silk.backend.routes.gitRoutes
 import com.silk.backend.git.GitEventBroadcaster
+import com.silk.backend.git.GitEventRecord
 import com.silk.backend.git.GitEventStore
 import com.silk.backend.git.GitEventSummaryService
 import com.silk.backend.git.GitEncryption
 import com.silk.backend.git.GitHubClient
 import com.silk.backend.git.GitHubRepositoryRef
+import com.silk.backend.git.GitPollingScheduler
+import com.silk.backend.git.GitPollingService
 import com.silk.backend.workspace.WorkspaceManager
 import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceLifecycleState
@@ -127,6 +130,8 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.ApplicationStarted
+import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveText
@@ -153,6 +158,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import io.ktor.client.engine.cio.CIO
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -204,6 +210,8 @@ private val workflowManager: WorkflowManager get() = currentWorkflowStorageManag
 private val workspaceManager: WorkspaceManager get() = currentWorkflowStorageManagers.workspaceManager
 private val trustedDirManager: TrustedDirManager get() = currentWorkflowStorageManagers.trustedDirManager
 private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
+
+internal fun sharedGitEventStore(): GitEventStore = GitEventStore.shared(currentWorkflowStorageDir())
 
 internal fun filterChatHistoryForUser(
     history: ChatHistory,
@@ -380,6 +388,31 @@ suspend fun broadcastFileMessage(
 
 @Suppress("TooGenericExceptionCaught", "SwallowedException")
 fun Application.configureRouting() {
+    val gitStore = sharedGitEventStore()
+    val gitClient = GitHubClient()
+    val onGitEvent: suspend (GitEventRecord) -> Unit = { event ->
+        if (GroupRepository.findGroupById(event.roomId) != null) {
+            val chatServer = getGroupChatServer(event.roomId)
+            chatServer.broadcast(GitEventBroadcaster.message(event))
+            runCatching { gitEventSummaryService.summarize(event) }
+                .onSuccess { summary ->
+                    if (!summary.isNullOrBlank()) {
+                        chatServer.broadcast(GitEventBroadcaster.summaryMessage(event, summary))
+                    }
+                }
+                .onFailure { error ->
+                    logger.warn("GitHub AI summary failed for delivery {}: {}", event.deliveryId, error.message)
+                }
+        }
+    }
+    val gitPollingService = GitPollingService(gitStore, gitClient, onGitEvent)
+    val gitPollingScheduler = GitPollingScheduler(gitStore, gitPollingService)
+    environment.monitor.subscribe(ApplicationStarted) { gitPollingScheduler.start() }
+    environment.monitor.subscribe(ApplicationStopped) {
+        runBlocking { gitPollingScheduler.stop() }
+        gitClient.close()
+    }
+
     // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + cliSessionId 写回
     // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 cliSessionId。
     AgentRuntime.setWorkflowPersistence(object : AgentRuntime.WorkflowPersistence {
@@ -446,19 +479,16 @@ fun Application.configureRouting() {
                 groupChatServers[roomId]?.revokeRoomMember(userId)
             },
             onRoomDeleted = { roomId, memberIds ->
-                val gitStore = GitEventStore()
                 val gitBinding = gitStore.getBinding(roomId)
                 if (gitBinding?.hookId != null) {
                     runCatching {
                         val key = GitEncryption.configuredKey()
                         val token = GitEncryption.decrypt(gitBinding.tokenEncrypted, key)
-                        GitHubClient().use { client ->
-                            client.deleteHook(
-                                GitHubRepositoryRef(gitBinding.owner, gitBinding.repo),
-                                gitBinding.hookId,
-                                token,
-                            )
-                        }
+                        gitClient.deleteHook(
+                            GitHubRepositoryRef(gitBinding.owner, gitBinding.repo),
+                            gitBinding.hookId,
+                            token,
+                        )
                     }.onFailure {
                         logger.warn("Unable to remove GitHub webhook while deleting room {}: {}", roomId, it.message)
                     }
@@ -487,21 +517,10 @@ fun Application.configureRouting() {
             workflowManager = workflowManager,
             workspaceManager = workspaceManager,
             trustedDirManager = trustedDirManager,
-            onEvent = { event ->
-                if (GroupRepository.findGroupById(event.roomId) != null) {
-                    val chatServer = getGroupChatServer(event.roomId)
-                    chatServer.broadcast(GitEventBroadcaster.message(event))
-                    runCatching { gitEventSummaryService.summarize(event) }
-                        .onSuccess { summary ->
-                            if (!summary.isNullOrBlank()) {
-                                chatServer.broadcast(GitEventBroadcaster.summaryMessage(event, summary))
-                            }
-                        }
-                        .onFailure { error ->
-                            logger.warn("GitHub AI summary failed for delivery {}: {}", event.deliveryId, error.message)
-                        }
-                }
-            },
+            store = gitStore,
+            githubClient = gitClient,
+            pollingService = gitPollingService,
+            onEvent = onGitEvent,
         )
         chatWebSocketRoute()
         audioDuplexRoute()
