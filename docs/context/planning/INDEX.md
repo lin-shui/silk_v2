@@ -8,7 +8,7 @@
 
 - [Unified Room Navigation 与显式 RoomKind](exec-plans/active/2026-08-04-unified-room-navigation.md)（代码与自动化验证完成，待发布环境手工验收）
 - [Workflow Room 重新设计](exec-plans/active/2026-07-24-workflow-room-redesign.md)（Phase 1、1.5、2 已完成；Phase 2.5 待手工验收）
-- [Phase 3：Workflow Room GitHub 集成 MVP](exec-plans/active/2026-08-06-phase3-github-integration-mvp.md)（计划中；默认关闭，Owner 主动绑定后启用）
+- [Phase 3：Workflow Room GitHub 集成 MVP](exec-plans/active/2026-08-06-phase3-github-integration-mvp.md)（实施中；Webhook + Polling 核心已实现，真实 GitHub 验收待完成；默认关闭，Owner 主动绑定后启用）
 - [KB Memory Layer](exec-plans/active/2026-07-07-kb-memory-layer.md)（Phase 1-4 ✅，Phase 5 ✅ → 已归档 `exec-plans/completed/`）
 - [Lint baseline reduction](exec-plans/active/lint-baseline-reduction.md)
 

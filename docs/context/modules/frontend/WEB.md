@@ -16,7 +16,7 @@
 - `AudioDuplexScene.kt`
 - `SettingsScene.kt`
 - `SilkChatStyles.kt` -- claudian 风格 CSS 样式注入（消息卡片、头像、hover 操作栏、动画）
-- `ApiClient.kt` 提供 Workflow Room GitHub binding 的脱敏状态读取、绑定和解绑 API；PAT 只作为一次性请求字段，不进入 Web 状态模型。Workflow Team Channel 头部提供 GitHub 集成面板，Owner 可绑定/换绑/解绑，成员只读查看状态。`workspace/WorkspaceApiClient.kt` 提供 Issue-to-Workspace 请求合同和可选 `linkedGithubRef` DTO 字段；GitHub 卡片链接会打开 GitHub，Issue 的“开始开发”会进入工作区创建、目录信任和 Issue 摘要展示流程，摘要以 `SYSTEM` 消息发送且不触发 Agent
+- `ApiClient.kt` 提供 Workflow Room GitHub binding 的脱敏状态读取、绑定和解绑 API；PAT 只作为请求字段，不进入 Web 状态模型，换绑时可留空复用服务端已有密文。Workflow Team Channel 头部提供 GitHub 集成面板，Owner 可绑定/换绑/解绑，成员只读查看仓库、接收方式（定时同步/Webhook）、事件范围、最近同步和可恢复错误。`workspace/WorkspaceApiClient.kt` 提供 Issue-to-Workspace 请求合同和可选 `linkedGithubRef` DTO 字段；GitHub 卡片链接会打开 GitHub，Issue 的“开始开发”会进入工作区创建、目录信任和 Issue 摘要展示流程，摘要以 `SYSTEM` 消息发送且不触发 Agent
 
 ## Current Shape
 
@@ -28,7 +28,7 @@
   - Audio Duplex
 - “会话”由 `ConversationScene` 统一展示 `CHAT / WORKFLOW / SILK_PRIVATE`；Silk AI 固定置顶，其余 Room 按最近活动倒排，有消息时使用最后消息时间、无消息时使用创建时间。当前 Room 收到或发出持久化消息后通过已有 WebSocket 本地立即重排，15 秒列表轮询仅兜底其他 Room、跨设备活动和未读状态；支持搜索、全部/工作群组/聊天群组筛选、未读和 cc-connect 状态。侧栏 `+` 是统一“添加会话”入口，一级以 Tab 切换创建群组/通过邀请码加入，创建模式下以带字段标签的单选控件二级选择聊天群组/工作群组。非 Silk Room 的 `⋯` 菜单向所有成员提供邀请，Owner 提供重命名/删除，非 Owner 提供退出；不提供批量退出模式，成功后立即更新或移除本地列表
 - 创建工作群组只建 Room + Workflow 元数据，无需 Bridge；用户显式新建 Workspace 时才进入目录信任和 Agent 选择流程
-- GitHub binding API 返回 `enabled/provider/owner/repo/events/lastDeliveryAt/status` 脱敏摘要；当前 Web 已接入 `ApiClient` 合同和 Team Channel 管理面板，绑定状态与成员只读/Owner 管理权限由后端最终裁决
+- GitHub binding API 返回 `enabled/provider/owner/repo/events/ingestionMode/lastDeliveryAt/lastSuccessfulPollAt/syncError/status` 脱敏摘要；当前 Web 已接入 `ApiClient` 合同和 Team Channel 管理面板，模式由后端自动选择，绑定状态与成员只读/Owner 管理权限由后端最终裁决
 - 普通聊天和工作群组共享 `ConversationDetailScaffold` / `ConversationPaneScaffold` 几何骨架，并复用 `ConversationHeader`、`ConversationHeaderActionButton` 与 `ConversationComposer*` 组件统一标题区、右侧图标操作、KB/快捷区、输入框和发送/停止按钮。普通聊天与 Workflow Team Channel 还共用 `ConversationRoomHeaderActions`，固定提供会话文件、Markdown/Obsidian 导出、邀请和单一成员入口（支持 Vault 时多一个目录选择按钮）；`ConversationRoomMembersDialog` 统一成员列表和面板内添加成员，两类 Room 打开添加区时都先展示尚未入群的联系人，并可按用户名、姓名或电话号码搜索其他用户，清空搜索词后恢复联系人候选。搜索允许单字符输入；输入后尚未提交时显示搜索提示，只有完成搜索且结果为空时才显示“未找到”；后端按精确、前缀和包含统一排序，用户名/姓名再支持有序字符及有限编辑距离的模糊匹配，手机号不做拼写纠错，并忽略大小写及字段中的分隔符。Workflow 仅 Owner 可添加和移除成员。两者还通过 `ConversationRoomComposerTools` 共用目录上传、文件上传、截屏和语音输入；截图预览及发送也走同一 Room 级实现。Workspace Agent 仍只保留编码会话控制，不展示这些依赖具体 Room 文件空间的工具；聊天多选与 Workspace Agent/权限/代码审查仍由各自主体提供。固定区使用 `silk-conversation-fixed-region`，消息区是唯一的 `silk-conversation-scroll-region`，业务状态和消息 scope 仍由各自主体管理
 - 桌面宽度下，当前工作群组在 Room 下展开 Team Channel、我的工作区、Co-pilot、成员、历史共享和已归档分组；再次点击当前工作群组只收拢/展开该子树，不切换或重载右侧会话。Room 树展开状态按 Room 持久化到 `silk_room_tree_expanded_<roomId>`，内部分类折叠状态持久化到 `silk_room_workspace_sections_<roomId>`。Room 侧栏可收起为 28px 重开条，整条均可点击展开，状态持久化到 `silk_room_list_collapsed`，并兼容读取旧 `silk_wf_list_collapsed` / `silk_chat_list_collapsed` 偏好。统一会话壳层根据会话容器宽度在 `<= 1100px` 时切为列表/详情单页、隐藏折叠控件且强制展示完整列表，并使用单一 Workspace 下拉选择器；根据详情容器宽度在 `<= 900px` 时把代码审查改为上下分栏，并保留 viewport media query 作为旧浏览器兜底。Conversation detail 到消息区必须保持完整的 `flex + min-height: 0` 高度链，避免消息区折叠为零高度
 - 旧 `GroupListScene`、`ChatScene` 和 `WorkflowScene` 外层列表已删除；聊天与工作群组仅保留统一壳层下的 `ChatAppWithGroup` / `WorkflowRoomView` 主体，创建和邀请码加入共用 `ConversationScene` 内的添加会话弹窗

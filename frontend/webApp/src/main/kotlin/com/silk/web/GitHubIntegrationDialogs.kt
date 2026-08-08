@@ -92,7 +92,7 @@ internal fun GitHubIntegrationDialog(
                 Text("GitHub 集成")
             }
             Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginBottom(16.px) } }) {
-                Text("将 GitHub Issue、Pull Request 和检查结果同步到当前 Team Channel。")
+                Text("将 GitHub Issue 和 Pull Request 更新同步到当前 Team Channel。")
             }
 
             if (loading) {
@@ -101,27 +101,38 @@ internal fun GitHubIntegrationDialog(
                 }
             } else {
                 binding?.let { current ->
+                    val hasError = current.status == "ERROR"
+                    val polling = current.ingestionMode == "POLLING"
                     Div({
                         style {
                             padding(12.px)
                             marginBottom(14.px)
-                            border(1.px, LineStyle.Solid, Color("#D7E8D7"))
+                            border(1.px, LineStyle.Solid, Color(if (hasError) "#F0C7C3" else "#D7E8D7"))
                             borderRadius(6.px)
-                            backgroundColor(Color("#F5FBF5"))
+                            backgroundColor(Color(if (hasError) "#FFF7F6" else "#F5FBF5"))
                         }
                     }) {
-                        Div({ style { fontWeight("600"); color(Color("#2E7D32")); marginBottom(4.px) } }) {
-                            Text("● 已连接")
+                        Div({ style { fontWeight("600"); color(Color(if (hasError) SilkColors.error else "#2E7D32")); marginBottom(4.px) } }) {
+                            Text(if (hasError) "● 同步异常" else "● 已连接")
                         }
                         Div({ style { fontSize(13.px); color(Color(SilkColors.textPrimary)) } }) {
                             Text("${current.owner}/${current.repo}")
                         }
                         Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(4.px) } }) {
+                            Text("接收方式：${if (polling) "定时同步" else "Webhook"}")
+                        }
+                        Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(2.px) } }) {
                             Text("事件：${current.events.joinToString(", ").ifBlank { "issues" }}")
                         }
-                        current.lastDeliveryAt?.let { timestamp ->
+                        (if (polling) current.lastSuccessfulPollAt else current.lastDeliveryAt)?.let { timestamp ->
                             Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(2.px) } }) {
-                                Text("最近接收：$timestamp")
+                                val formatted = formatMessageTimestampForWeb(timestamp, includeSeconds = false)
+                                Text(if (polling) "最近同步：$formatted" else "最近接收：$formatted")
+                            }
+                        }
+                        current.syncError?.takeIf { it.isNotBlank() }?.let { syncError ->
+                            Div({ style { fontSize(11.px); color(Color(SilkColors.error)); marginTop(4.px) } }) {
+                                Text(syncError)
                             }
                         }
                     }
@@ -143,7 +154,7 @@ internal fun GitHubIntegrationDialog(
                         style { workspaceFormInputStyle() }
                     }
                     Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(6.px) } }) {
-                        Text("Token 只会在服务端加密保存；重新绑定时会替换 GitHub Webhook。")
+                        Text("Token 只会在服务端加密保存；接收方式由后端配置自动决定。")
                     }
                 } else if (binding == null) {
                     Div({ style { color(Color(SilkColors.textSecondary)); padding(10.px, 0.px) } }) {
