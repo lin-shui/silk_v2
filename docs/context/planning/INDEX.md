@@ -6,6 +6,7 @@
 
 ## Active Execution Plans
 
+- [外部 Agent 统一接入与设备密钥认证方案](exec-plans/2026-08-10-unified-external-agent-auth.md)（方案设计完成，待实施）
 - [Unified Room Navigation 与显式 RoomKind](exec-plans/active/2026-08-04-unified-room-navigation.md)（代码与自动化验证完成，待发布环境手工验收）
 - [Workflow Room 重新设计](exec-plans/active/2026-07-24-workflow-room-redesign.md)（Phase 1、1.5、2 已完成；Phase 2.5 待手工验收）
 - [Phase 3：Workflow Room GitHub 集成 MVP](exec-plans/active/2026-08-06-phase3-github-integration-mvp.md)（实施中；Webhook + Polling 核心已实现，真实 GitHub 验收待完成；默认关闭，Owner 主动绑定后启用）
