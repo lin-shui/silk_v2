@@ -62,6 +62,25 @@ class AcpRegistryTest {
     }
 
     @Test
+    fun `same agent type on different instances remains independently addressable`() = runTest {
+        val first = AcpClient(InMemoryAcpTransport(), scope = backgroundScope)
+        val second = AcpClient(InMemoryAcpTransport(), scope = backgroundScope)
+        AcpRegistry.put("u", "claude-code", first, remoteIp = "10.0.0.1", agentInstanceId = "instance-1")
+        AcpRegistry.put("u", "claude-code", second, remoteIp = "10.0.0.2", agentInstanceId = "instance-2")
+
+        assertEquals(first, AcpRegistry.getByInstance("instance-1"))
+        assertEquals(second, AcpRegistry.getByInstance("instance-2"))
+        assertNull(AcpRegistry.get("u", "claude-code"), "type-only lookup must not guess between instances")
+        assertEquals(2, AcpRegistry.listConnectedInstances("u").size)
+        assertTrue(AcpRegistry.isConnected("u", "claude-code"))
+
+        AcpRegistry.unregister("instance-1")
+        assertNull(AcpRegistry.getByInstance("instance-1"))
+        assertEquals(second, AcpRegistry.getByInstance("instance-2"))
+        assertTrue(AcpRegistry.isConnected("u", "claude-code"))
+    }
+
+    @Test
     fun `registry defaults to device signature authentication`() = runTest {
         val signed = AcpClient(InMemoryAcpTransport(), scope = backgroundScope)
         AcpRegistry.put("u", "codex", signed, remoteIp = null)

@@ -63,6 +63,67 @@ class DeviceManagementModelsTest {
     }
 
     @Test
+    fun agentCapabilitiesHaveReadableDetailLabels() {
+        assertEquals("停止生成", agentCapabilityLabel(ManagedAgentCapability.CANCEL))
+        assertEquals("执行策略 V1", agentCapabilityLabel(ManagedAgentCapability.EXECUTION_POLICY_V1))
+        assertEquals("图片输出", agentCapabilityLabel(ManagedAgentCapability.IMAGE_OUTPUT))
+    }
+
+    @Test
+    fun roomAgentMentionsAreNormalizedAndReservedNamesAreRejected() {
+        assertEquals("cc", defaultManagedAgentMentionAlias("claude-code"))
+        assertEquals("agent1", defaultManagedAgentMentionAlias("agent"))
+        assertEquals(32, defaultManagedAgentMentionAlias("future-agent-type-with-a-very-long-name").length)
+        assertEquals("cc-linux_2", formatManagedAgentMentionAlias("@CC-Linux_2!"))
+        assertTrue(isManagedAgentMentionAliasValid("cc-linux_2"))
+        assertFalse(isManagedAgentMentionAliasValid("silk"))
+        assertFalse(isManagedAgentMentionAliasValid("-cc"))
+    }
+
+    @Test
+    fun roomMentionConflictsAreExplainedAndSuggestTheNextAvailableAlias() {
+        val existing = managedBinding(
+            bindingId = "binding-cc",
+            mentionAlias = "cc",
+            status = ManagedBindingStatus.ACTIVE,
+        )
+        val second = managedBinding(
+            bindingId = "binding-cc1",
+            mentionAlias = "cc1",
+            status = ManagedBindingStatus.PENDING,
+        )
+
+        val conflict = managedAgentMentionConflictMessage(
+            bindings = listOf(existing, second),
+            targetType = BindingTargetType.ROOM,
+            targetId = "room-1",
+            mentionAlias = "cc",
+        )
+
+        assertTrue(conflict?.contains("@cc 已被") == true)
+        assertTrue(conflict?.contains("@cc2") == true)
+        assertEquals(
+            null,
+            managedAgentMentionConflictMessage(
+                bindings = listOf(existing),
+                targetType = BindingTargetType.ROOM,
+                targetId = "room-1",
+                mentionAlias = "cc",
+                excludingBindingId = existing.bindingId,
+            ),
+        )
+        assertEquals(
+            null,
+            managedAgentMentionConflictMessage(
+                bindings = listOf(existing.copy(status = ManagedBindingStatus.REVOKED)),
+                targetType = BindingTargetType.ROOM,
+                targetId = "room-1",
+                mentionAlias = "cc",
+            ),
+        )
+    }
+
+    @Test
     fun fileMutationAndCommandPermissionsKeepReadPrerequisite() {
         val writeEnabled = updateBindingPermissionSelection(
             defaultBindingPermissions(),
@@ -116,4 +177,24 @@ class DeviceManagementModelsTest {
         assertEquals("待审批", bindingStatusLabel(binding.status))
         assertEquals(null, bindingApprovalSummary(binding.copy(status = ManagedBindingStatus.ACTIVE)))
     }
+
+    private fun managedBinding(
+        bindingId: String,
+        mentionAlias: String,
+        status: ManagedBindingStatus,
+    ) = ManagedBindingDto(
+        bindingId = bindingId,
+        agentInstanceId = "agent-$bindingId",
+        agentType = "claude-code",
+        agentDisplayName = "Claude Code",
+        targetType = BindingTargetType.ROOM,
+        targetId = "room-1",
+        messageScope = BindingMessageScope.TEAM,
+        triggerPolicy = BindingTriggerPolicy.MENTION,
+        mentionAlias = mentionAlias,
+        status = status,
+        createdBy = "owner-1",
+        ownerId = "owner-1",
+        createdAtEpochMs = 1L,
+    )
 }

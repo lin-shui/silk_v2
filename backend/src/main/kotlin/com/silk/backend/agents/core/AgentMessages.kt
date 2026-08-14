@@ -53,8 +53,9 @@ object AgentMessages {
         agentUserId: String,
         agentName: String,
         agentType: String,
+        streamKey: String = agentType,
     ) = Message(
-        id = "agent_streaming_$agentType",
+        id = "agent_streaming_$streamKey",
         userId = agentUserId,
         userName = agentName,
         content = accumulated,

@@ -1,8 +1,13 @@
 package com.silk.backend.database
 
+import com.silk.backend.agents.auth.defaultAgentMentionAlias
+import com.silk.backend.agents.auth.normalizeAgentMentionAlias
 import com.silk.backend.ai.AIConfig
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SchemaUtils
+import org.jetbrains.exposed.sql.SortOrder
+import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -67,18 +72,22 @@ object DatabaseFactory {
             SchemaUtils.create(
                 Users, Groups, GroupMembers, Contacts, ContactRequests,
                 UserSettingsTable, CcConnectTokens, HuaweiAccounts, WechatAccounts,
-                RefreshTokensTable, AgentDevices, AgentInstances, AgentBindings, AgentBindingAuditEvents,
+                RefreshTokensTable, AgentDevices, AgentDeviceRevocationTombstones, AgentInstances, AgentBindings,
+                AgentBindingAuditEvents,
                 AgentPairingRequests, AgentConnectionChallenges, AgentSecurityEvents,
             )
             SchemaUtils.createMissingTablesAndColumns(
                 Users, Groups, GroupMembers, Contacts, ContactRequests,
                 UserSettingsTable, CcConnectTokens, HuaweiAccounts, WechatAccounts,
-                RefreshTokensTable, AgentDevices, AgentInstances, AgentBindings, AgentBindingAuditEvents,
+                RefreshTokensTable, AgentDevices, AgentDeviceRevocationTombstones, AgentInstances, AgentBindings,
+                AgentBindingAuditEvents,
                 AgentPairingRequests, AgentConnectionChallenges, AgentSecurityEvents,
             )
             retireDirectBridgeTokens()
             migrateAgentAuthenticationOrigins()
             migrateAgentBindingApprovals()
+            migrateAgentBindingMentionAliases()
+            ensureAgentBindingMentionIndex()
         }
         
         logger.info(
@@ -135,6 +144,54 @@ object DatabaseFactory {
                 updated_at = COALESCE(updated_at, created_at)
             WHERE status = 'ACTIVE'
             """.trimIndent()
+        )
+    }
+
+    /** Give legacy Room bindings stable aliases before the live uniqueness index is installed. */
+    private fun org.jetbrains.exposed.sql.Transaction.migrateAgentBindingMentionAliases() {
+        val used = mutableSetOf<String>()
+        val rows = AgentBindings.innerJoin(AgentInstances)
+            .selectAll()
+            .orderBy(AgentBindings.createdAt to SortOrder.ASC, AgentBindings.id to SortOrder.ASC)
+            .toList()
+        rows.forEach { row ->
+            val targetType = row[AgentBindings.targetType]
+            val targetId = row[AgentBindings.targetId]
+            val scope = row[AgentBindings.messageScope]
+            val scopeKey = "$targetType|$targetId|$scope"
+            val existing = row[AgentBindings.mentionAlias].trim().lowercase()
+            val base = if (targetType == "ROOM") {
+                defaultAgentMentionAlias(row[AgentInstances.agentType])
+            } else {
+                "__workspace__${row[AgentBindings.id]}"
+            }
+            var alias = existing.takeIf { it.isNotBlank() } ?: base
+            if (targetType == "ROOM" && normalizeAgentMentionAlias(alias) == null) alias = base
+            if (targetType != "ROOM") alias = base
+            var suffix = 2
+            while ("$scopeKey|$alias" in used) {
+                val suffixText = suffix.toString()
+                alias = if (targetType == "ROOM") {
+                    "${base.take((32 - suffixText.length).coerceAtLeast(1))}$suffixText"
+                } else {
+                    "$base$suffixText"
+                }
+                suffix += 1
+            }
+            used += "$scopeKey|$alias"
+            if (row[AgentBindings.mentionAlias] != alias) {
+                AgentBindings.update({ AgentBindings.id eq row[AgentBindings.id] }) { updateRow ->
+                    updateRow[AgentBindings.mentionAlias] = alias
+                }
+            }
+        }
+    }
+
+    /** Revoked bindings rewrite their route so a new active binding can reuse the alias. */
+    private fun org.jetbrains.exposed.sql.Transaction.ensureAgentBindingMentionIndex() {
+        exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_binding_mention " +
+                "ON agent_bindings(target_type, target_id, message_scope, mention_alias)",
         )
     }
 

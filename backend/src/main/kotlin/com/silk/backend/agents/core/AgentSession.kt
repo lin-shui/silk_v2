@@ -19,13 +19,14 @@ enum class PermissionMode {
 }
 
 /**
- * per-(userId, groupId, agentType) 状态机。
+ * per-(userId, groupId, agentInstanceId) 状态机。
  * 不含 workingDir —— cwd 在 GroupAgentContext 共享。
  */
 class AgentSession(
     val userId: String,
     val groupId: String,
     val agentType: String,
+    val agentInstanceId: String? = null,
     @Volatile var acpSessionId: String? = null,
     /** CLI 真实 session id（Claude session UUID / Codex thread_id，从 adapter 拿到，用于持久化 + 重启 resume） */
     @Volatile var cliSessionId: String? = null,

@@ -846,7 +846,12 @@ class ChatServer(
             return true
         }
         if (AgentRuntime.snapshotState(workspace.ownerId, workspace.workspaceId) == null) {
-            AgentRuntime.autoActivateForWorkspace(workspace.ownerId, workspace.workspaceId, agentType)
+            AgentRuntime.autoActivateForWorkspace(
+                workspace.ownerId,
+                workspace.workspaceId,
+                agentType,
+                authorization.agentInstanceId,
+            )
         }
         val ccBroadcastFn: suspend (Message) -> Unit = { response ->
             broadcast(
@@ -863,6 +868,7 @@ class ChatServer(
             text = ccText,
             userName = message.userName,
             executionPolicy = authorization.executionPolicy,
+            agentInstanceId = authorization.agentInstanceId,
             broadcastFn = ccBroadcastFn,
         )
     }
@@ -893,6 +899,7 @@ class ChatServer(
             val authorization = AgentBindingAuthorizationService.authorize(
                 userId = binding.ownerId,
                 agentType = binding.agentType,
+                agentInstanceId = binding.agentInstanceId,
                 targetType = AgentBindingTargetType.ROOM,
                 targetId = roomId(),
                 messageScope = AgentBindingMessageScope.TEAM,
@@ -908,7 +915,13 @@ class ChatServer(
             AgentRuntime.handleBoundTeamPrompt(
                 userId = binding.ownerId,
                 roomId = roomId(),
+                agentInstanceId = binding.agentInstanceId,
                 agentType = binding.agentType,
+                agentDisplayName = buildString {
+                    append(binding.agentDisplayName)
+                    binding.agentDeviceDisplayName.takeIf(String::isNotBlank)?.let { append(" · ").append(it) }
+                    binding.mentionAlias.takeIf(String::isNotBlank)?.let { append(" (@").append(it).append(')') }
+                },
                 text = prompt,
                 userName = message.userName,
                 executionPolicy = executionPolicy,

@@ -65,6 +65,8 @@ fun DeviceManagementScene(appState: WebAppState) {
     var pageError by remember { mutableStateOf<String?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
     var busyAction by remember { mutableStateOf<String?>(null) }
+    var showRevokedHistory by remember { mutableStateOf(false) }
+    var detailsAgentId by remember { mutableStateOf<String?>(null) }
 
     var pairingCode by remember(user.id) { mutableStateOf(appState.pendingPairingCode.orEmpty()) }
     var pairingPreview by remember { mutableStateOf<PairingPreviewDto?>(null) }
@@ -75,8 +77,24 @@ fun DeviceManagementScene(appState: WebAppState) {
     var selectedTargetType by remember { mutableStateOf(BindingTargetType.ROOM) }
     var selectedTargetId by remember { mutableStateOf("") }
     var selectedTrigger by remember { mutableStateOf(BindingTriggerPolicy.MENTION) }
+    var selectedMentionAlias by remember { mutableStateOf("") }
     var selectedPermissions by remember { mutableStateOf(defaultBindingPermissions()) }
     var editingBindingId by remember { mutableStateOf<String?>(null) }
+    var bindingSubmissionError by remember { mutableStateOf<String?>(null) }
+
+    val activeDevices = devices.filter { it.status == DeviceEnrollmentStatus.ACTIVE }
+    val revokedDevices = devices.filter { it.status == DeviceEnrollmentStatus.REVOKED }
+    val activeAgents = agents.filter { it.status != ManagedAgentStatus.REVOKED }
+    val revokedAgents = agents.filter { it.status == ManagedAgentStatus.REVOKED }
+    val visibleBindings = bindings.filter { it.status != ManagedBindingStatus.REVOKED }
+    val revokedBindings = bindings.filter { it.status == ManagedBindingStatus.REVOKED }
+    val mentionConflictMessage = managedAgentMentionConflictMessage(
+        bindings = bindings,
+        targetType = selectedTargetType,
+        targetId = selectedTargetId,
+        mentionAlias = selectedMentionAlias,
+        excludingBindingId = editingBindingId,
+    )
 
     LaunchedEffect(user.id, refreshKey) {
         isLoading = true
@@ -118,6 +136,11 @@ fun DeviceManagementScene(appState: WebAppState) {
 
             if (selectedAgentId !in agents.filter { it.status == ManagedAgentStatus.ACTIVE }.map { it.agentInstanceId }) {
                 selectedAgentId = agents.firstOrNull { it.status == ManagedAgentStatus.ACTIVE }?.agentInstanceId.orEmpty()
+            }
+            if (selectedMentionAlias.isBlank()) {
+                selectedMentionAlias = agents.firstOrNull { it.agentInstanceId == selectedAgentId }
+                    ?.let { defaultManagedAgentMentionAlias(it.agentType) }
+                    .orEmpty()
             }
             val currentTargets = targets.filter { it.type == selectedTargetType }
             if (selectedTargetId !in currentTargets.map { it.id }) {
@@ -212,14 +235,14 @@ fun DeviceManagementScene(appState: WebAppState) {
                 onSwitchAccount = appState::logout,
             )
 
-            DeviceSectionTitle("已登记设备", devices.count { it.status == DeviceEnrollmentStatus.ACTIVE })
+            DeviceSectionTitle("已登记设备", activeDevices.size)
             if (isLoading) {
                 DeviceEmptyState("加载中…")
-            } else if (devices.isEmpty()) {
+            } else if (activeDevices.isEmpty()) {
                 DeviceEmptyState("暂无设备")
             } else {
                 Div({ style { deviceGridStyle() } }) {
-                    devices.forEach { device ->
+                    activeDevices.forEach { device ->
                         DeviceCard(device, busyAction == "device:${device.deviceId}") {
                             if (window.confirm("撤销设备 ${device.displayName}？该设备上的 Agent 将同时失效。")) {
                                 scope.launch {
@@ -242,37 +265,43 @@ fun DeviceManagementScene(appState: WebAppState) {
                 }
             }
 
-            DeviceSectionTitle("Agent", agents.count { it.status == ManagedAgentStatus.ACTIVE })
+            DeviceSectionTitle("Agent", activeAgents.count { it.status == ManagedAgentStatus.ACTIVE })
             if (isLoading) {
                 DeviceEmptyState("加载中…")
-            } else if (agents.isEmpty()) {
+            } else if (activeAgents.isEmpty()) {
                 DeviceEmptyState("暂无 Agent")
             } else {
                 Div({ style { deviceGridStyle() } }) {
-                    agents.forEach { agent ->
-                        AgentCard(agent, busyAction == "agent:${agent.agentInstanceId}") {
-                            if (window.confirm("撤销 Agent ${agent.displayName}？相关 Binding 将同时失效。")) {
-                                scope.launch {
-                                    busyAction = "agent:${agent.agentInstanceId}"
-                                    feedback = null
-                                    pageError = null
-                                    try {
-                                        ApiClient.revokeManagedAgent(agent.agentInstanceId)
-                                        feedback = "Agent 已撤销。"
-                                        refreshKey++
-                                    } catch (error: Exception) {
-                                        pageError = error.message ?: "撤销 Agent 失败"
-                                    } finally {
-                                        busyAction = null
+                    activeAgents.forEach { agent ->
+                        AgentCard(
+                            agent = agent,
+                            deviceName = devices.deviceName(agent.deviceId),
+                            busy = busyAction == "agent:${agent.agentInstanceId}",
+                            onDetails = { detailsAgentId = agent.agentInstanceId },
+                            onRevoke = {
+                                if (window.confirm("撤销 Agent ${agent.displayName}？相关 Binding 将同时失效。")) {
+                                    scope.launch {
+                                        busyAction = "agent:${agent.agentInstanceId}"
+                                        feedback = null
+                                        pageError = null
+                                        try {
+                                            ApiClient.revokeManagedAgent(agent.agentInstanceId)
+                                            feedback = "Agent 已撤销。"
+                                            refreshKey++
+                                        } catch (error: Exception) {
+                                            pageError = error.message ?: "撤销 Agent 失败"
+                                        } finally {
+                                            busyAction = null
+                                        }
                                     }
                                 }
-                            }
-                        }
+                            },
+                        )
                     }
                 }
             }
 
-            DeviceSectionTitle("使用范围", bindings.count { it.status == ManagedBindingStatus.ACTIVE })
+            DeviceSectionTitle("使用范围", visibleBindings.count { it.status == ManagedBindingStatus.ACTIVE })
             BindingCreator(
                 agents = agents.filter { it.status == ManagedAgentStatus.ACTIVE },
                 targets = targets,
@@ -280,28 +309,67 @@ fun DeviceManagementScene(appState: WebAppState) {
                 selectedTargetType = selectedTargetType,
                 selectedTargetId = selectedTargetId,
                 selectedTrigger = selectedTrigger,
+                selectedMentionAlias = selectedMentionAlias,
                 selectedPermissions = selectedPermissions,
                 editing = editingBindingId != null,
                 busy = busyAction == "binding:create",
-                onAgentChange = { selectedAgentId = it },
+                mentionConflictMessage = mentionConflictMessage,
+                submissionError = bindingSubmissionError,
+                deviceNames = devices.associate { it.deviceId to it.displayName },
+                onAgentChange = { agentId ->
+                    bindingSubmissionError = null
+                    selectedAgentId = agentId
+                    if (editingBindingId == null) {
+                        selectedMentionAlias = agents.firstOrNull { it.agentInstanceId == agentId }
+                            ?.let { defaultManagedAgentMentionAlias(it.agentType) }
+                            .orEmpty()
+                    }
+                },
                 onTargetTypeChange = { type ->
+                    bindingSubmissionError = null
                     selectedTargetType = type
                     selectedTargetId = targets.firstOrNull { it.type == type }?.id.orEmpty()
                     selectedPermissions = defaultBindingPermissions()
                 },
-                onTargetChange = { selectedTargetId = it },
-                onTriggerChange = { selectedTrigger = it },
+                onTargetChange = {
+                    bindingSubmissionError = null
+                    selectedTargetId = it
+                },
+                onTriggerChange = {
+                    bindingSubmissionError = null
+                    selectedTrigger = it
+                },
+                onMentionAliasChange = {
+                    bindingSubmissionError = null
+                    selectedMentionAlias = formatManagedAgentMentionAlias(it)
+                },
                 onPermissionChange = { permission, enabled ->
+                    bindingSubmissionError = null
                     selectedPermissions = updateBindingPermissionSelection(
                         selectedPermissions,
                         permission,
                         enabled,
                     )
                 },
-                onCancel = { editingBindingId = null },
-                onSubmit = {
+                onCancel = {
+                    bindingSubmissionError = null
+                    editingBindingId = null
+                },
+                onSubmit = submit@{
+                    val localConflict = managedAgentMentionConflictMessage(
+                        bindings = bindings,
+                        targetType = selectedTargetType,
+                        targetId = selectedTargetId,
+                        mentionAlias = selectedMentionAlias,
+                        excludingBindingId = editingBindingId,
+                    )
+                    if (localConflict != null) {
+                        bindingSubmissionError = localConflict
+                        return@submit
+                    }
                     scope.launch {
                         busyAction = "binding:create"
+                        bindingSubmissionError = null
                         feedback = null
                         pageError = null
                         try {
@@ -311,6 +379,7 @@ fun DeviceManagementScene(appState: WebAppState) {
                                 targetId = selectedTargetId,
                                 messageScope = compatibleMessageScope(selectedTargetType),
                                 triggerPolicy = selectedTrigger,
+                                mentionAlias = selectedMentionAlias,
                                 permissions = selectedPermissions,
                             )
                             val bindingId = editingBindingId
@@ -329,7 +398,14 @@ fun DeviceManagementScene(appState: WebAppState) {
                             editingBindingId = null
                             refreshKey++
                         } catch (error: Exception) {
-                            pageError = error.message ?: "添加使用范围失败"
+                            val message = error.message ?: "添加使用范围失败"
+                            bindingSubmissionError = if (
+                                message.contains("already used in this Room", ignoreCase = true)
+                            ) {
+                                "提及词 @$selectedMentionAlias 已被这个 Room 中的另一个 Agent 使用，请换一个唯一提及词后重试。"
+                            } else {
+                                message
+                            }
                         } finally {
                             busyAction = null
                         }
@@ -337,14 +413,17 @@ fun DeviceManagementScene(appState: WebAppState) {
                 },
             )
 
-            if (bindings.isEmpty()) {
+            if (visibleBindings.isEmpty()) {
                 DeviceEmptyState("暂无使用范围")
             } else {
-                bindings.forEach { binding ->
+                visibleBindings.forEach { binding ->
                     BindingRow(
                         binding = binding,
-                        agentName = agents.firstOrNull { it.agentInstanceId == binding.agentInstanceId }?.displayName
-                            ?: binding.agentDisplayName,
+                        agentName = agents.firstOrNull { it.agentInstanceId == binding.agentInstanceId }?.let { agent ->
+                            "${agent.displayName} · ${devices.deviceName(agent.deviceId)}"
+                        } ?: listOf(binding.agentDisplayName, binding.agentDeviceDisplayName)
+                            .filter(String::isNotBlank)
+                            .joinToString(" · "),
                         targetName = targets.firstOrNull {
                             it.type == binding.targetType && it.id == binding.targetId
                         }?.label ?: binding.targetId,
@@ -393,7 +472,9 @@ fun DeviceManagementScene(appState: WebAppState) {
                             selectedTargetType = binding.targetType
                             selectedTargetId = binding.targetId
                             selectedTrigger = binding.triggerPolicy
+                            selectedMentionAlias = binding.mentionAlias
                             selectedPermissions = binding.permissions
+                            bindingSubmissionError = null
                         },
                     ) {
                         if (window.confirm("移除此使用范围？")) {
@@ -415,7 +496,47 @@ fun DeviceManagementScene(appState: WebAppState) {
                     }
                 }
             }
+
+            val revokedCount = revokedDevices.size + revokedAgents.size + revokedBindings.size
+            if (revokedCount > 0) {
+                RevokedHistorySection(
+                    devices = revokedDevices,
+                    agents = revokedAgents,
+                    bindings = revokedBindings,
+                    expanded = showRevokedHistory,
+                    cleanupBusy = busyAction == "revoked-history:cleanup",
+                    deviceNames = devices.associate { it.deviceId to it.displayName },
+                    onToggle = { showRevokedHistory = !showRevokedHistory },
+                    onAgentDetails = { detailsAgentId = it },
+                    onCleanup = {
+                        scope.launch {
+                            busyAction = "revoked-history:cleanup"
+                            feedback = null
+                            pageError = null
+                            try {
+                                val result = ApiClient.cleanupRevokedAgentHistory()
+                                feedback = "${result.message}：设备 ${result.deletedDevices} 个，Agent ${result.deletedAgents} 个，使用范围 ${result.deletedBindings} 个。"
+                                refreshKey++
+                            } catch (error: Exception) {
+                                pageError = error.message ?: "清理撤销历史失败"
+                            } finally {
+                                busyAction = null
+                            }
+                        }
+                    },
+                )
+            }
         }
+    }
+
+    agents.firstOrNull { it.agentInstanceId == detailsAgentId }?.let { agent ->
+        AgentDetailsDialog(
+            agent = agent,
+            deviceName = devices.deviceName(agent.deviceId),
+            bindings = bindings.filter { it.agentInstanceId == agent.agentInstanceId },
+            targets = targets,
+            onDismiss = { detailsAgentId = null },
+        )
     }
 }
 
@@ -512,7 +633,62 @@ private fun PairingApprovalSection(
 }
 
 @Composable
-private fun DeviceCard(device: ManagedDeviceDto, busy: Boolean, onRevoke: () -> Unit) {
+private fun RevokedHistorySection(
+    devices: List<ManagedDeviceDto>,
+    agents: List<ManagedAgentDto>,
+    bindings: List<ManagedBindingDto>,
+    expanded: Boolean,
+    cleanupBusy: Boolean,
+    deviceNames: Map<String, String>,
+    onToggle: () -> Unit,
+    onAgentDetails: (String) -> Unit,
+    onCleanup: () -> Unit,
+) {
+    Div({ style { marginTop(28.px) } }) {
+        Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); justifyContent(JustifyContent.SpaceBetween); gap(12.px); property("flex-wrap", "wrap") } }) {
+            Div {
+                Div({ style { fontSize(17.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
+                    Text("已撤销历史")
+                }
+                Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(3.px) } }) {
+                    Text("默认隐藏，保留 ${devices.size} 个设备、${agents.size} 个 Agent、${bindings.size} 个使用范围")
+                }
+            }
+            Div({ style { display(DisplayStyle.Flex); gap(8.px); property("flex-wrap", "wrap") } }) {
+                DeviceSecondaryButton(if (expanded) "收起历史" else "查看历史", false, onToggle)
+                if (expanded) {
+                    DeviceDangerButton(
+                        if (cleanupBusy) "清理中…" else "清理到期记录",
+                        cleanupBusy,
+                        onCleanup,
+                    )
+                }
+            }
+        }
+        if (expanded) {
+            Div({ style { marginTop(12.px) } }) {
+                devices.forEach { device ->
+                    DeviceCard(device = device, busy = false, onRevoke = null)
+                }
+                agents.forEach { agent ->
+                    AgentCard(
+                        agent = agent,
+                        deviceName = deviceNames[agent.deviceId] ?: "未知设备",
+                        busy = false,
+                        onDetails = { onAgentDetails(agent.agentInstanceId) },
+                        onRevoke = null,
+                    )
+                }
+                bindings.forEach { binding ->
+                    RevokedBindingHistoryRow(binding)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceCard(device: ManagedDeviceDto, busy: Boolean, onRevoke: (() -> Unit)?) {
     Div({ style { deviceCardStyle() } }) {
         Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.SpaceBetween); gap(12.px) } }) {
             Div({ style { minWidth(0.px) } }) {
@@ -523,14 +699,21 @@ private fun DeviceCard(device: ManagedDeviceDto, busy: Boolean, onRevoke: () -> 
                     Text("${device.platform} · ${device.keyAlgorithm}")
                 }
             }
-            StatusBadge(if (device.connected) "已连接" else device.status.name, device.connected)
+            StatusBadge(
+                when {
+                    device.connected -> "已连接"
+                    device.status == DeviceEnrollmentStatus.REVOKED -> "已撤销"
+                    else -> device.status.name
+                },
+                device.connected,
+            )
         }
         DeviceMetadata("指纹", fingerprintSuffix(device.publicKeyFingerprint))
         DeviceMetadata("最近连接", device.lastSeenAtEpochMs?.let {
             formatMessageTimestampForWeb(it, includeSeconds = false)
         } ?: "尚未连接")
         device.lastSeenIp?.let { DeviceMetadata("最近地址", it) }
-        if (device.status == DeviceEnrollmentStatus.ACTIVE) {
+        if (device.status == DeviceEnrollmentStatus.ACTIVE && onRevoke != null) {
             Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); marginTop(14.px) } }) {
                 DeviceDangerButton(if (busy) "撤销中…" else "撤销设备", busy, onRevoke)
             }
@@ -539,7 +722,13 @@ private fun DeviceCard(device: ManagedDeviceDto, busy: Boolean, onRevoke: () -> 
 }
 
 @Composable
-private fun AgentCard(agent: ManagedAgentDto, busy: Boolean, onRevoke: () -> Unit) {
+private fun AgentCard(
+    agent: ManagedAgentDto,
+    deviceName: String,
+    busy: Boolean,
+    onDetails: () -> Unit,
+    onRevoke: (() -> Unit)?,
+) {
     Div({ style { deviceCardStyle() } }) {
         Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.SpaceBetween); gap(12.px) } }) {
             Div({ style { minWidth(0.px) } }) {
@@ -550,16 +739,200 @@ private fun AgentCard(agent: ManagedAgentDto, busy: Boolean, onRevoke: () -> Uni
                     Text("${agent.agentType} · ${agent.transportAdapter.name} · ${agent.connectorVersion}")
                 }
             }
-            StatusBadge(if (agent.connected) "已连接" else agent.status.name, agent.connected)
+            StatusBadge(
+                when {
+                    agent.connected -> "已连接"
+                    agent.status == ManagedAgentStatus.REVOKED -> "已撤销"
+                    else -> agent.status.name
+                },
+                agent.connected,
+            )
         }
         DeviceMetadata("最近连接", agent.lastSeenAtEpochMs?.let {
             formatMessageTimestampForWeb(it, includeSeconds = false)
         } ?: "尚未连接")
-        DeviceMetadata("能力", agent.capabilities.sortedBy { it.name }.joinToString(" · ") { it.name })
-        if (agent.status == ManagedAgentStatus.ACTIVE) {
-            Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); marginTop(14.px) } }) {
+        DeviceMetadata("设备", deviceName)
+        Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); gap(8.px); marginTop(14.px) } }) {
+            DeviceSecondaryButton("查看详情", busy, onDetails)
+            if (agent.status == ManagedAgentStatus.ACTIVE && onRevoke != null) {
                 DeviceDangerButton(if (busy) "撤销中…" else "撤销 Agent", busy, onRevoke)
             }
+        }
+    }
+}
+
+@Composable
+private fun AgentDetailsDialog(
+    agent: ManagedAgentDto,
+    deviceName: String,
+    bindings: List<ManagedBindingDto>,
+    targets: List<BindingTargetOption>,
+    onDismiss: () -> Unit,
+) {
+    ModalOverlay(onDismiss = onDismiss, zIndex = 2200) {
+        Div({ style { agentDetailsDialogStyle() } }) {
+            Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.SpaceBetween); gap(16.px) } }) {
+                Div({ style { minWidth(0.px) } }) {
+                    Div({ style { fontSize(19.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
+                        Text(agent.displayName)
+                    }
+                    Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(4.px) } }) {
+                        Text("Agent 详情")
+                    }
+                }
+                Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(8.px) } }) {
+                    StatusBadge(
+                        when {
+                            agent.connected -> "已连接"
+                            agent.status == ManagedAgentStatus.REVOKED -> "已撤销"
+                            else -> agent.status.name
+                        },
+                        agent.connected,
+                    )
+                    DeviceIconCloseButton(onDismiss)
+                }
+            }
+
+            Div({ style { agentDetailsSectionStyle() } }) {
+                AgentDetailsSectionTitle("基本信息")
+                DeviceMetadata("设备", deviceName)
+                DeviceMetadata("类型", agent.agentType)
+                DeviceMetadata("传输适配器", agent.transportAdapter.name)
+                DeviceMetadata("Connector", agent.connectorVersion)
+                DeviceMetadata("Agent ID", agent.agentInstanceId)
+                DeviceMetadata(
+                    "最近连接",
+                    agent.lastSeenAtEpochMs?.let {
+                        formatMessageTimestampForWeb(it, includeSeconds = false)
+                    } ?: "尚未连接",
+                )
+            }
+
+            Div({ style { agentDetailsSectionStyle() } }) {
+                AgentDetailsSectionTitle("Agent 声明能力")
+                Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(6.px) } }) {
+                    Text("声明能力表示 Agent 支持的操作；实际可用范围仍受 Binding 权限限制。")
+                }
+                if (agent.capabilities.isEmpty()) {
+                    DeviceMetadata("能力", "未声明")
+                } else {
+                    Div({ style { display(DisplayStyle.Flex); gap(7.px); property("flex-wrap", "wrap"); marginTop(12.px) } }) {
+                        agent.capabilities.sortedBy(::agentCapabilityLabel).forEach { capability ->
+                            AgentCapabilityChip(agentCapabilityLabel(capability), capability.name)
+                        }
+                    }
+                }
+            }
+
+            Div({ style { agentDetailsSectionStyle() } }) {
+                AgentDetailsSectionTitle("使用范围")
+                if (bindings.isEmpty()) {
+                    DeviceMetadata("Binding", "尚未绑定 Room 或 Workspace")
+                } else {
+                    bindings.sortedByDescending { it.createdAtEpochMs }.forEach { binding ->
+                        val targetName = targets.firstOrNull {
+                            it.type == binding.targetType && it.id == binding.targetId
+                        }?.label ?: binding.targetId
+                        AgentDetailsBindingRow(binding, targetName)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentDetailsSectionTitle(title: String) {
+    Div({ style { fontSize(14.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
+        Text(title)
+    }
+}
+
+@Composable
+private fun AgentCapabilityChip(label: String, rawName: String) {
+    Span({
+        attr("title", rawName)
+        style {
+            padding(5.px, 8.px)
+            borderRadius(5.px)
+            backgroundColor(Color("#F3EFE8"))
+            color(Color(SilkColors.textPrimary))
+            fontSize(12.px)
+        }
+    }) { Text(label) }
+}
+
+@Composable
+private fun AgentDetailsBindingRow(binding: ManagedBindingDto, targetName: String) {
+    Div({
+        style {
+            marginTop(10.px)
+            padding(10.px, 12.px)
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            borderRadius(6.px)
+        }
+    }) {
+        Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(8.px); property("flex-wrap", "wrap") } }) {
+            Span({ style { fontSize(13.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
+                Text(targetName)
+            }
+            StatusBadge(bindingStatusLabel(binding.status), binding.status == ManagedBindingStatus.ACTIVE)
+        }
+        Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(5.px) } }) {
+            val mention = binding.mentionAlias.takeIf {
+                binding.targetType == BindingTargetType.ROOM && !it.startsWith("__")
+            }?.let { " · @$it" }.orEmpty()
+            Text("${binding.targetType.name} · ${triggerPolicyLabel(binding.triggerPolicy)}$mention")
+        }
+        DeviceMetadata(
+            "权限",
+            binding.permissions.sortedBy(::bindingPermissionLabel).joinToString(" · ", transform = ::bindingPermissionLabel),
+        )
+    }
+}
+
+@Composable
+private fun DeviceIconCloseButton(onClick: () -> Unit) {
+    Button({
+        attr("type", "button")
+        attr("title", "关闭")
+        attr("aria-label", "关闭")
+        onClick { onClick() }
+        style {
+            width(32.px)
+            height(32.px)
+            padding(0.px)
+            border(0.px)
+            backgroundColor(Color("transparent"))
+            color(Color(SilkColors.textSecondary))
+            fontSize(20.px)
+            property("cursor", "pointer")
+        }
+    }) { Text("×") }
+}
+
+@Composable
+private fun RevokedBindingHistoryRow(binding: ManagedBindingDto) {
+    Div({ style { bindingRowStyle() } }) {
+        Div({ style { minWidth(0.px); flex(1) } }) {
+            Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(8.px); property("flex-wrap", "wrap") } }) {
+                Span({ style { fontSize(14.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
+                    Text(
+                        listOf(binding.agentDisplayName, binding.agentDeviceDisplayName)
+                            .filter(String::isNotBlank)
+                            .joinToString(" · ")
+                    )
+                }
+                Span({ style { color(Color(SilkColors.textLight)) } }) { Text("→") }
+                Span({ style { fontSize(14.px); color(Color(SilkColors.textPrimary)) } }) {
+                    Text(binding.targetId)
+                }
+                StatusBadge("已撤销", false)
+            }
+            DeviceMetadata(
+                "撤销时间",
+                binding.revokedAtEpochMs?.let { formatMessageTimestampForWeb(it, includeSeconds = false) } ?: "未知",
+            )
         }
     }
 }
@@ -573,25 +946,31 @@ private fun BindingCreator(
     selectedTargetType: BindingTargetType,
     selectedTargetId: String,
     selectedTrigger: BindingTriggerPolicy,
+    selectedMentionAlias: String,
     selectedPermissions: Set<BindingPermission>,
     editing: Boolean,
     busy: Boolean,
+    mentionConflictMessage: String?,
+    submissionError: String?,
+    deviceNames: Map<String, String>,
     onAgentChange: (String) -> Unit,
     onTargetTypeChange: (BindingTargetType) -> Unit,
     onTargetChange: (String) -> Unit,
     onTriggerChange: (BindingTriggerPolicy) -> Unit,
+    onMentionAliasChange: (String) -> Unit,
     onPermissionChange: (BindingPermission, Boolean) -> Unit,
     onCancel: () -> Unit,
     onSubmit: () -> Unit,
 ) {
     val availableTargets = targets.filter { it.type == selectedTargetType }
     Div({ style { bindingFormStyle() } }) {
+        submissionError?.let { DeviceNotice(it, isError = true) }
         Div({ style { property("display", "grid"); property("grid-template-columns", "repeat(auto-fit, minmax(180px, 1fr))"); gap(12.px) } }) {
             DeviceSelectField("Agent", selectedAgentId, onAgentChange) {
                 if (agents.isEmpty()) Option("") { Text("没有可用 Agent") }
                 agents.forEach { agent ->
                     Option(agent.agentInstanceId, attrs = { if (agent.agentInstanceId == selectedAgentId) attr("selected", "") }) {
-                        Text(agent.displayName)
+                        Text("${agent.displayName} · ${deviceNames[agent.deviceId] ?: "未知设备"}")
                     }
                 }
             }
@@ -620,6 +999,28 @@ private fun BindingCreator(
                         Text(triggerPolicyLabel(policy))
                     }
                 }
+            }
+        }
+        if (selectedTargetType == BindingTargetType.ROOM) {
+            Div({ style { marginTop(14.px); maxWidth(360.px) } }) {
+                Div({ style { fontSize(12.px); fontWeight("600"); color(Color(SilkColors.textSecondary)); marginBottom(6.px) } }) {
+                    Text("Room 提及词")
+                }
+                Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(6.px) } }) {
+                    Span({ style { color(Color(SilkColors.textSecondary)); fontSize(14.px) } }) { Text("@") }
+                    Input(InputType.Text) {
+                        value(selectedMentionAlias)
+                        attr("placeholder", "例如 cc-linux")
+                        attr("aria-label", "Room 提及词")
+                        if (mentionConflictMessage != null) attr("aria-invalid", "true")
+                        onInput { onMentionAliasChange(it.value) }
+                        style { deviceInputStyle() }
+                    }
+                }
+                Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(5.px) } }) {
+                    Text("同一 Room 内必须唯一，可使用小写字母、数字、- 和 _。")
+                }
+                mentionConflictMessage?.let { DeviceInlineError(it) }
             }
         }
         Div({ style { marginTop(14.px) } }) {
@@ -652,7 +1053,9 @@ private fun BindingCreator(
                     } else {
                         "添加使用范围"
                     },
-                    disabled = busy || selectedAgentId.isBlank() || selectedTargetId.isBlank(),
+                    disabled = busy || selectedAgentId.isBlank() || selectedTargetId.isBlank() ||
+                        selectedTargetType == BindingTargetType.ROOM &&
+                        (!isManagedAgentMentionAliasValid(selectedMentionAlias) || mentionConflictMessage != null),
                     onClick = onSubmit,
                 )
             }
@@ -723,7 +1126,10 @@ private fun BindingRow(
                 StatusBadge(bindingStatusLabel(binding.status), binding.status == ManagedBindingStatus.ACTIVE)
             }
             Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(5.px) } }) {
-                Text("${binding.targetType.name} · ${triggerPolicyLabel(binding.triggerPolicy)} · ${binding.permissions.joinToString(" · ") { it.name }}")
+                val mention = binding.mentionAlias.takeIf {
+                    binding.targetType == BindingTargetType.ROOM && !it.startsWith("__")
+                }?.let { "@$it · " }.orEmpty()
+                Text("${binding.targetType.name} · $mention${triggerPolicyLabel(binding.triggerPolicy)} · ${binding.permissions.joinToString(" · ") { it.name }}")
             }
             bindingApprovalSummary(binding)?.let { summary ->
                 Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(5.px) } }) {
@@ -870,6 +1276,9 @@ private fun triggerPolicyLabel(policy: BindingTriggerPolicy): String = when (pol
     BindingTriggerPolicy.EVENT -> "事件"
 }
 
+private fun List<ManagedDeviceDto>.deviceName(deviceId: String): String =
+    firstOrNull { it.deviceId == deviceId }?.displayName ?: "未知设备"
+
 private fun org.jetbrains.compose.web.css.StyleScope.devicePageStyle() {
     minWidth(0.px); width(100.percent); property("min-height", "100%")
     backgroundColor(Color(SilkColors.background)); color(Color(SilkColors.textPrimary))
@@ -897,6 +1306,24 @@ private fun org.jetbrains.compose.web.css.StyleScope.deviceGridStyle() {
 private fun org.jetbrains.compose.web.css.StyleScope.deviceCardStyle() {
     padding(16.px); border(1.px, LineStyle.Solid, Color(SilkColors.border)); borderRadius(7.px)
     backgroundColor(Color(SilkColors.surfaceElevated)); minWidth(0.px)
+}
+
+private fun org.jetbrains.compose.web.css.StyleScope.agentDetailsDialogStyle() {
+    width(620.px)
+    property("max-width", "calc(100vw - 32px)")
+    property("max-height", "calc(100vh - 48px)")
+    property("overflow-y", "auto")
+    property("box-sizing", "border-box")
+    padding(20.px)
+    borderRadius(8.px)
+    backgroundColor(Color(SilkColors.surfaceElevated))
+    property("box-shadow", "0 12px 36px rgba(0,0,0,0.18)")
+}
+
+private fun org.jetbrains.compose.web.css.StyleScope.agentDetailsSectionStyle() {
+    marginTop(18.px)
+    padding(14.px, 0.px, 0.px, 0.px)
+    property("border-top", "1px solid ${SilkColors.divider}")
 }
 
 private fun org.jetbrains.compose.web.css.StyleScope.bindingFormStyle() {

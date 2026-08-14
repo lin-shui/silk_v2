@@ -6,6 +6,7 @@ import com.silk.backend.database.CcConnectTokens
 import com.silk.backend.database.AgentBindings
 import com.silk.backend.database.AgentBindingAuditEvents
 import com.silk.backend.database.AgentDevices
+import com.silk.backend.database.AgentDeviceRevocationTombstones
 import com.silk.backend.database.AgentInstances
 import com.silk.backend.database.AgentPairingRequests
 import com.silk.backend.database.AgentConnectionChallenges
@@ -51,6 +52,7 @@ internal class TestWorkspace : AutoCloseable {
                 CcConnectTokens,
                 RefreshTokensTable,
                 AgentDevices,
+                AgentDeviceRevocationTombstones,
                 AgentInstances,
                 AgentBindings,
                 AgentBindingAuditEvents,

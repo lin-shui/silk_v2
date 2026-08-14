@@ -144,6 +144,53 @@ class AgentBindingApprovalRouteContractTest {
         }
     }
 
+    @Test
+    fun `room mention aliases are validated and unique across agent instances`() {
+        TestWorkspace().use {
+            val owner = createUser("binding-alias-owner", "Binding Alias Owner", "13800007801")
+            val room = assertNotNull(GroupRepository.createGroup("Alias Room", owner.id))
+            val firstAgent = seedActiveAgent(owner.id, "first")
+            val secondAgent = seedActiveAgent(owner.id, "second")
+            val token = JwtProvider.generateAccessToken(owner.id)
+
+            testApplication {
+                application { module() }
+                fun request(agentInstanceId: String, alias: String) = CreateAgentBindingRequest(
+                    agentInstanceId = agentInstanceId,
+                    targetType = AgentBindingTargetType.ROOM,
+                    targetId = room.id,
+                    messageScope = AgentBindingMessageScope.TEAM,
+                    triggerPolicy = AgentTriggerPolicy.MENTION,
+                    mentionAlias = alias,
+                )
+
+                val created = client.post("/api/agent-bindings") {
+                    bearer(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(request(firstAgent, "cc-one")))
+                }
+                assertEquals(HttpStatusCode.Created, created.status)
+                assertEquals("cc-one", created.decode<AgentBindingDto>().mentionAlias)
+
+                val duplicate = client.post("/api/agent-bindings") {
+                    bearer(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(request(secondAgent, "cc-one")))
+                }
+                assertEquals(HttpStatusCode.Conflict, duplicate.status)
+                assertTrue(duplicate.bodyAsText().contains("MENTION_ALIAS_TAKEN"))
+
+                val invalid = client.post("/api/agent-bindings") {
+                    bearer(token)
+                    contentType(ContentType.Application.Json)
+                    setBody(json.encodeToString(request(secondAgent, "Silk")))
+                }
+                assertEquals(HttpStatusCode.BadRequest, invalid.status)
+                assertTrue(invalid.bodyAsText().contains("INVALID_MENTION_ALIAS"))
+            }
+        }
+    }
+
     private suspend fun io.ktor.server.testing.ApplicationTestBuilder.approve(
         token: String,
         bindingId: String,
@@ -202,17 +249,17 @@ class AgentBindingApprovalRouteContractTest {
             )
         )
 
-    private fun seedActiveAgent(userId: String): String {
-        val deviceId = "device-$userId"
-        val agentInstanceId = "agent-$userId"
+    private fun seedActiveAgent(userId: String, suffix: String = "default"): String {
+        val deviceId = "device-$userId-$suffix"
+        val agentInstanceId = "agent-$userId-$suffix"
         val now = LocalDateTime.now()
         transaction {
             AgentDevices.insert { row ->
                 row[AgentDevices.id] = deviceId
                 row[AgentDevices.userId] = userId
-                row[AgentDevices.publicKey] = "public-key-$userId"
+                row[AgentDevices.publicKey] = "public-key-$userId-$suffix"
                 row[AgentDevices.keyAlgorithm] = AgentAuthProtocol.KEY_ALGORITHM
-                row[AgentDevices.fingerprint] = "fingerprint-$userId"
+                row[AgentDevices.fingerprint] = "fingerprint-$userId-$suffix"
                 row[AgentDevices.displayName] = "Test Device"
                 row[AgentDevices.status] = DeviceEnrollmentStatus.ACTIVE.name
                 row[AgentDevices.platform] = "test"

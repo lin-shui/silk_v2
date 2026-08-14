@@ -49,7 +49,10 @@
   - `agents/auth/AgentBindingAuthorizationTest` — 设备签名连接精确绑定 `agentInstanceId`、Binding 权限和声明能力交集
   - `agents/auth/AgentAuthProtocolTest` — raw Ed25519、公钥指纹、设备/新增 Agent canonical payload、origin 绑定、过期与一次性 challenge
   - `agents/auth/AgentAuthRateLimiterTest` / `AgentPairingRetentionTest` — 限速窗口、攻击者 key 清理、桶硬上限，以及过期配对 7 天保留边界
+  - `agents/auth/AgentRevocationCleanupTest` — 撤销历史保留期、设备/Agent/Binding 级联清理、审计保留和旧设备公钥 tombstone
   - `agents/acp/AcpMultiplexedTransportTest` — 每 Agent 有界逻辑 transport 的双向隔离、幂等关闭与 Host 关闭不回显
+  - `agents/acp/AcpRegistryTest` — 同类型多 AgentInstance 并存、精确查询/注销以及不明确时拒绝 type-only 猜测
+  - `AgentBindingTeamRoutingContractTest` — 同类型不同设备通过独立 Room mention alias 路由到各自 ACP transport
   - `agents/core/AgentBindingTriggerMatcherTest` — Room TEAM 的 ALL/MENTION/EVENT 触发隔离、跨 Agent mention 过滤及定向 `/new` 提取
 - Host command: `cd silk-agent && go test ./...`
 - Host coverage: DeviceSigner 系统凭据优先级与 secure-file fallback、加密 backup/restore/rotate、canonical protocol（含签名新增 Agent）、HTTPS/WSS TLS、连接/认证 origin 分离、pairing/add-Agent HTTP credential boundary 与 redirect credential 防泄漏、受保护控制 socket/Windows pipe 与新 Agent 热加载、PID/config handling、日志增量 follow/截断恢复、单一 WSS `agentInstanceId` envelope/双 Agent 路由隔离、全启用身份撤销后的终止行为、Adapter stdin/stdout JSON-RPC v2 nonce binding/双向 ACP、Unix wrapper/随包 Python 模块 ownership/parent trust、Windows Adapter source owner/DACL 与 `CREATE_NO_WINDOW` 启动标志、credential/raw-I/O 环境过滤和 Python bytecode 抑制、health/shutdown lifecycle、当前用户级 systemd/LaunchAgent/Scheduled Task 模板与含空格 profile 路径持久化、Windows profile 目录 DACL 收紧/子文件继承、Windows 私密文件 owner/DACL、签名 release manifest/hash/版本/未签名文件与宽泛输出权限拒绝；竞态检查使用 `go test -race ./...`，六平台交叉编译使用 `CGO_ENABLED=0 GOOS=<linux|darwin|windows> GOARCH=<amd64|arm64> go test -c`

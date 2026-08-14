@@ -245,10 +245,12 @@ data class AgentBindingDto(
     val agentInstanceId: String,
     val agentType: String,
     val agentDisplayName: String,
+    val agentDeviceDisplayName: String = "",
     val targetType: AgentBindingTargetType,
     val targetId: String,
     val messageScope: AgentBindingMessageScope,
     val triggerPolicy: AgentTriggerPolicy,
+    val mentionAlias: String = "",
     val permissions: Set<AgentPermission>,
     val status: AgentBindingStatus,
     val createdBy: String,
@@ -274,6 +276,7 @@ data class CreateAgentBindingRequest(
     val targetId: String,
     val messageScope: AgentBindingMessageScope,
     val triggerPolicy: AgentTriggerPolicy,
+    val mentionAlias: String = "",
     val permissions: Set<AgentPermission> = setOf(
         AgentPermission.READ_MESSAGE,
         AgentPermission.SEND_MESSAGE,
@@ -287,6 +290,7 @@ data class UpdateAgentBindingRequest(
     val targetId: String,
     val messageScope: AgentBindingMessageScope,
     val triggerPolicy: AgentTriggerPolicy,
+    val mentionAlias: String = "",
     val permissions: Set<AgentPermission> = setOf(
         AgentPermission.READ_MESSAGE,
         AgentPermission.SEND_MESSAGE,
@@ -333,6 +337,41 @@ data class AgentManagementActionResponse(
     val success: Boolean,
     val message: String,
 )
+
+@Serializable
+data class AgentRevocationCleanupResponse(
+    val success: Boolean = true,
+    val message: String,
+    val retentionDays: Long,
+    val deletedDevices: Int,
+    val deletedAgents: Int,
+    val deletedBindings: Int,
+)
+
+internal val RESERVED_AGENT_MENTION_ALIASES = setOf("silk", "system", "agent")
+
+internal fun defaultAgentMentionAlias(agentType: String): String {
+    val candidate = when (agentType.lowercase()) {
+        "claude-code" -> "cc"
+        "codex" -> "codex"
+        else -> agentType.lowercase()
+            .replace(Regex("[^a-z0-9_-]"), "-")
+            .trim('-', '_')
+            .take(32)
+            .trimEnd('-', '_')
+    }
+    return candidate.takeIf {
+        it.matches(Regex("[a-z0-9](?:[a-z0-9_-]{0,31})")) && it !in RESERVED_AGENT_MENTION_ALIASES
+    } ?: "agent1"
+}
+
+internal fun normalizeAgentMentionAlias(value: String): String? {
+    val normalized = value.trim().lowercase()
+    if (normalized.isBlank() || normalized.length > 32) return null
+    if (!normalized.matches(Regex("[a-z0-9](?:[a-z0-9_-]{0,31})"))) return null
+    if (normalized in RESERVED_AGENT_MENTION_ALIASES) return null
+    return normalized
+}
 
 @Serializable
 data class AgentAuthErrorResponse(

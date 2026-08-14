@@ -243,6 +243,72 @@ class AgentBindingTeamRoutingContractTest {
         }
     }
 
+    @Test
+    fun `same-type bindings route distinct mentions to distinct agent instances`() = runBlocking {
+        val clientScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            TestWorkspace().use {
+                AgentRegistry.register(CodexDescriptor)
+                val owner = createUser("team-multi-owner", "Team Multi Owner", "13800007799")
+                val sender = createUser("team-multi-sender", "Team Multi Sender", "13800007800")
+                val room = GroupRepository.createGroup("Bound TEAM Multi", owner.id, RoomKind.CHAT)
+                    ?: error("failed to create room")
+                assertTrue(GroupRepository.addUserToGroup(room.id, sender.id, MemberRole.GUEST))
+                val linuxAgent = seedAgentAndBinding(owner.id, room.id, "linux", "codex-linux")
+                val windowsAgent = seedAgentAndBinding(owner.id, room.id, "windows", "codex-windows")
+                val linuxTransport = InMemoryAcpTransport()
+                val windowsTransport = InMemoryAcpTransport()
+                AcpRegistry.put(
+                    userId = owner.id,
+                    agentType = "codex",
+                    client = AcpClient(linuxTransport, clientScope),
+                    remoteIp = "10.0.0.1",
+                    agentInstanceId = linuxAgent,
+                    capabilities = setOf(AgentCapability.PROMPT, AgentCapability.EXECUTION_POLICY_V1),
+                )
+                AcpRegistry.put(
+                    userId = owner.id,
+                    agentType = "codex",
+                    client = AcpClient(windowsTransport, clientScope),
+                    remoteIp = "10.0.0.2",
+                    agentInstanceId = windowsAgent,
+                    capabilities = setOf(AgentCapability.PROMPT, AgentCapability.EXECUTION_POLICY_V1),
+                )
+
+                val server = ChatServer("group_${room.id}", roomKind = RoomKind.CHAT)
+                server.broadcast(
+                    Message(
+                        id = "team-multi-linux",
+                        userId = sender.id,
+                        userName = sender.fullName,
+                        content = "@codex-linux only linux",
+                        timestamp = System.currentTimeMillis(),
+                        scope = MessageScope.TEAM,
+                    )
+                )
+
+                val linuxNew = json.parseToJsonElement(withTimeout(2_000) { linuxTransport.readClientSent() }).jsonObject
+                assertEquals("session/new", linuxNew["method"]?.jsonPrimitive?.content)
+                assertNull(withTimeoutOrNull(250) { windowsTransport.readClientSent() })
+                linuxTransport.pushFromServer(
+                    """{"jsonrpc":"2.0","id":${linuxNew["id"]!!.jsonPrimitive.long},"result":{"sessionId":"linux-session"}}"""
+                )
+                val linuxPrompt = json.parseToJsonElement(withTimeout(2_000) { linuxTransport.readClientSent() }).jsonObject
+                assertEquals("session/prompt", linuxPrompt["method"]?.jsonPrimitive?.content)
+                assertTrue(
+                    linuxPrompt["params"]!!.jsonObject["prompt"]!!.jsonArray.any {
+                        it.jsonObject["text"]?.jsonPrimitive?.content == "only linux"
+                    }
+                )
+                linuxTransport.pushFromServer(
+                    """{"jsonrpc":"2.0","id":${linuxPrompt["id"]!!.jsonPrimitive.long},"result":{"stopReason":"end_turn"}}"""
+                )
+            }
+        } finally {
+            clientScope.cancel()
+        }
+    }
+
     private fun createUser(loginName: String, fullName: String, phoneNumber: String) =
         UserRepository.createUser(
             loginName = loginName,
@@ -251,18 +317,23 @@ class AgentBindingTeamRoutingContractTest {
             passwordHash = BCrypt.hashpw("secret123", BCrypt.gensalt()),
         ) ?: error("failed to create user")
 
-    private fun seedAgentAndBinding(ownerId: String, roomId: String): String {
+    private fun seedAgentAndBinding(
+        ownerId: String,
+        roomId: String,
+        suffix: String = "default",
+        mentionAlias: String = "",
+    ): String {
         val now = LocalDateTime.now()
-        val deviceId = "team-device"
-        val agentId = "team-agent"
+        val deviceId = "team-device-$suffix"
+        val agentId = "team-agent-$suffix"
         transaction {
             AgentDevices.insert { row ->
                 row[AgentDevices.id] = deviceId
                 row[AgentDevices.userId] = ownerId
-                row[AgentDevices.publicKey] = "team-public-key"
+                row[AgentDevices.publicKey] = "team-public-key-$suffix"
                 row[AgentDevices.keyAlgorithm] = AgentAuthProtocol.KEY_ALGORITHM
-                row[AgentDevices.fingerprint] = "team-fingerprint"
-                row[AgentDevices.displayName] = "Team Device"
+                row[AgentDevices.fingerprint] = "team-fingerprint-$suffix"
+                row[AgentDevices.displayName] = "Team Device $suffix"
                 row[AgentDevices.status] = DeviceEnrollmentStatus.ACTIVE.name
                 row[AgentDevices.platform] = "test"
                 row[AgentDevices.authenticationOrigin] = "https://silk.example.com"
@@ -274,19 +345,20 @@ class AgentBindingTeamRoutingContractTest {
                 row[AgentInstances.deviceId] = deviceId
                 row[AgentInstances.agentType] = "codex"
                 row[AgentInstances.transportAdapter] = AgentTransportAdapter.ACP.name
-                row[AgentInstances.displayName] = "Team Codex"
+                row[AgentInstances.displayName] = "Team Codex $suffix"
                 row[AgentInstances.connectorVersion] = "test"
                 row[AgentInstances.capabilitiesJson] = "[\"PROMPT\",\"EXECUTION_POLICY_V1\"]"
                 row[AgentInstances.status] = AgentInstanceStatus.ACTIVE.name
                 row[AgentInstances.createdAt] = now
             }
             AgentBindings.insert { row ->
-                row[AgentBindings.id] = "team-binding"
+                row[AgentBindings.id] = "team-binding-$suffix"
                 row[AgentBindings.agentInstanceId] = agentId
                 row[AgentBindings.targetType] = AgentBindingTargetType.ROOM.name
                 row[AgentBindings.targetId] = roomId
                 row[AgentBindings.messageScope] = AgentBindingMessageScope.TEAM.name
                 row[AgentBindings.triggerPolicy] = AgentTriggerPolicy.MENTION.name
+                row[AgentBindings.mentionAlias] = mentionAlias
                 row[AgentBindings.permissionsJson] = "[\"READ_MESSAGE\",\"SEND_MESSAGE\"]"
                 row[AgentBindings.status] = AgentBindingStatus.ACTIVE.name
                 row[AgentBindings.createdBy] = ownerId

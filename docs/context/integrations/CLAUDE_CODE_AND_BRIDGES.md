@@ -7,9 +7,9 @@
 统一外部 Agent 认证的服务端 Phase 0–2、`silk-agent` Host Phase 3、直接 Bridge Phase 4、Web 管理 Phase 5、统一 Host WSS Phase 6 和 Phase 7 安全收尾已经完成仓库级验收；cc-connect 迁移仍留在 Phase 8：
 
 - `agents/auth/` 固化 raw Ed25519（32-byte base64url、无 padding）、`SHA256:<base64url>` 指纹和 v1 canonical payload；`deviceId` / `agentInstanceId` 使用服务端 UUID。初次配对在出码前按 loginName 预绑定 owner，其他账号对该短码只能得到 not-found；Host 提交的 `--server` 是未配置 `BACKEND_BASE_URL` 时的 canonical origin 来源，不再使用后端内网监听地址。
-- SQLite 新增 `agent_devices`、`agent_instances`、`agent_bindings`、`agent_binding_audit_events`、`agent_pairing_requests`；Binding 安全状态变化写不可变快照审计，私钥永不上传，短码和 `devicePollSecret` 只保存摘要。
+- SQLite 新增 `agent_devices`、`agent_instances`、`agent_bindings`、`agent_binding_audit_events`、`agent_pairing_requests`、`agent_device_revocation_tombstones`；Binding 安全状态变化写不可变快照审计，私钥永不上传，短码和 `devicePollSecret` 只保存摘要。撤销历史默认保留 90 天并可配置，过期业务行由后端每日清理；安全事件、Binding 审计和旧设备公钥 tombstone 不清理，避免丢失审计或允许撤销密钥重新注册。
 - `routes/AgentAuthRoutes.kt` 提供配对创建、JWT preview/approve、设备轮询/proof、已登记设备签名新增 Agent、设备/Agent 查询与软撤销。新增请求签名绑定 origin、一次性 requestId、Agent 元数据和能力集合，且必须由设备 owner 在 Web 再次确认。
-- `/agent-connect` 完成一次性短时 challenge-response 后，以 `agent_open / agent_rpc / agent_close` v1 envelope 承载 ACP；每帧携带 `agentInstanceId`，每个逻辑流独立队列、初始化、关闭和授权。`/agent-bridge` 仅保留设备签名旧 Host 兼容握手，query Token 明确拒绝。
+- `/agent-connect` 完成一次性短时 challenge-response 后，以 `agent_open / agent_rpc / agent_close` v1 envelope 承载 ACP；每帧携带 `agentInstanceId`，每个逻辑流独立队列、初始化、关闭和授权。后端 `AcpRegistry` 与运行时 session 按 `agentInstanceId` 注册，同一用户不同设备上的同类 Agent 可同时在线，只有同一实例重连才替换旧连接。`/agent-bridge` 仅保留设备签名旧 Host 兼容握手，query Token 明确拒绝。
 - `silk-agent/` 是独立 Go companion，提供 macOS Keychain、Windows DPAPI、Linux Secret Service 和 secure-file fallback DeviceSigner、加密身份 backup/restore/rotate、配对轮询/proof、已登记设备新增 Agent 的签名请求、运行中 Host 热加载、origin 规范化、单一设备 WSS challenge/heartbeat/reconnect、`run/start/status/stop/logs`、当前用户级 `service install/uninstall/status`、Unix 0600/Windows 当前用户控制通道、受控 Adapter 子进程监督和 stdin/stdout JSON-RPC nonce/instance 绑定。`logs --follow` 只输出新增字节；Windows Scheduled Task 用 `run --config-dir` 固定实际 profile，profile 目录启动时收紧为当前用户/SYSTEM/Administrators 的受保护可继承 DACL；提升进程造成的 Administrators owner 会转交当前用户，其他普通账号 owner 继续拒绝。Windows 受管 Adapter 使用 `CREATE_NO_WINDOW`，后台运行不弹出可见 Python 控制台。备份口令与发行私钥文件要求当前用户 owner 且允许型 DACL 不得授予其他普通主体。Host IPC v2 使用 `adapter/acp` 与 `host/forwardAcp` 双向转发 ACP；Adapter 不再请求签名或建立后端 WSS。六平台签名发行包由仓库脚本生成。
 - 第一阶段只允许 `claude-code` / `codex` + `ACP` 创建新配对；cc-connect 明确返回 deferred，不会被误报为已经迁移。
 - Web `/device` 页面复用现有 JWT；服务端返回的 `/device#code=...` 链接用浏览器 fragment 预填短码，Web 读取后清理地址栏，登录后自动 preview，但仍需明确批准/拒绝。错误账号不能查看请求并可切换账号，手工输入继续兼容。页面还支持设备与 Agent 在线状态/撤销、Room/Workspace Binding 增删改和跨所有者双主体审批；本地静态服务和 Nginx 回退后的 Ktor 固定路由都会把 `/device` 交给 SPA 入口。
@@ -42,7 +42,7 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 核心事实：
 
-- Agent 模式是 per-user-per-group 状态机，内部按 agentType 保存独立 `AgentSession`
+- Agent 模式是 per-user-per-workspace/room 状态机，内部优先按 `agentInstanceId` 保存独立 `AgentSession`；仅没有实例身份的旧 Workspace 调用保留无歧义的 agentType 兼容路径
 - 真正执行 Claude CLI / Codex CLI 的不是 backend，而是外部 ACP adapter
 - `ChatServer.broadcast()` 会先拦截已激活 agent 的消息
 - `/codex <text>` 可一步切到 Codex 并提问；`@codex <text>` 可跨 agent 路由

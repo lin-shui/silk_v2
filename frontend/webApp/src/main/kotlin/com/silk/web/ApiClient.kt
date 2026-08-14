@@ -748,6 +748,10 @@ object ApiClient {
         agentRequest("DELETE", "/api/agent-devices/${encodeUri(deviceId)}")
     )
 
+    suspend fun cleanupRevokedAgentHistory(): AgentRevocationCleanupResponse = jsonParser.decodeFromString(
+        agentRequest("POST", "/api/agent-revocation-history/cleanup")
+    )
+
     suspend fun getManagedAgents(): List<ManagedAgentDto> = jsonParser
         .decodeFromString<ManagedAgentListResponse>(agentRequest("GET", "/api/agent-instances"))
         .agents

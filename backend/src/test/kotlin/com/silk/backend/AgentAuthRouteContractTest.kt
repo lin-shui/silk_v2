@@ -10,6 +10,7 @@ import com.silk.backend.agents.auth.AgentCapability
 import com.silk.backend.agents.auth.AgentDeviceListResponse
 import com.silk.backend.agents.auth.AgentInstanceListResponse
 import com.silk.backend.agents.auth.AgentInstanceStatus
+import com.silk.backend.agents.auth.AgentRevocationCleanupResponse
 import com.silk.backend.agents.auth.AgentSecurityEventAction
 import com.silk.backend.agents.auth.AgentSecurityEventListResponse
 import com.silk.backend.agents.auth.AgentPairingApprovalRequest
@@ -614,6 +615,14 @@ class AgentAuthRouteContractTest {
                     val afterDeviceRevoke = client.get("/api/agent-devices") { bearer(accessToken) }
                         .decode<AgentDeviceListResponse>()
                     assertEquals(DeviceEnrollmentStatus.REVOKED, afterDeviceRevoke.devices.single().status)
+                    val cleanup = client.post("/api/agent-revocation-history/cleanup") {
+                        bearer(accessToken)
+                    }
+                    assertEquals(HttpStatusCode.OK, cleanup.status)
+                    val cleanupResult = cleanup.decode<AgentRevocationCleanupResponse>()
+                    assertEquals(90L, cleanupResult.retentionDays)
+                    assertEquals(0, cleanupResult.deletedDevices)
+                    assertEquals(0, cleanupResult.deletedAgents)
                     val securityEvents = client.get("/api/agent-security-events") { bearer(accessToken) }
                         .decode<AgentSecurityEventListResponse>()
                     assertTrue(securityEvents.events.any { it.action == AgentSecurityEventAction.DEVICE_ENROLLED })

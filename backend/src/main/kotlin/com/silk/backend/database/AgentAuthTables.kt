@@ -22,6 +22,22 @@ object AgentDevices : Table("agent_devices") {
     override val primaryKey = PrimaryKey(id)
 }
 
+/**
+ * A compact tombstone retained after an old revoked device row is purged.
+ * The public key is not a secret; keeping it prevents the same revoked key
+ * from being enrolled again after its historical device row is cleaned up.
+ */
+object AgentDeviceRevocationTombstones : Table("agent_device_revocation_tombstones") {
+    val id = varchar("id", 128)
+    val userId = varchar("user_id", 128).references(Users.id).index()
+    val deviceId = varchar("device_id", 128).index()
+    val publicKey = varchar("public_key", 128).uniqueIndex()
+    val fingerprint = varchar("fingerprint", 128).uniqueIndex()
+    val revokedAt = datetime("revoked_at").index()
+
+    override val primaryKey = PrimaryKey(id)
+}
+
 /** One independently approved external Agent running below a trusted device. */
 object AgentInstances : Table("agent_instances") {
     val id = varchar("id", 128)
@@ -48,6 +64,8 @@ object AgentBindings : Table("agent_bindings") {
     val targetId = varchar("target_id", 128).index()
     val messageScope = varchar("message_scope", 32)
     val triggerPolicy = varchar("trigger_policy", 32)
+    /** Room-local mention route; Workspace bindings keep an internal unique value. */
+    val mentionAlias = varchar("mention_alias", 64).default("")
     val permissionsJson = text("permissions_json")
     val status = varchar("status", 32)
     val createdBy = varchar("created_by", 128).references(Users.id)

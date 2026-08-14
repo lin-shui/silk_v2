@@ -28,6 +28,7 @@ import com.silk.backend.agents.auth.AgentDeviceListResponse
 import com.silk.backend.agents.auth.AgentInstanceListResponse
 import com.silk.backend.agents.auth.AgentSecurityEventListResponse
 import com.silk.backend.agents.auth.AgentManagementActionResponse
+import com.silk.backend.agents.auth.AgentRevocationCleanupResponse
 import com.silk.backend.agents.auth.AgentPairingRecord
 import com.silk.backend.agents.auth.AgentPairingApprovalRequest
 import com.silk.backend.agents.auth.AgentPairingApprovalResponse
@@ -546,6 +547,21 @@ fun Route.agentAuthRoutes() {
             call.respond(AgentSecurityEventListResponse(AgentAuthRepository.listSecurityEvents(userId, limit)))
         }
 
+        post("/api/agent-revocation-history/cleanup") {
+            val userId = call.principal<UserIdPrincipal>()?.name
+                ?: return@post call.respondAgentError(io.ktor.http.HttpStatusCode.Unauthorized, "UNAUTHENTICATED", "Login required")
+            val result = AgentAuthRepository.cleanupRevokedRecords(userId = userId)
+            call.respond(
+                AgentRevocationCleanupResponse(
+                    message = "已清理超过 ${result.retentionDays} 天的撤销历史",
+                    retentionDays = result.retentionDays,
+                    deletedDevices = result.deletedDevices,
+                    deletedAgents = result.deletedAgents,
+                    deletedBindings = result.deletedBindings,
+                )
+            )
+        }
+
         delete("/api/agent-instances/{agentInstanceId}") {
             val userId = call.principal<UserIdPrincipal>()?.name
                 ?: return@delete call.respondAgentError(io.ktor.http.HttpStatusCode.Unauthorized, "UNAUTHENTICATED", "Login required")
@@ -609,10 +625,10 @@ fun Route.agentAuthRoutes() {
                         call.respondAgentError(io.ktor.http.HttpStatusCode.InternalServerError, "BINDING_CREATE_FAILED", "Could not create Agent binding")
                         return@post
                     }
-                    val status = if (authError.errorCode == "AGENT_NOT_FOUND") {
-                        io.ktor.http.HttpStatusCode.NotFound
-                    } else {
-                        io.ktor.http.HttpStatusCode.Conflict
+                    val status = when (authError.errorCode) {
+                        "AGENT_NOT_FOUND" -> io.ktor.http.HttpStatusCode.NotFound
+                        "INVALID_MENTION_ALIAS" -> io.ktor.http.HttpStatusCode.BadRequest
+                        else -> io.ktor.http.HttpStatusCode.Conflict
                     }
                     call.respondAgentError(status, authError.errorCode, authError.message)
                     return@post
@@ -668,6 +684,7 @@ fun Route.agentAuthRoutes() {
                 }
                 val status = when (authError.errorCode) {
                     "AGENT_NOT_FOUND", "BINDING_NOT_FOUND" -> io.ktor.http.HttpStatusCode.NotFound
+                    "INVALID_MENTION_ALIAS" -> io.ktor.http.HttpStatusCode.BadRequest
                     else -> io.ktor.http.HttpStatusCode.Conflict
                 }
                 call.respondAgentError(status, authError.errorCode, authError.message)
@@ -816,11 +833,15 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
         }
         val stream = removed ?: return
         AgentHostConnectionRegistry.unregisterAgent(agentInstanceId, this@runMultiplexedAgentHost)
-        AcpRegistry.unregister(stream.identity.userId, stream.identity.agentType, stream.client)
+        AcpRegistry.unregister(stream.identity.agentInstanceId, stream.client)
         stream.transport.closeFromHost(reason)
         stream.scope.cancel()
-        if (!AcpRegistry.isConnected(stream.identity.userId, stream.identity.agentType)) {
-            AgentRuntime.handleAgentDisconnect(stream.identity.userId, stream.identity.agentType)
+        if (!AcpRegistry.isConnectedInstance(stream.identity.agentInstanceId)) {
+            AgentRuntime.handleAgentDisconnect(
+                stream.identity.userId,
+                stream.identity.agentType,
+                stream.identity.agentInstanceId,
+            )
         }
         if (notifyHost) {
             sendEncoded(
@@ -891,7 +912,7 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 agentInstanceId = identity.agentInstanceId,
                 capabilities = identity.capabilities,
             )
-            runCatching { evicted?.close("replaced by multiplexed Host connection") }
+            runCatching { evicted?.close("replaced by the same AgentInstance connection") }
             val previousDisconnect = AgentHostConnectionRegistry.registerAgent(
                 deviceId = identity.deviceId,
                 agentInstanceId = identity.agentInstanceId,

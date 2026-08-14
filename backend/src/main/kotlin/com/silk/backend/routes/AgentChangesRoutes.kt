@@ -68,7 +68,8 @@ private suspend fun ApplicationCall.resolveControllableWorkspace(
 @Suppress("TooGenericExceptionCaught", "SwallowedException")
 private suspend fun ApplicationCall.respondGitChanges(workspaceManager: WorkspaceManager) {
     val workspace = resolveControllableWorkspace(workspaceManager) ?: return
-    when (requireAgentChangesBinding(workspace)) {
+    val binding = requireAgentChangesBinding(workspace)
+    when (binding.state) {
         AgentChangesBindingState.DENIED -> return
         AgentChangesBindingState.DISCONNECTED -> {
             val reason = if (CcConnectRegistry.isConnected(workspace.roomId)) "ccconnect" else null
@@ -77,7 +78,11 @@ private suspend fun ApplicationCall.respondGitChanges(workspaceManager: Workspac
         }
         AgentChangesBindingState.ALLOWED -> Unit
     }
-    val active = AgentRuntime.ensureActiveAcpSession(workspace.ownerId, workspace.workspaceId)
+    val active = AgentRuntime.ensureActiveAcpSession(
+        workspace.ownerId,
+        workspace.workspaceId,
+        binding.agentInstanceId,
+    )
     if (active == null) {
         // cc-connect 群组无 ACP session：给专属空态而非误导的"未连接"
         val reason = if (CcConnectRegistry.isConnected(workspace.roomId)) "ccconnect" else null
@@ -106,7 +111,8 @@ private suspend fun ApplicationCall.respondGitFileDiff(workspaceManager: Workspa
         return
     }
     val workspace = resolveControllableWorkspace(workspaceManager) ?: return
-    when (requireAgentChangesBinding(workspace)) {
+    val binding = requireAgentChangesBinding(workspace)
+    when (binding.state) {
         AgentChangesBindingState.DENIED -> return
         AgentChangesBindingState.DISCONNECTED -> {
             respond(GitChangesAssembler.assembleDiff(connected = false, supported = true, raw = null))
@@ -114,7 +120,11 @@ private suspend fun ApplicationCall.respondGitFileDiff(workspaceManager: Workspa
         }
         AgentChangesBindingState.ALLOWED -> Unit
     }
-    val active = AgentRuntime.ensureActiveAcpSession(workspace.ownerId, workspace.workspaceId)
+    val active = AgentRuntime.ensureActiveAcpSession(
+        workspace.ownerId,
+        workspace.workspaceId,
+        binding.agentInstanceId,
+    )
     if (active == null) {
         respond(GitChangesAssembler.assembleDiff(connected = false, supported = true, raw = null))
         return
@@ -132,7 +142,12 @@ private suspend fun ApplicationCall.respondGitFileDiff(workspaceManager: Workspa
 
 private enum class AgentChangesBindingState { ALLOWED, DISCONNECTED, DENIED }
 
-private suspend fun ApplicationCall.requireAgentChangesBinding(workspace: PersonalWorkspace): AgentChangesBindingState {
+private data class AgentChangesBindingResult(
+    val state: AgentChangesBindingState,
+    val agentInstanceId: String? = null,
+)
+
+private suspend fun ApplicationCall.requireAgentChangesBinding(workspace: PersonalWorkspace): AgentChangesBindingResult {
     val agentType = workspace.activeAgent.ifBlank { workspace.agentType }
     val authorization = AgentBindingAuthorizationService.authorize(
         userId = workspace.ownerId,
@@ -143,8 +158,13 @@ private suspend fun ApplicationCall.requireAgentChangesBinding(workspace: Person
         requiredPermissions = setOf(AgentPermission.READ_WORKSPACE, AgentPermission.READ_FILE),
         requiredCapabilities = setOf(AgentCapability.READ_WORKSPACE, AgentCapability.READ_FILE),
     )
-    if (authorization.allowed) return AgentChangesBindingState.ALLOWED
-    if (authorization.errorCode == "AGENT_NOT_CONNECTED") return AgentChangesBindingState.DISCONNECTED
+    if (authorization.allowed) return AgentChangesBindingResult(
+        state = AgentChangesBindingState.ALLOWED,
+        agentInstanceId = authorization.agentInstanceId,
+    )
+    if (authorization.errorCode == "AGENT_NOT_CONNECTED") {
+        return AgentChangesBindingResult(AgentChangesBindingState.DISCONNECTED)
+    }
     respond(
         HttpStatusCode.Forbidden,
         AgentAuthErrorResponse(
@@ -152,5 +172,5 @@ private suspend fun ApplicationCall.requireAgentChangesBinding(workspace: Person
             message = authorization.message ?: "Agent is not authorized for this Workspace",
         ),
     )
-    return AgentChangesBindingState.DENIED
+    return AgentChangesBindingResult(AgentChangesBindingState.DENIED)
 }

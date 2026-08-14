@@ -7,33 +7,49 @@ import kotlinx.coroutines.CoroutineScope
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * (userId, agentType) → AcpClient 索引。
- * Bridge 是用户级别的接入，与工作区无关；同一用户同一 agentType 全局共享一个连接。
- * 用户在不同工作区使用同一 bridge，工作目录/会话上下文由 GroupAgentContext(workspaceId) 独立管理。
+ * Authenticated AgentInstance → AcpClient index.
+ *
+ * `agentType` is only an adapter/protocol classification. It is deliberately
+ * not a connection key: two devices owned by one user may run the same type
+ * at the same time. The old type-based helpers remain only for legacy
+ * workspace callers and return a value only when the type is unambiguous.
  */
 object AcpRegistry {
 
     enum class AuthenticationMode { DEVICE_SIGNATURE }
 
     data class ConnectionIdentity(
+        val userId: String,
+        val agentType: String,
         val authenticationMode: AuthenticationMode,
         val agentInstanceId: String? = null,
         val capabilities: Set<AgentCapability> = emptySet(),
     )
 
     private data class Entry(
+        val userId: String,
+        val agentType: String,
         val client: AcpClient,
         val remoteIp: String?,
         val identity: ConnectionIdentity,
     )
 
-    /** key = "${userId}::${agentType}" */
+    /** key is `instance::<agentInstanceId>` for authenticated Agents. */
     private val entries = ConcurrentHashMap<String, Entry>()
+    private val typeIndex = ConcurrentHashMap<String, MutableSet<String>>()
 
-    private fun key(userId: String, agentType: String) = "${userId}::${agentType}"
+    private fun legacyKey(userId: String, agentType: String) = "legacy::$userId::$agentType"
+    private fun instanceKey(agentInstanceId: String) = "instance::$agentInstanceId"
+    private fun typeKey(userId: String, agentType: String) = "$userId::$agentType"
+
+    private fun candidates(userId: String, agentType: String): List<Entry> =
+        typeIndex[typeKey(userId, agentType)]
+            ?.mapNotNull(entries::get)
+            .orEmpty()
 
     /**
-     * 注册新 client。如果同 (userId, agentType) 已有旧 client，close 旧连接并注册新的。
+     * 注册新 client。带 AgentInstance ID 时只替换该实例的旧连接；不同设备上的
+     * 同类 Agent 会并存。无实例 ID 的旧连接才使用 legacy type key。
      */
     fun put(
         userId: String,
@@ -44,15 +60,24 @@ object AcpRegistry {
         agentInstanceId: String? = null,
         capabilities: Set<AgentCapability> = emptySet(),
     ): AcpClient? {
-        val identity = ConnectionIdentity(authenticationMode, agentInstanceId, capabilities)
-        val previous = entries.put(key(userId, agentType), Entry(client, remoteIp, identity))
+        val identity = ConnectionIdentity(
+            userId = userId,
+            agentType = agentType,
+            authenticationMode = authenticationMode,
+            agentInstanceId = agentInstanceId,
+            capabilities = capabilities,
+        )
+        val key = agentInstanceId?.takeIf(String::isNotBlank)?.let(::instanceKey)
+            ?: legacyKey(userId, agentType)
+        val previous = entries.put(key, Entry(userId, agentType, client, remoteIp, identity))
+        typeIndex.computeIfAbsent(typeKey(userId, agentType)) { ConcurrentHashMap.newKeySet() }.add(key)
+        if (previous != null && (previous.userId != userId || previous.agentType != agentType)) {
+            typeIndex[typeKey(previous.userId, previous.agentType)]?.remove(key)
+        }
         return previous?.client
     }
 
-    /**
-     * 接受一个 Ktor WebSocket 连接，包装为 AcpClient 并注册。
-     * 同 (userId, agentType) 已有旧连接时，踢掉旧连接。
-     */
+    /** 接受一个 Ktor WebSocket 连接并按 AgentInstance 注册。 */
     suspend fun acceptConnection(
         userId: String,
         agentType: String,
@@ -85,21 +110,35 @@ object AcpRegistry {
     }
 
     fun get(userId: String, agentType: String): AcpClient? =
-        entries[key(userId, agentType)]?.client
+        candidates(userId, agentType).singleOrNull()?.client
+
+    fun getByInstance(agentInstanceId: String): AcpClient? =
+        entries[instanceKey(agentInstanceId)]?.client
 
     fun isConnected(userId: String, agentType: String): Boolean =
-        entries.containsKey(key(userId, agentType))
+        candidates(userId, agentType).isNotEmpty()
+
+    fun isConnectedInstance(agentInstanceId: String): Boolean =
+        entries.containsKey(instanceKey(agentInstanceId))
 
     fun getRemoteIp(userId: String, agentType: String): String? =
-        entries[key(userId, agentType)]?.remoteIp
+        candidates(userId, agentType).singleOrNull()?.remoteIp
+            ?.takeIf { it.isNotBlank() }
+            ?.let { normalizeIp(it) }
+
+    fun getRemoteIpByInstance(agentInstanceId: String): String? =
+        entries[instanceKey(agentInstanceId)]?.remoteIp
             ?.takeIf { it.isNotBlank() }
             ?.let { normalizeIp(it) }
 
     fun authenticationMode(userId: String, agentType: String): AuthenticationMode? =
-        entries[key(userId, agentType)]?.identity?.authenticationMode
+        candidates(userId, agentType).singleOrNull()?.identity?.authenticationMode
 
     fun connectionIdentity(userId: String, agentType: String): ConnectionIdentity? =
-        entries[key(userId, agentType)]?.identity
+        candidates(userId, agentType).singleOrNull()?.identity
+
+    fun connectionIdentity(agentInstanceId: String): ConnectionIdentity? =
+        entries[instanceKey(agentInstanceId)]?.identity
 
     /** 把 IPv6 loopback / wildcard 转成易读形式。 */
     private fun normalizeIp(ip: String): String = when (ip) {
@@ -109,41 +148,71 @@ object AcpRegistry {
     }
 
     fun unregister(userId: String, agentType: String, client: AcpClient? = null) {
-        val entryKey = key(userId, agentType)
-        if (client == null) {
-            entries.remove(entryKey)
-        } else {
+        val keys = typeIndex[typeKey(userId, agentType)].orEmpty().toList()
+        keys.forEach { entryKey ->
             entries.computeIfPresent(entryKey) { _, entry ->
-                if (entry.client === client) null else entry
+                if (client == null || entry.client === client) {
+                    typeIndex[typeKey(entry.userId, entry.agentType)]?.remove(entryKey)
+                    null
+                } else {
+                    entry
+                }
+            }
+        }
+    }
+
+    fun unregister(agentInstanceId: String, client: AcpClient? = null) {
+        val entryKey = instanceKey(agentInstanceId)
+        entries.computeIfPresent(entryKey) { _, entry ->
+            if (client == null || entry.client === client) {
+                typeIndex[typeKey(entry.userId, entry.agentType)]?.remove(entryKey)
+                null
+            } else {
+                entry
             }
         }
     }
 
     fun listConnected(userId: String): List<String> {
-        val prefix = "${userId}::"
-        return entries.keys.filter { it.startsWith(prefix) }.map { it.removePrefix(prefix) }
+        return entries.values.asSequence()
+            .filter { it.userId == userId }
+            .map { it.agentType }
+            .distinct()
+            .sorted()
+            .toList()
     }
+
+    fun listConnectedInstances(userId: String): List<ConnectionIdentity> = entries.values.asSequence()
+        .filter { it.userId == userId }
+        .map { it.identity }
+        .sortedBy { it.agentInstanceId.orEmpty() }
+        .toList()
 
     /**
      * 关闭并移除该 user 下所有 agentType 的 ACP 连接。返回关闭数。
      * Used when every direct Agent connection for an account must be closed.
      */
     suspend fun disconnect(userId: String): Int {
-        val prefix = "${userId}::"
-        val toClose = entries.entries.filter { it.key.startsWith(prefix) }.toList()
+        val toClose = entries.entries.filter { it.value.userId == userId }.toList()
         for (entry in toClose) {
             try {
                 entry.value.client.close("connection revoked")
             } catch (_: Exception) {
                 // ignore — adapter 端可能已先关
             }
-            entries.remove(entry.key)
+            unregisterEntry(entry.key, entry.value)
         }
         return toClose.size
+    }
+
+    private fun unregisterEntry(key: String, entry: Entry) {
+        entries.remove(key, entry)
+        typeIndex[typeKey(entry.userId, entry.agentType)]?.remove(key)
     }
 
     /** 仅供测试使用 */
     internal fun clearForTest() {
         entries.clear()
+        typeIndex.clear()
     }
 }

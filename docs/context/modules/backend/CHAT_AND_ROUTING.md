@@ -33,7 +33,8 @@
 - `/api/user-todos/*`
 - `/api/messages/*`
 - `/api/agent-pairings*`（公开创建会在出码前预绑定目标 loginName，并使用 Host `--server` 作为未配置 canonical origin 的安全回退；设备轮询/proof、已登记设备签名新增 Agent + JWT preview/approve；非目标账号对短码统一返回 not-found）
-- `/api/agent-devices`、`/api/agent-instances`、`/api/agent-bindings`（JWT 管理与查询；Binding 支持 POST/PUT 创建和更新、`POST /{bindingId}/approval` 双主体批准/拒绝、DELETE 软撤销；设备/Agent 列表的 `connected` 汇总 `/agent-connect` 物理连接及逻辑流与兼容 `/agent-bridge` 活跃会话）
+- `/api/agent-devices`、`/api/agent-instances`、`/api/agent-bindings`（JWT 管理与查询；Binding 支持 POST/PUT 创建和更新、`POST /{bindingId}/approval` 双主体批准/拒绝、DELETE 软撤销；Room Binding 的 `mentionAlias` 在 Room + scope 内唯一并直接指向一个 AgentInstance，允许同类 Agent 以不同 mention 并存；设备/Agent 列表的 `connected` 汇总 `/agent-connect` 物理连接及逻辑流与兼容 `/agent-bridge` 活跃会话；Web 主列表隐藏 `REVOKED`，历史可展开）
+- `POST /api/agent-revocation-history/cleanup`（JWT；按 `SILK_AGENT_REVOKED_RETENTION_DAYS` 清理当前账号到期的撤销 Device/Agent/Binding，审计事件和设备公钥 tombstone 不删除）
 - `/device`（固定返回已构建 Web `index.html`，供 Nginx 未命中静态文件后回退到 Ktor 的部署方式使用；页面内数据仍由 JWT API 保护）
 - `/api/workflows` (旧客户端兼容入口，POST **requires directory trust**)
 - `/api/kb/*`

@@ -139,10 +139,12 @@ data class ManagedBindingDto(
     val agentInstanceId: String,
     val agentType: String,
     val agentDisplayName: String,
+    val agentDeviceDisplayName: String = "",
     val targetType: BindingTargetType,
     val targetId: String,
     val messageScope: BindingMessageScope,
     val triggerPolicy: BindingTriggerPolicy,
+    val mentionAlias: String = "",
     val permissions: Set<BindingPermission> = emptySet(),
     val status: ManagedBindingStatus,
     val createdBy: String,
@@ -168,6 +170,7 @@ data class CreateManagedBindingRequest(
     val targetId: String,
     val messageScope: BindingMessageScope,
     val triggerPolicy: BindingTriggerPolicy,
+    val mentionAlias: String = "",
     val permissions: Set<BindingPermission> = setOf(
         BindingPermission.READ_MESSAGE,
         BindingPermission.SEND_MESSAGE,
@@ -190,6 +193,16 @@ data class ManagedBindingListResponse(val bindings: List<ManagedBindingDto> = em
 data class AgentManagementActionResponse(
     val success: Boolean,
     val message: String,
+)
+
+@Serializable
+data class AgentRevocationCleanupResponse(
+    val success: Boolean = true,
+    val message: String,
+    val retentionDays: Long,
+    val deletedDevices: Int,
+    val deletedAgents: Int,
+    val deletedBindings: Int,
 )
 
 @Serializable
@@ -254,6 +267,97 @@ internal fun bindingPermissionLabel(permission: BindingPermission): String = whe
     BindingPermission.RUN_COMMAND -> "运行命令"
     BindingPermission.READ_WORKSPACE -> "读取工作区"
     BindingPermission.WRITE_WORKSPACE -> "修改工作区"
+}
+
+@Suppress("CyclomaticComplexMethod")
+internal fun agentCapabilityLabel(capability: ManagedAgentCapability): String = when (capability) {
+    ManagedAgentCapability.PROMPT -> "发送提示"
+    ManagedAgentCapability.STREAM -> "流式响应"
+    ManagedAgentCapability.CANCEL -> "停止生成"
+    ManagedAgentCapability.QUESTION_RESPONSE -> "回答问题"
+    ManagedAgentCapability.PERMISSION_RESPONSE -> "权限确认"
+    ManagedAgentCapability.SESSION_RESUME -> "恢复会话"
+    ManagedAgentCapability.READ_FILE -> "读取文件"
+    ManagedAgentCapability.WRITE_FILE -> "写入文件"
+    ManagedAgentCapability.RUN_COMMAND -> "运行命令"
+    ManagedAgentCapability.EXECUTION_POLICY_V1 -> "执行策略 V1"
+    ManagedAgentCapability.READ_WORKSPACE -> "读取工作区"
+    ManagedAgentCapability.WRITE_WORKSPACE -> "修改工作区"
+    ManagedAgentCapability.IMAGE_INPUT -> "图片输入"
+    ManagedAgentCapability.IMAGE_OUTPUT -> "图片输出"
+}
+
+internal fun defaultManagedAgentMentionAlias(agentType: String): String {
+    val candidate = agentType.lowercase()
+        .filter { it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '-' }
+        .take(32)
+        .trimEnd('-', '_')
+    return when (agentType.lowercase()) {
+        "claude-code" -> "cc"
+        "codex" -> "codex"
+        else -> candidate.takeIf {
+            it.matches(Regex("[a-z0-9](?:[a-z0-9_-]{0,31})")) && it !in setOf("silk", "system", "agent")
+        } ?: "agent1"
+    }
+}
+
+internal fun formatManagedAgentMentionAlias(value: String): String = value
+    .removePrefix("@")
+    .lowercase()
+    .filter { it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '-' }
+    .take(32)
+
+internal fun isManagedAgentMentionAliasValid(value: String): Boolean {
+    val normalized = formatManagedAgentMentionAlias(value)
+    return normalized == value.trim().removePrefix("@").lowercase() &&
+        normalized.matches(Regex("[a-z0-9](?:[a-z0-9_-]{0,31})")) &&
+        normalized !in setOf("silk", "system", "agent")
+}
+
+internal fun managedAgentMentionConflictMessage(
+    bindings: List<ManagedBindingDto>,
+    targetType: BindingTargetType,
+    targetId: String,
+    mentionAlias: String,
+    excludingBindingId: String? = null,
+): String? {
+    if (targetType != BindingTargetType.ROOM || targetId.isBlank() ||
+        !isManagedAgentMentionAliasValid(mentionAlias)
+    ) {
+        return null
+    }
+    val normalized = formatManagedAgentMentionAlias(mentionAlias)
+    val usedAliases = bindings.asSequence()
+        .filter { it.bindingId != excludingBindingId }
+        .filter { it.targetType == BindingTargetType.ROOM && it.targetId == targetId }
+        .filter { it.messageScope == BindingMessageScope.TEAM }
+        .filter {
+            it.status in setOf(
+                ManagedBindingStatus.PENDING,
+                ManagedBindingStatus.ACTIVE,
+                ManagedBindingStatus.DISABLED,
+            )
+        }
+        .map { formatManagedAgentMentionAlias(it.mentionAlias) }
+        .toSet()
+    if (normalized !in usedAliases) return null
+
+    val suggestion = nextAvailableManagedAgentMentionAlias(normalized, usedAliases)
+    return "提及词 @$normalized 已被这个 Room 中的另一个 Agent 使用，请改用 @$suggestion 或其他唯一提及词。"
+}
+
+private fun nextAvailableManagedAgentMentionAlias(
+    requestedAlias: String,
+    usedAliases: Set<String>,
+): String {
+    val base = requestedAlias.trimEnd { it in '0'..'9' }.ifBlank { "agent" }
+    for (index in 1..9_999) {
+        val suffix = index.toString()
+        val prefix = base.take(32 - suffix.length).trimEnd('-', '_').ifBlank { "a" }
+        val candidate = "$prefix$suffix"
+        if (candidate !in usedAliases && isManagedAgentMentionAliasValid(candidate)) return candidate
+    }
+    return "agent9999"
 }
 
 internal fun normalizePairingCode(value: String): String = value

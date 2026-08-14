@@ -1,7 +1,9 @@
 package com.silk.backend.agents.auth
 
+import com.silk.backend.EnvLoader
 import com.silk.backend.database.AgentBindings
 import com.silk.backend.database.AgentBindingAuditEvents
+import com.silk.backend.database.AgentDeviceRevocationTombstones
 import com.silk.backend.database.AgentDevices
 import com.silk.backend.database.AgentInstances
 import com.silk.backend.database.AgentPairingRequests
@@ -16,10 +18,12 @@ import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.lessEq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.greater
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -90,11 +94,22 @@ internal data class ActiveAgentIdentity(
     val authenticationOrigin: String,
 )
 
+internal data class AgentRevocationCleanupResult(
+    val retentionDays: Long,
+    val cutoff: LocalDateTime,
+    val deletedDevices: Int,
+    val deletedAgents: Int,
+    val deletedBindings: Int,
+)
+
 /** Transactional persistence for device enrollment, Agent instances, bindings, and pairing requests. */
 @Suppress("TooManyFunctions", "LargeClass")
 internal object AgentAuthRepository {
     private const val PAIRING_LIFETIME_MINUTES = 5L
     private const val PAIRING_RETENTION_DAYS = 7L
+    private const val DEFAULT_REVOCATION_RETENTION_DAYS = 90L
+    private const val MIN_REVOCATION_RETENTION_DAYS = 7L
+    private const val MAX_REVOCATION_RETENTION_DAYS = 3_650L
     private const val PROOF_LIFETIME_SECONDS = 90L
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -107,6 +122,7 @@ internal object AgentAuthRepository {
         now: LocalDateTime = nowUtc(),
     ): PairingCreation {
         pruneExpiredPairings(now.minusDays(PAIRING_RETENTION_DAYS))
+        requireDeviceKeyAvailable(normalizedPublicKey)
         repeat(5) {
             val pairingId = UUID.randomUUID().toString()
             val userCode = AgentAuthProtocol.randomUserCode()
@@ -486,6 +502,107 @@ internal object AgentAuthRepository {
             .sortedByDescending { it.createdAtEpochMs }
     }
 
+    fun configuredRevocationRetentionDays(): Long = configuredRevocationRetentionDaysValue()
+
+    /**
+     * Remove old revoked rows while retaining immutable audit events and a
+     * public-key tombstone for every purged device. A non-null [userId] limits
+     * manual cleanup to the authenticated device owner; the scheduler passes
+     * null to clean all users.
+     */
+    fun cleanupRevokedRecords(
+        userId: String? = null,
+        now: LocalDateTime = nowUtc(),
+        retentionDays: Long = configuredRevocationRetentionDaysValue(),
+    ): AgentRevocationCleanupResult = transaction {
+        val cutoff = now.minusDays(retentionDays)
+        val baseCondition = (AgentDevices.status eq DeviceEnrollmentStatus.REVOKED.name) and
+            (AgentDevices.revokedAt lessEq cutoff)
+        val candidateRows = if (userId == null) {
+            AgentDevices.select { baseCondition }
+        } else {
+            AgentDevices.select { baseCondition and (AgentDevices.userId eq userId) }
+        }
+        val candidateDevices = candidateRows.mapNotNull { row ->
+            row[AgentDevices.revokedAt]?.let { revokedAt ->
+                RevokedDeviceCandidate(
+                    deviceId = row[AgentDevices.id],
+                    userId = row[AgentDevices.userId],
+                    publicKey = row[AgentDevices.publicKey],
+                    fingerprint = row[AgentDevices.fingerprint],
+                    revokedAt = revokedAt,
+                )
+            }
+        }
+        var deletedDevices = 0
+        var deletedAgents = 0
+        var deletedBindings = 0
+
+        candidateDevices.forEach { device ->
+            val agents = AgentInstances.select { AgentInstances.deviceId eq device.deviceId }
+                .map { row ->
+                    RevokedAgentCandidate(
+                        agentInstanceId = row[AgentInstances.id],
+                        status = row[AgentInstances.status],
+                        revokedAt = row[AgentInstances.revokedAt],
+                    )
+                }
+            if (agents.any { it.status != AgentInstanceStatus.REVOKED.name || it.revokedAt == null || it.revokedAt > cutoff }) {
+                return@forEach
+            }
+
+            AgentDeviceRevocationTombstones.insertIgnore { row ->
+                row[id] = UUID.randomUUID().toString()
+                row[AgentDeviceRevocationTombstones.userId] = device.userId
+                row[deviceId] = device.deviceId
+                row[publicKey] = device.publicKey
+                row[fingerprint] = device.fingerprint
+                row[revokedAt] = device.revokedAt
+            }
+
+            val agentIds = agents.map { it.agentInstanceId }
+            if (agentIds.isNotEmpty()) {
+                val bindingRows = AgentBindings.select { AgentBindings.agentInstanceId inList agentIds }
+                bindingRows.forEach { row ->
+                    AgentBindings.deleteWhere { AgentBindings.id eq row[AgentBindings.id] }
+                    deletedBindings++
+                }
+                AgentInstances.deleteWhere { AgentInstances.id inList agentIds }
+                deletedAgents += agentIds.size
+            }
+            AgentDevices.deleteWhere { AgentDevices.id eq device.deviceId }
+            deletedDevices++
+        }
+
+        val standaloneAgentCondition = (AgentInstances.status eq AgentInstanceStatus.REVOKED.name) and
+            (AgentInstances.revokedAt lessEq cutoff) and
+            (AgentDevices.status eq DeviceEnrollmentStatus.ACTIVE.name)
+        val standaloneAgents = (AgentInstances innerJoin AgentDevices)
+            .select {
+                if (userId == null) standaloneAgentCondition
+                else standaloneAgentCondition and (AgentInstances.userId eq userId)
+            }
+            .map { it[AgentInstances.id] }
+        standaloneAgents.forEach { agentId ->
+            val bindingRows = AgentBindings.select { AgentBindings.agentInstanceId eq agentId }
+            bindingRows.forEach { row ->
+                AgentBindings.deleteWhere { AgentBindings.id eq row[AgentBindings.id] }
+                deletedBindings++
+            }
+            if (AgentInstances.deleteWhere { AgentInstances.id eq agentId } == 1) {
+                deletedAgents++
+            }
+        }
+
+        AgentRevocationCleanupResult(
+            retentionDays = retentionDays,
+            cutoff = cutoff,
+            deletedDevices = deletedDevices,
+            deletedAgents = deletedAgents,
+            deletedBindings = deletedBindings,
+        )
+    }
+
     fun listAgents(userId: String): List<AgentInstanceDto> = transaction {
         AgentInstances.select { AgentInstances.userId eq userId }
             .map { it.toAgentDto() }
@@ -493,14 +610,14 @@ internal object AgentAuthRepository {
     }
 
     fun listBindings(): List<AgentBindingDto> = transaction {
-        (AgentBindings innerJoin AgentInstances)
+        ((AgentBindings innerJoin AgentInstances) innerJoin AgentDevices)
             .select { AgentBindings.status inList AgentBindingStatus.entries.map { it.name } }
             .map { it.toBindingDto() }
             .sortedByDescending { it.createdAtEpochMs }
     }
 
     fun findBinding(bindingId: String): AgentBindingDto? = transaction {
-        (AgentBindings innerJoin AgentInstances)
+        ((AgentBindings innerJoin AgentInstances) innerJoin AgentDevices)
             .select { AgentBindings.id eq bindingId }
             .singleOrNull()
             ?.toBindingDto()
@@ -512,7 +629,7 @@ internal object AgentAuthRepository {
         targetId: String,
         messageScope: AgentBindingMessageScope,
     ): AgentBindingDto? = transaction {
-        (AgentBindings innerJoin AgentInstances)
+        ((AgentBindings innerJoin AgentInstances) innerJoin AgentDevices)
             .select {
                 (AgentBindings.agentInstanceId eq agentInstanceId) and
                     (AgentBindings.targetType eq targetType.name) and
@@ -530,7 +647,7 @@ internal object AgentAuthRepository {
         targetId: String,
         messageScope: AgentBindingMessageScope,
     ): List<AgentBindingDto> = transaction {
-        (AgentBindings innerJoin AgentInstances)
+        ((AgentBindings innerJoin AgentInstances) innerJoin AgentDevices)
             .select {
                 (AgentBindings.targetType eq targetType.name) and
                     (AgentBindings.targetId eq targetId) and
@@ -567,6 +684,12 @@ internal object AgentAuthRepository {
             AgentBindingStatus.PENDING
         }
         var bindingId = UUID.randomUUID().toString()
+        var mentionAlias = resolveBindingMentionAlias(
+            request.targetType,
+            request.mentionAlias,
+            agentTypeForInstance(request.agentInstanceId),
+            bindingId,
+        )
         try {
             transaction {
                 val equivalent = AgentBindings.select {
@@ -584,9 +707,21 @@ internal object AgentAuthRepository {
                         throw AgentAuthException("BINDING_ALREADY_EXISTS", "An equivalent Agent binding already exists")
                     }
                     bindingId = equivalent[AgentBindings.id]
+                    mentionAlias = resolveBindingMentionAlias(
+                        request.targetType,
+                        request.mentionAlias,
+                        agentTypeForInstance(request.agentInstanceId),
+                        bindingId,
+                    )
+                    ensureMentionAliasAvailable(
+                        request = request,
+                        mentionAlias = mentionAlias,
+                        excludingBindingId = bindingId,
+                    )
                     recordBindingAudit(bindingId, userId, "PREVIOUS_REVISION", now)
                     AgentBindings.update({ AgentBindings.id eq bindingId }) { row ->
                         row[triggerPolicy] = request.triggerPolicy.name
+                        row[AgentBindings.mentionAlias] = mentionAlias
                         row[permissionsJson] = json.encodeToString(request.permissions)
                         row[status] = bindingStatus.name
                         row[createdBy] = userId
@@ -602,6 +737,7 @@ internal object AgentAuthRepository {
                     }
                     recordBindingAudit(bindingId, userId, "REOPENED", now)
                 } else {
+                    ensureMentionAliasAvailable(request, mentionAlias)
                     AgentBindings.insert { row ->
                         row[id] = bindingId
                         row[agentInstanceId] = request.agentInstanceId
@@ -609,6 +745,7 @@ internal object AgentAuthRepository {
                         row[targetId] = request.targetId.trim()
                         row[messageScope] = request.messageScope.name
                         row[triggerPolicy] = request.triggerPolicy.name
+                        row[AgentBindings.mentionAlias] = mentionAlias
                         row[permissionsJson] = json.encodeToString(request.permissions)
                         row[status] = bindingStatus.name
                         row[createdBy] = userId
@@ -653,6 +790,12 @@ internal object AgentAuthRepository {
         } else {
             AgentBindingStatus.PENDING
         }
+        val mentionAlias = resolveBindingMentionAlias(
+            request.targetType,
+            request.mentionAlias,
+            agentTypeForInstance(request.agentInstanceId),
+            bindingId,
+        )
 
         val updated = try {
             transaction {
@@ -665,6 +808,7 @@ internal object AgentAuthRepository {
                         ))
                 }.any()
                 if (editable) recordBindingAudit(bindingId, userId, "PREVIOUS_REVISION", now)
+                ensureMentionAliasAvailable(request, mentionAlias, excludingBindingId = bindingId)
                 val count = AgentBindings.update({
                     (AgentBindings.id eq bindingId) and
                         (AgentBindings.createdBy eq userId) and
@@ -678,6 +822,7 @@ internal object AgentAuthRepository {
                     row[targetId] = request.targetId.trim()
                     row[messageScope] = request.messageScope.name
                     row[triggerPolicy] = request.triggerPolicy.name
+                    row[AgentBindings.mentionAlias] = mentionAlias
                     row[permissionsJson] = json.encodeToString(request.permissions)
                     row[status] = bindingStatus.name
                     row[AgentBindings.ownerId] = ownerId
@@ -789,6 +934,7 @@ internal object AgentAuthRepository {
                 (AgentBindings.status eq AgentBindingStatus.PENDING.name)
         }) { row ->
             row[status] = AgentBindingStatus.REVOKED.name
+            row[AgentBindings.mentionAlias] = revokedMentionAlias(bindingId)
             row[revokedBy] = userId
             row[revokedAt] = now
             row[updatedAt] = now
@@ -837,6 +983,7 @@ internal object AgentAuthRepository {
             ))
         }) { row ->
             row[status] = AgentBindingStatus.REVOKED.name
+            row[AgentBindings.mentionAlias] = revokedMentionAlias(bindingId)
             row[revokedBy] = userId
             row[revokedAt] = now
             row[updatedAt] = now
@@ -873,6 +1020,11 @@ internal object AgentAuthRepository {
                 row[revokedAt] = now
                 row[updatedAt] = now
             }
+            bindingIds.forEach { bindingId ->
+                AgentBindings.update({ AgentBindings.id eq bindingId }) { row ->
+                    row[AgentBindings.mentionAlias] = revokedMentionAlias(bindingId)
+                }
+            }
             bindingIds.forEach { recordBindingAudit(it, userId, "DEVICE_REVOKED", now) }
         }
         recordSecurityEvent(
@@ -902,6 +1054,11 @@ internal object AgentAuthRepository {
             row[revokedBy] = userId
             row[revokedAt] = now
             row[updatedAt] = now
+        }
+        bindingIds.forEach { bindingId ->
+            AgentBindings.update({ AgentBindings.id eq bindingId }) { row ->
+                row[AgentBindings.mentionAlias] = revokedMentionAlias(bindingId)
+            }
         }
         bindingIds.forEach { recordBindingAudit(it, userId, "AGENT_REVOKED", now) }
         recordSecurityEvent(
@@ -1008,6 +1165,79 @@ internal object AgentAuthRepository {
             (AgentInstances.status eq AgentInstanceStatus.ACTIVE.name)
     }.any()
 
+    private fun resolveBindingMentionAlias(
+        targetType: AgentBindingTargetType,
+        requested: String,
+        agentType: String,
+        bindingId: String,
+    ): String {
+        if (targetType != AgentBindingTargetType.ROOM) return "__workspace__$bindingId"
+        return if (requested.isBlank()) {
+            defaultAgentMentionAlias(agentType)
+        } else {
+            normalizeAgentMentionAlias(requested)
+                ?: throw AgentAuthException("INVALID_MENTION_ALIAS", "Mention must use 1-32 lowercase letters, digits, _ or - and cannot be reserved")
+        }
+    }
+
+    private fun agentTypeForInstance(agentInstanceId: String): String = transaction {
+        AgentInstances.select {
+            (AgentInstances.id eq agentInstanceId) and
+                (AgentInstances.status eq AgentInstanceStatus.ACTIVE.name)
+        }.singleOrNull()?.get(AgentInstances.agentType)
+            ?: throw AgentAuthException("AGENT_NOT_FOUND", "Agent is not active")
+    }
+
+    private fun ensureMentionAliasAvailable(
+        request: CreateAgentBindingRequest,
+        mentionAlias: String,
+        excludingBindingId: String? = null,
+    ) = ensureMentionAliasAvailable(
+        targetType = request.targetType,
+        targetId = request.targetId,
+        messageScope = request.messageScope,
+        mentionAlias = mentionAlias,
+        excludingBindingId = excludingBindingId,
+    )
+
+    private fun ensureMentionAliasAvailable(
+        request: UpdateAgentBindingRequest,
+        mentionAlias: String,
+        excludingBindingId: String? = null,
+    ) = ensureMentionAliasAvailable(
+        targetType = request.targetType,
+        targetId = request.targetId,
+        messageScope = request.messageScope,
+        mentionAlias = mentionAlias,
+        excludingBindingId = excludingBindingId,
+    )
+
+    private fun ensureMentionAliasAvailable(
+        targetType: AgentBindingTargetType,
+        targetId: String,
+        messageScope: AgentBindingMessageScope,
+        mentionAlias: String,
+        excludingBindingId: String? = null,
+    ) {
+        if (targetType != AgentBindingTargetType.ROOM) return
+        val conflict = AgentBindings.select {
+            (AgentBindings.targetType eq targetType.name) and
+                (AgentBindings.targetId eq targetId.trim()) and
+                (AgentBindings.messageScope eq messageScope.name) and
+                (AgentBindings.mentionAlias eq mentionAlias) and
+                (AgentBindings.status inList listOf(
+                    AgentBindingStatus.PENDING.name,
+                    AgentBindingStatus.ACTIVE.name,
+                    AgentBindingStatus.DISABLED.name,
+                ))
+        }.any { row -> excludingBindingId == null || row[AgentBindings.id] != excludingBindingId }
+        if (conflict) {
+            throw AgentAuthException("MENTION_ALIAS_TAKEN", "Mention @$mentionAlias is already used in this Room")
+        }
+    }
+
+    private fun revokedMentionAlias(bindingId: String): String = "__revoked__$bindingId"
+
     private fun expireIfNeeded(record: AgentPairingRecord, now: LocalDateTime): AgentPairingRecord {
         if (record.state in TERMINAL_PAIRING_STATES || record.expiresAt.isAfter(now)) return record
         transaction {
@@ -1025,7 +1255,7 @@ internal object AgentAuthRepository {
         action: String,
         now: LocalDateTime,
     ) {
-        val snapshot = (AgentBindings innerJoin AgentInstances)
+        val snapshot = ((AgentBindings innerJoin AgentInstances) innerJoin AgentDevices)
             .select { AgentBindings.id eq bindingId }
             .singleOrNull()
             ?.toBindingDto()
@@ -1158,6 +1388,8 @@ internal object AgentAuthRepository {
         agentInstanceId = this[AgentBindings.agentInstanceId],
         agentType = this[AgentInstances.agentType],
         agentDisplayName = this[AgentInstances.displayName],
+        agentDeviceDisplayName = this[AgentDevices.displayName],
+        mentionAlias = this[AgentBindings.mentionAlias],
         targetType = AgentBindingTargetType.valueOf(this[AgentBindings.targetType]),
         targetId = this[AgentBindings.targetId],
         messageScope = AgentBindingMessageScope.valueOf(this[AgentBindings.messageScope]),
@@ -1185,6 +1417,43 @@ internal object AgentAuthRepository {
     private fun decodePermissions(value: String): Set<AgentPermission> = runCatching {
         json.decodeFromString<Set<AgentPermission>>(value)
     }.getOrDefault(emptySet())
+
+    private fun isRevokedDeviceKey(publicKey: String): Boolean = transaction {
+        AgentDeviceRevocationTombstones.select {
+            AgentDeviceRevocationTombstones.publicKey eq publicKey
+        }.any()
+    }
+
+    private fun requireDeviceKeyAvailable(publicKey: String) {
+        if (isRevokedDeviceKey(publicKey)) {
+            throw AgentAuthException(
+                "DEVICE_KEY_REVOKED",
+                "This device key was revoked and cannot be enrolled again; rotate the device key first",
+            )
+        }
+    }
+
+    private fun configuredRevocationRetentionDaysValue(): Long = listOf(
+        System.getProperty("silk.agentRevokedRetentionDays"),
+        System.getenv("SILK_AGENT_REVOKED_RETENTION_DAYS"),
+        EnvLoader.get("SILK_AGENT_REVOKED_RETENTION_DAYS"),
+    ).firstNotNullOfOrNull { it?.trim()?.toLongOrNull() }
+        ?.coerceIn(MIN_REVOCATION_RETENTION_DAYS, MAX_REVOCATION_RETENTION_DAYS)
+        ?: DEFAULT_REVOCATION_RETENTION_DAYS
+
+    private data class RevokedDeviceCandidate(
+        val deviceId: String,
+        val userId: String,
+        val publicKey: String,
+        val fingerprint: String,
+        val revokedAt: LocalDateTime,
+    )
+
+    private data class RevokedAgentCandidate(
+        val agentInstanceId: String,
+        val status: String,
+        val revokedAt: LocalDateTime?,
+    )
 
     private fun hashUserCode(value: String): String = AgentAuthProtocol.sha256Hex(
         AgentAuthProtocol.normalizeUserCode(value),

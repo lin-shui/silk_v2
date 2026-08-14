@@ -111,6 +111,7 @@ class AgentRuntimeTest {
             userId = "owner",
             roomId = "room-1",
             agentType = "claude-code",
+            agentDisplayName = "Claude Code · Linux (@cc-linux)",
             text = "/new",
             userName = "Alice",
             broadcastFn = { messages.add(it) },
@@ -118,6 +119,7 @@ class AgentRuntimeTest {
 
         assertTrue(handled)
         assertEquals(listOf("已开启新会话"), messages.map(Message::content))
+        assertEquals("Claude Code · Linux (@cc-linux)", messages.single().userName)
     }
 
     @Test
