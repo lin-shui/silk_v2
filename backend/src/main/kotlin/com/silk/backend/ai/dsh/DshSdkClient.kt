@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -107,6 +109,20 @@ private fun renderToolValue(element: kotlinx.serialization.json.JsonElement): St
 }
 
 /**
+ * 组装 runtime 启动命令：配置了 Landlock 沙箱启动器时，
+ * 包装为 `python3 dsh_sandbox.py <sessionCwd> <runtimeRoot> -- <argv...>`。
+ */
+internal fun buildLaunchCommand(
+    launchCommand: List<String>,
+    sandboxScript: String?,
+    sessionCwd: String,
+    runtimeRoot: String,
+): List<String> {
+    if (sandboxScript.isNullOrBlank()) return launchCommand
+    return listOf("python3", sandboxScript, sessionCwd, runtimeRoot, "--") + launchCommand
+}
+
+/**
  * DeepSeek Harness SDK JSON-RPC 客户端（stdio NDJSON）。
  *
  * 对应 dsh 的 `dsh-sdk-jsonrpc-server`：initialize / session/prompt / shutdown +
@@ -125,9 +141,26 @@ class DshSdkClient(
     private val apiKey: String = AIConfig.DEEPSEEK_API_KEY,
     private val baseUrl: String = AIConfig.DEEPSEEK_BASE_URL,
     private val promptTimeoutMs: Long = AIConfig.DSH_PROMPT_TIMEOUT_MS,
+    private val sandboxScript: String = AIConfig.DSH_SANDBOX_SCRIPT,
+    private val idleTimeoutMs: Long = AIConfig.DSH_IDLE_TIMEOUT_MS,
 ) {
     private val logger = LoggerFactory.getLogger(DshSdkClient::class.java)
     private val json = Json { ignoreUnknownKeys = true }
+    /** 沙箱启动器绝对路径（相对 JVM cwd 解析，runtime 工作目录可能是 harness 仓库） */
+    private val sandboxLauncher: String? by lazy {
+        val raw = sandboxScript.takeIf { it.isNotBlank() } ?: return@lazy null
+        // cwd 可能是仓库根（backend/scripts/...）或 backend 模块目录（scripts/...）
+        val candidates = listOf(
+            File(raw),
+            File(raw.removePrefix("backend/")),
+            File("..", raw),
+        )
+        candidates.firstOrNull { it.isFile }?.absolutePath
+            ?: run {
+                logger.warn("[DshSdkClient] 找不到 dsh 沙箱脚本 {}，将不沙箱运行", raw)
+                null
+            }
+    }
 
     private var process: Process? = null
     private var scope: CoroutineScope? = null
@@ -136,20 +169,33 @@ class DshSdkClient(
     private var nextId = 0L
     @Volatile private var started = false
     @Volatile private var closed = false
+    private var idleCloseJob: Job? = null
 
     /** 启动 runtime 子进程并完成 initialize 握手。幂等。 */
     suspend fun start() {
+        if (closed) {
+            // 允许在 killProcess()/close() 之后重启（SDK 无 cancel，取消即重建进程）
+            closed = false
+            started = false
+        }
         if (started) return
         require(launchCommand.isNotEmpty()) { "DSH_RUNTIME_CMD 未配置" }
         require(apiKey.isNotBlank()) { "DEEPSEEK_API_KEY 未配置" }
 
-        val pb = ProcessBuilder(launchCommand)
+        idleCloseJob?.cancel()
+        val pb = ProcessBuilder(
+            buildLaunchCommand(launchCommand, sandboxLauncher, sessionCwd, runtimeCwd.absolutePath),
+        )
             .directory(runtimeCwd)
             .redirectErrorStream(false)
         pb.environment()["DEEPSEEK_API_KEY"] = apiKey
         if (baseUrl.isNotBlank()) pb.environment()["DEEPSEEK_BASE_URL"] = baseUrl
         pb.environment()["DSH_SESSION_ROOT"] = sessionRoot
         pb.environment()["DSH_CWD"] = sessionCwd
+        if (sandboxLauncher != null) {
+            // tsx 默认在 /tmp 建磁盘缓存；Landlock 下 /tmp 不可写，禁用缓存避免启动失败
+            pb.environment()["TSX_DISABLE_CACHE"] = "1"
+        }
 
         val proc = pb.start()
         process = proc
@@ -181,6 +227,7 @@ class DshSdkClient(
         onEvent: suspend (DshEvent) -> Unit = {},
     ): String {
         start()
+        idleCloseJob?.cancel()
         rpc(
             "session/prompt",
             buildJsonObject {
@@ -194,49 +241,85 @@ class DshSdkClient(
             },
         )
 
-        val accumulated = StringBuilder()
-        var lastAssistantText: String? = null
-        withTimeout(promptTimeoutMs) {
-            while (true) {
-                val frame = notifications.receive()
-                val method = frame["method"]?.jsonPrimitive?.contentOrNull ?: continue
-                val params = frame["params"]?.jsonObject ?: continue
-                val sid = params["sessionId"]?.jsonPrimitive?.contentOrNull
-                when (method) {
-                    "session.event" -> {
-                        if (sid != sessionId) continue
-                        val eventObj = params["event"]?.jsonObject ?: continue
-                        val type = eventObj["type"]?.jsonPrimitive?.contentOrNull ?: continue
-                        val data = eventObj["data"]?.jsonObject ?: JsonObject(emptyMap())
-                        val event = parseDshEvent(type, data) ?: continue
-                        when (event) {
-                            is DshEvent.TextDelta -> accumulated.append(event.text)
-                            is DshEvent.AssistantMessage -> lastAssistantText = event.text
-                            else -> {}
+        try {
+            val accumulated = StringBuilder()
+            var lastAssistantText: String? = null
+            withTimeout(promptTimeoutMs) {
+                while (true) {
+                    val frame = notifications.receive()
+                    val method = frame["method"]?.jsonPrimitive?.contentOrNull ?: continue
+                    val params = frame["params"]?.jsonObject ?: continue
+                    val sid = params["sessionId"]?.jsonPrimitive?.contentOrNull
+                    when (method) {
+                        "session.event" -> {
+                            if (sid != sessionId) continue
+                            val eventObj = params["event"]?.jsonObject ?: continue
+                            val type = eventObj["type"]?.jsonPrimitive?.contentOrNull ?: continue
+                            val data = eventObj["data"]?.jsonObject ?: JsonObject(emptyMap())
+                            val event = parseDshEvent(type, data) ?: continue
+                            when (event) {
+                                is DshEvent.TextDelta -> accumulated.append(event.text)
+                                is DshEvent.AssistantMessage -> lastAssistantText = event.text
+                                else -> {}
+                            }
+                            onEvent(event)
                         }
-                        onEvent(event)
-                    }
-                    "session.status" -> {
-                        if (sid == sessionId && params["status"]?.jsonPrimitive?.contentOrNull == "idle") {
-                            break
+                        "session.status" -> {
+                            if (sid == sessionId && params["status"]?.jsonPrimitive?.contentOrNull == "idle") {
+                                break
+                            }
                         }
+                        else -> {}
                     }
-                    else -> {}
                 }
             }
+            return if (accumulated.isNotEmpty()) accumulated.toString() else lastAssistantText.orEmpty()
+        } catch (e: CancellationException) {
+            // SDK 无 per-prompt cancel：调用方取消（STOP_GENERATE）或超时都只能杀进程，
+            // 下次 prompt 会重建 runtime（Silk 每次都会喂完整历史，上下文不依赖 dsh 会话）。
+            killProcess()
+            closed = false
+            throw e
+        } finally {
+            if (!closed) scheduleIdleClose()
         }
-        return if (accumulated.isNotEmpty()) accumulated.toString() else lastAssistantText.orEmpty()
     }
 
     /** 优雅关闭：shutdown → 取消协程 → 杀进程。幂等。 */
     suspend fun close() {
         if (closed) return
         closed = true
+        idleCloseJob?.cancel()
         runCatching { rpc("shutdown", buildJsonObject {}) }
+        killProcess()
+    }
+
+    /** 仅供测试：runtime 子进程是否存活。 */
+    internal fun runtimeAlive(): Boolean = process?.isAlive == true
+
+    /** 终止 runtime 进程并复位，允许下次 prompt 重启。 */
+    private suspend fun killProcess() {
+        idleCloseJob?.cancel()
         scope?.cancel()
         process?.destroy()
         withContext(Dispatchers.IO) { process?.waitFor(2, TimeUnit.SECONDS) }
         process?.destroyForcibly()
+        process = null
+        scope = null
+        pendingRpc.clear()
+        while (notifications.tryReceive().isSuccess) {
+            // 清空旧进程残留通知，避免重启后串台
+        }
+        started = false
+    }
+
+    /** 单轮结束后启动空闲回收：超过 idleTimeoutMs 无新 prompt 则关闭 runtime。 */
+    private fun scheduleIdleClose() {
+        val s = scope ?: return
+        idleCloseJob = s.launch {
+            delay(idleTimeoutMs)
+            close()
+        }
     }
 
     private suspend fun rpc(method: String, params: JsonObject): JsonObject {

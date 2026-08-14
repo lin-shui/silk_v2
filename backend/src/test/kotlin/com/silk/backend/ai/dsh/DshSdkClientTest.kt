@@ -81,4 +81,37 @@ class DshSdkClientTest {
         assertNull(parseDshEvent("session/title", data("""{"title":"x"}""")))
         assertNull(parseDshEvent("assistant/chunk", data("""{"turn":1,"step":1,"chunk":{"type":"block-start"}}""")))
     }
+
+    @Test
+    fun `sandbox launcher is prepended when configured`() {
+        val wrapped = buildLaunchCommand(
+            launchCommand = listOf("node", "--import", "tsx", "bin.ts", "agent.cordis.yml"),
+            sandboxScript = "backend/scripts/dsh_sandbox.py",
+            sessionCwd = "/ws/group_1",
+            runtimeRoot = "/opt/dsh",
+        )
+        assertEquals(
+            listOf(
+                "python3",
+                "backend/scripts/dsh_sandbox.py",
+                "/ws/group_1",
+                "/opt/dsh",
+                "--",
+                "node", "--import", "tsx", "bin.ts", "agent.cordis.yml",
+            ),
+            wrapped,
+        )
+    }
+
+    @Test
+    fun `command is unchanged without sandbox script`() {
+        assertEquals(
+            listOf("node", "bin.js"),
+            buildLaunchCommand(listOf("node", "bin.js"), null, "/ws", "/opt/dsh"),
+        )
+        assertEquals(
+            listOf("node", "bin.js"),
+            buildLaunchCommand(listOf("node", "bin.js"), "", "/ws", "/opt/dsh"),
+        )
+    }
 }

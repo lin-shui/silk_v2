@@ -44,6 +44,12 @@ object AIConfig {
     /** 单轮 prompt 超时（毫秒），默认 120s */
     val DSH_PROMPT_TIMEOUT_MS: Long get() =
         env("DSH_PROMPT_TIMEOUT_MS")?.toLongOrNull()?.takeIf { it > 0 } ?: 120_000L
+    /** Landlock 沙箱启动器路径（backend/scripts/dsh_sandbox.py）；空 = 不沙箱 */
+    val DSH_SANDBOX_SCRIPT: String get() =
+        env("DSH_SANDBOX_SCRIPT") ?: "backend/scripts/dsh_sandbox.py"
+    /** 空闲回收：单轮结束后无新 prompt 超过该时长（毫秒）则关闭 runtime 进程，默认 10 分钟 */
+    val DSH_IDLE_TIMEOUT_MS: Long get() =
+        env("DSH_IDLE_TIMEOUT_MS")?.toLongOrNull()?.takeIf { it > 0 } ?: 600_000L
 
     /** 解析 argv：JSON 数组优先，否则按空白切分；空值返回空列表。 */
     private fun parseCmdList(raw: String?): List<String> {

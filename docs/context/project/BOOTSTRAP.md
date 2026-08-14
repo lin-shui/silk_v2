@@ -61,4 +61,4 @@
 - Backend SQLite 默认使用 `./silk_database.db`；测试或隔离运行可通过 JVM 参数 `-Dsilk.databasePath=...` 覆盖
 - Workflow / TrustedDir 默认写到 `~/.silk-data/workflows`；`silk.sh` 会通过 `SILK_WORKFLOW_DIR` / `-Dsilk.workflowDir=...` 注入同一目录
 - 后端默认 agent 由 `SILK_DEFAULT_AGENT` 配置（`.env` 或系统环境变量）：设置后 Silk 群聊（含 `[Silk]` 专属私聊）在对应 bridge 在线时自动由该 agent 接管，前端无感知；未设置 / `none` / bridge 掉线时回退内置 Silk AI。取值须为已注册 agentType（`claude-code` / `codex` / `cursor`，下划线形式亦可）
-- 内置 Silk AI 模型提供方由 `SILK_AI_PROVIDER` 切换：空 = 现有 claude CLI / Anthropic API 路径；`dsh` = DeepSeek Harness runtime（`DSH_RUNTIME_CMD` 指定 runtime 启动命令，`DSH_RUNTIME_CWD` 为其工作目录，`DEEPSEEK_API_KEY` 必填）。dsh 路径每会话一个 runtime 进程、无 claude fallback；详见 `planning/exec-plans/active/2026-08-14-dsh-deepseek-integration.md`
+- 内置 Silk AI 模型提供方由 `SILK_AI_PROVIDER` 切换：空 = 现有 claude CLI / Anthropic API 路径；`dsh` = DeepSeek Harness runtime（`DSH_RUNTIME_CMD` 指定 runtime 启动命令，`DSH_RUNTIME_CWD` 为其工作目录，`DEEPSEEK_API_KEY` 必填）。dsh 路径每会话一个 runtime 进程、无 claude fallback；`DSH_SANDBOX_SCRIPT` 指向 Landlock 启动器（默认 `backend/scripts/dsh_sandbox.py`，宿主需 Linux 6.7+，ABI=0 时降级不沙箱），`DSH_IDLE_TIMEOUT_MS` 控制空闲回收；详见 `planning/exec-plans/active/2026-08-14-dsh-deepseek-integration.md`

@@ -1,6 +1,6 @@
 # Silk 内置 AI 接入 DeepSeek Harness（dsh）执行计划
 
-状态：P0 冒烟全部完成，P1（Kotlin SDK client + DirectModelAgent 接入）完成，P2（沙箱/进程隔离）待做。
+状态：P0/P1 完成，P2（沙箱 + 进程生命周期）完成，P3（Silk 受控 web_fetch）待做。
 
 ## 目标
 
@@ -58,6 +58,14 @@ DirectModelAgent（Silk 编排层，保留）
 - `DirectModelAgent` 新增 `runProvider()` 选择：`SILK_AI_PROVIDER=dsh` → `chatViaDsh()`（无 claude fallback，失败即报错）；默认路径不变。dsh 会话 id = `silk-<sha256(sessionId) 前 32>`；每会话一个 runtime，cwd=session workspace，JSONL 在 `workspace/.dsh_sessions/`。
 - 单测：`DshSdkClientTest` 7 例（事件映射）；`DirectModelAgentCitationTest` 7 例通过；`:backend:detekt` 无新增问题。
 - 文档：`.env.example`、`BOOTSTRAP.md`、`ARCHITECTURE.md`、`KNOWN_DRIFT.md` 已同步。
+
+### P2 落地内容（2026-08-14）
+
+- 新增 `backend/scripts/dsh_sandbox.py`：复用 `pty_chat.py` 的 Landlock 模式，`dsh_sandbox.py <workspace> <runtime_root> -- <argv...>`；workspace 全读写、runtime_root 与系统路径只读+执行、rlimit（无 RLIMIT_AS，避免 tsx WebAssembly 失败）、ABI=0 降级警告。
+- `DshSdkClient`：沙箱启动器包装（`buildLaunchCommand`，脚本路径多候选解析）；超时/取消（STOP_GENERATE）→ 杀进程且可重启；单轮结束后 `DSH_IDLE_TIMEOUT_MS` 空闲自动关闭；`TSX_DISABLE_CACHE=1` 沙箱模式下避免写 /tmp。
+- `AIConfig` 新增 `DSH_SANDBOX_SCRIPT` / `DSH_IDLE_TIMEOUT_MS`。
+- 验证：`DshSdkClientIntegrationTest` 3 例（真实 runtime + 真实 key + 沙箱启动器）：流式回答、超时杀进程后可重启、空闲回收；单测 9 例；detekt 无新增问题。
+- 已知限制：本容器宿主内核 6.12.30 支持 Landlock，但 `/proc` ABI 被隐藏且 `restrict_self` 返回 EPERM（seccomp/sysctl），沙箱在本容器降级；launcher 已支持 syscall 探测 + restrict 失败降级说明，实际内核约束需在允许 landlock syscalls 的容器/主机上实测。
 - P2：每会话 runtime + Landlock 沙箱固化（放行 runtime 自身可执行路径与依赖，用户文件仅 workspace 根）。
 - P3（可选）：Silk 受控 web_fetch（SSRF 拒绝私网/保留段 + 大小上限 + 超时；补 harness 未做的私网防护）；等 SDK 支持 server→client 后考虑审批流。
 - P4：单测 + 冒烟 + 文档同步（ARCHITECTURE / BOOTSTRAP / KNOWN_DRIFT：协议 0.0.1 无版本协商、无 cancel/approval）。

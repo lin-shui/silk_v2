@@ -61,7 +61,8 @@
 - SDK 协议无 per-prompt 结果（靠 `session.status=idle` 判定 turn 结束）、无 cancel/close（停止靠杀进程）、无 approval 流（server→client 是 dead capability）。
 - PyPI 上 `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` 尚未发布（`pip index` 无匹配）；当前用源码 node 载体（`DSH_RUNTIME_CMD` 指向 jsonrpc-demo bin）。
 - dsh 的 `web-fetch-http` provider 官方自认是 SSRF 原语（无私网防护），Silk 组合里必须 `tool-web {search: true, fetch: false}`；受控 fetch 由 Silk 后端实现（P3）。
-- `DshSdkClient` 随 DirectModelAgent 实例存活（每会话一个 runtime 进程），空闲回收尚未实现（P2）。
+- `DshSdkClient` 随 DirectModelAgent 实例存活（每会话一个 runtime 进程）；空闲回收已实现（`DSH_IDLE_TIMEOUT_MS`），STOP_GENERATE/超时走杀进程重启（SDK 无 cancel）。
+- P2 沙箱：本开发容器宿主内核为 6.12.30（**支持** Landlock，`landlock_create_ruleset`/`add_rule` 均成功），但 `/proc/sys/kernel/landlock` 被容器隐藏且 `landlock_restrict_self` 返回 EPERM（容器 seccomp 或 `kernel.landlock_restrict_self` sysctl），因此沙箱无法在本容器生效。`dsh_sandbox.py` 已支持：/proc ABI 缺失时用 syscall 探测；restrict_self 失败时打印明确原因并降级不沙箱。**生产部署要求**：Linux 6.7+ 且容器 seccomp 放行 landlock syscalls（如 `--security-opt seccomp=unconfined` 或自定义 profile）、`kernel.landlock_restrict_self` 保持默认启用。注意 **不能给 dsh 设 `RLIMIT_AS`**（tsx/esbuild 的 WebAssembly 初始化会因虚拟地址上限失败）；沙箱模式下会设 `TSX_DISABLE_CACHE=1`，避免 tsx 写 `/tmp` 缓存被 Landlock 拒绝。
 
 ## Generated / Runtime Paths May Be Dirty
 
