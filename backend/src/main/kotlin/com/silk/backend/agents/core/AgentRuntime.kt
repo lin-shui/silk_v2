@@ -2,6 +2,7 @@
 package com.silk.backend.agents.core
 
 import com.silk.backend.ChatHistoryManager
+import com.silk.backend.EnvLoader
 import com.silk.backend.Message
 import com.silk.backend.MessageType
 import com.silk.backend.SilkAgent
@@ -174,6 +175,24 @@ object AgentRuntime {
     /** 列出所有已注册的 agent descriptor。 */
     fun listRegisteredAgents(): List<AgentDescriptor> = AgentRegistry.list()
 
+    /** 仅供测试：直接注入默认 agent 名称，跳过环境变量读取。 */
+    @Volatile
+    internal var defaultAgentOverride: String? = null
+
+    /**
+     * 后端配置的默认 agent（SILK_DEFAULT_AGENT）。
+     * 返回已注册的 agentType（dash form）；未配置、配置为 none 或未注册时返回 null。
+     */
+    fun configuredDefaultAgentType(): String? {
+        val raw = defaultAgentOverride
+            ?: EnvLoader.get("SILK_DEFAULT_AGENT")
+            ?: System.getenv("SILK_DEFAULT_AGENT")?.trim()?.takeIf { it.isNotBlank() }
+        if (raw.isNullOrBlank() || raw.equals("none", ignoreCase = true)) return null
+        val normalized = raw.trim().lowercase().replace('_', '-')
+        return AgentRegistry.getByType(normalized)?.agentType
+            ?: AgentRegistry.get(normalized)?.agentType
+    }
+
     /** cc-connect 桥接代理的用户 ID（见 Routing.kt /ccconnect-bridge）。 */
     const val CC_CONNECT_USER_ID = "cc-connect"
 
@@ -203,7 +222,7 @@ object AgentRuntime {
         broadcastFn: suspend (Message) -> Unit,
     ): Boolean {
         val ctx = context(userId, groupId)
-        val route = CommandRouter.route(text, userId, groupId, ctx.currentAgentType)
+        val route = CommandRouter.route(text, userId, groupId, resolveEffectiveAgentType(ctx, userId))
 
         return when (route) {
             is CommandRouter.RouteResult.ListAgents -> {
@@ -237,6 +256,28 @@ object AgentRuntime {
                 false
             }
         }
+    }
+
+    /**
+     * 解析本次消息实际应路由的 agent：
+     * - 用户已显式激活（currentAgentType 非空）→ 原样使用；
+     * - 未激活且后端配置了默认 agent（SILK_DEFAULT_AGENT）且 bridge 在线 → 自动激活；
+     * - 默认 agent bridge 掉线 → 回退普通 Silk AI（放行给 ChatServer）。
+     */
+    private fun resolveEffectiveAgentType(ctx: GroupAgentContext, userId: String): String? {
+        // 后端配置的默认 agent：用户未显式激活时自动接管；bridge 掉线则回退普通 Silk AI。
+        val current = ctx.currentAgentType
+        if (current == null && !ctx.defaultAgentDisabled) {
+            val dflt = configuredDefaultAgentType()
+            if (dflt != null && AcpRegistry.isConnected(userId, dflt)) {
+                ctx.currentAgentType = dflt
+                ctx.defaultActivated = true
+            }
+        } else if (current != null && ctx.defaultActivated && !AcpRegistry.isConnected(userId, current)) {
+            ctx.currentAgentType = null
+            ctx.defaultActivated = false
+        }
+        return ctx.currentAgentType
     }
 
     /**
@@ -354,6 +395,8 @@ object AgentRuntime {
     ) {
         if (agentType == null) {
             ctx.currentAgentType = null
+            ctx.defaultAgentDisabled = true
+            ctx.defaultActivated = false
             broadcastFn(AgentMessages.system(
                 "已退出 agent 模式，回到普通 Silk AI。",
                 agentUserId = SilkAgent.AGENT_ID,
@@ -363,6 +406,8 @@ object AgentRuntime {
         }
         val descriptor = AgentRegistry.getByType(agentType) ?: return
         ctx.currentAgentType = agentType
+        ctx.defaultAgentDisabled = false
+        ctx.defaultActivated = false
         // M4 Task 3: per-agent loadSeed —— 取该 agent 自己的 cliSessionId，
         // 不再受其他 agent 干扰。同时持久化 activeAgent 让重启后保持选择。
         val session = ctx.getOrCreateSession(agentType)
@@ -394,6 +439,8 @@ object AgentRuntime {
     ) {
         val descriptor = AgentRegistry.getByType(agentType) ?: return
         ctx.currentAgentType = agentType
+        ctx.defaultAgentDisabled = false
+        ctx.defaultActivated = false
         val session = ctx.getOrCreateSession(agentType)
         // 触发命令时重置 session（和旧 /cc 行为一致：开新会话）
         cleanupSessionHandlers(session)
@@ -514,6 +561,8 @@ object AgentRuntime {
         // Clean up handlers before removing session
         cleanupSessionHandlers(session)
         ctx.removeSession(agentType)
+        ctx.defaultAgentDisabled = true
+        ctx.defaultActivated = false
         if (ctx.sessions.isEmpty()) {
             ctx.currentAgentType = null
         }
@@ -1530,6 +1579,8 @@ object AgentRuntime {
         val descriptor = AgentRegistry.getByType(agentType) ?: return null
         val ctx = context(userId, groupId)
         ctx.currentAgentType = agentType
+        ctx.defaultAgentDisabled = false
+        ctx.defaultActivated = false
         val session = ctx.getOrCreateSession(agentType)
         val seed = try {
             persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
@@ -1689,6 +1740,7 @@ object AgentRuntime {
 
     /** 仅供测试使用 */
     internal fun clearForTest() {
+        defaultAgentOverride = null
         contexts.values.forEach { ctx ->
             for ((_, session) in ctx.sessions) {
                 cleanupSessionHandlers(session)

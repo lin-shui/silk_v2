@@ -21,6 +21,15 @@ class GroupAgentContext(
     @Volatile var currentAgentType: String? = null,
     val sessions: ConcurrentHashMap<String, AgentSession> = ConcurrentHashMap(),
 ) {
+    /**
+     * 用户通过 `/use none` / `/exit` 显式退出 agent 模式后置 true，
+     * 避免后端配置的默认 agent（SILK_DEFAULT_AGENT）在下一条消息再次自动激活。
+     */
+    @Volatile var defaultAgentDisabled: Boolean = false
+
+    /** 当前 agent 是否由后端默认配置自动激活（用于 bridge 掉线时优雅回退到普通 Silk AI）。 */
+    @Volatile var defaultActivated: Boolean = false
+
     /** Scope for background prompt coroutines; cancelled when this context is cleaned up. */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 

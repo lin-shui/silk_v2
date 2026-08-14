@@ -9,6 +9,7 @@
 - [KB AI Operations](exec-plans/active/2026-07-06-kb-ai-operations.md)
 - [KB Memory Layer](exec-plans/active/2026-07-07-kb-memory-layer.md)
 - [Lint baseline reduction](exec-plans/active/lint-baseline-reduction.md)
+- [Silk 内置 AI 接入 DeepSeek Harness](exec-plans/active/2026-08-14-dsh-deepseek-integration.md)
 
 ## Usage
 

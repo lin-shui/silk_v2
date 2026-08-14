@@ -30,6 +30,7 @@ ACP 不可用时直接报"未连接"，无 fallback。
 - Agent 模式是 per-user-per-group 状态机，内部按 agentType 保存独立 `AgentSession`
 - 真正执行 Claude CLI / Codex CLI 的不是 backend，而是外部 ACP adapter
 - `ChatServer.broadcast()` 会先拦截已激活 agent 的消息
+- 后端默认 agent：`SILK_DEFAULT_AGENT`（`.env` 或系统环境变量，取值如 `codex` / `claude-code` / `cursor`）可在前端无感知的情况下让群聊与 `[Silk]` 私聊默认由该 agent 接管；bridge 未连接或用户 `/use none` / `/exit` 后回退普通 Silk AI
 - `/codex <text>` 可一步切到 Codex 并提问；`@codex <text>` 可跨 agent 路由
 - 切目录有两种入口：
   - HTTP `POST /users/{userId}/cc-fs/cd`（UI"更改"按钮 + 创建工作流时的 initialDir）→ 先经 `TrustedDirManager.isTrusted()` 验证目录信任状态，未信任则返回 `400 DIRECTORY_NOT_TRUSTED`；通过后再调 `AgentRuntime.cdSync()` 走 ACP `_silk/set_cwd` 完成，原子更新 state，返回 `CdResult.Ok | CdResult.Err`

@@ -196,11 +196,15 @@ private fun getAnyBridgeIp(userId: String): String? {
 
 /**
  * 解析 cdSync / listDirectory 等"无显式 agentType"路径应该调用哪个 bridge。
- * 优先 claude-code（保持旧行为），否则用第一个已连接的 agent。无连接返回 null。
+ * 优先后端配置的默认 agent（SILK_DEFAULT_AGENT），其次 claude-code（保持旧行为），
+ * 否则用第一个已连接的 agent。无连接返回 null。
  */
 private fun resolveActiveAgentType(userId: String): String? {
     val connected = AcpRegistry.listConnected(userId)
     if (connected.isEmpty()) return null
+    com.silk.backend.agents.core.AgentRuntime.configuredDefaultAgentType()?.let { dflt ->
+        if (connected.contains(dflt)) return dflt
+    }
     return if (connected.contains("claude-code")) "claude-code" else connected.first()
 }
 

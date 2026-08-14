@@ -18,8 +18,8 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 消息持久化
    - 未读计数
    - URL/PDF 下载提取
-   - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
-   - Silk AI / `DirectModelAgent` 响应
+   - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`；后端可配 `SILK_DEFAULT_AGENT` 指定默认 agent（bridge 在线时自动接管群聊与 `[Silk]` 私聊，未配置/掉线回退内置 Silk AI）
+   - Silk AI / `DirectModelAgent` 响应（模型提供方可由 `SILK_AI_PROVIDER` 切换：空=claude CLI/Anthropic API；`dsh`=DeepSeek Harness runtime，见 `docs/context/planning/exec-plans/active/2026-08-14-dsh-deepseek-integration.md`）
 5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
 6. Workflow 持久化每条工作流的 `activeAgent` 与 per-agent `agentSessions[agentType]`；进入工作流时 `autoActivateForWorkflow` 读 `workflow.activeAgent`（不再硬编码 claude-code），用户 `/use <agent>` 切换会落盘。
 7. `Routing.kt` 另提供 `/ws/audio-duplex`，把客户端音频双工 WebSocket 代理到 `AIConfig.AUDIO_DUPLEX_URL` 上游 Worker。

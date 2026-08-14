@@ -1,5 +1,7 @@
 package com.silk.backend.ai
 
+import com.silk.backend.ai.dsh.DshEvent
+import com.silk.backend.ai.dsh.DshSdkClient
 import com.silk.backend.kb.KnowledgeBaseAiAction
 import com.silk.backend.kb.extractKnowledgeBaseAiActions
 import kotlinx.coroutines.CancellationException
@@ -90,6 +92,7 @@ private fun withCitationGuidelines(systemPrompt: String?): String {
  * 3. 调用 claude -p（流式）
  * 4. 流式返回回复
  */
+@Suppress("LargeClass") // 历史单体长文件；P1 仅新增 dsh provider 路径，未重构存量逻辑
 class DirectModelAgent(
     private val sessionId: String = "default"
 ) {
@@ -97,6 +100,22 @@ class DirectModelAgent(
 
     /** Claude CLI 进程客户端 */
     private lateinit var claudeProcessClient: ClaudeProcessClient
+
+    /**
+     * DeepSeek Harness runtime 客户端（SILK_AI_PROVIDER=dsh 时使用）。
+     * 每 DirectModelAgent 实例（每个会话）一个 runtime 进程，cwd=本会话 workspace。
+     */
+    private val dshClient: DshSdkClient? by lazy {
+        if (AIConfig.SILK_AI_PROVIDER.lowercase() != "dsh") return@lazy null
+        val cmd = AIConfig.DSH_RUNTIME_CMD
+        if (cmd.isEmpty()) return@lazy null
+        DshSdkClient(
+            launchCommand = cmd,
+            runtimeCwd = java.io.File(AIConfig.DSH_RUNTIME_CWD),
+            sessionRoot = java.io.File(workspaceDir, ".dsh_sessions").absolutePath,
+            sessionCwd = workspaceDir,
+        )
+    }
 
     /** 工作目录（群组隔离），由 initClaudeClient 设置 */
     private var workspaceDir: String = ""
@@ -357,18 +376,7 @@ class DirectModelAgent(
         }
 
         val response = try {
-            // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
-            try {
-                chatViaClaudeProcess(toolContext, callback)
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
-                val apiKey = AIConfig.ANTHROPIC_API_KEY
-                if (apiKey.isNotBlank()) {
-                    chatViaAnthropicApi(apiKey, toolContext, callback)
-                } else {
-                    throw e
-                }
-            }
+            runProvider(toolContext, callback)
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -381,6 +389,29 @@ class DirectModelAgent(
         conversationHistory.add(Message(role = "assistant", content = response))
         callback("complete", response, true)
         return response
+    }
+
+    /**
+     * 按 SILK_AI_PROVIDER 选择模型提供方。
+     * 用户决定：`dsh` 不可用时直接报错，不做 claude fallback；默认保持 claude CLI → Anthropic API 回退。
+     */
+    private suspend fun runProvider(
+        toolContext: String,
+        callback: suspend (String, String, Boolean) -> Unit,
+    ): String = if (AIConfig.SILK_AI_PROVIDER.lowercase() == "dsh") {
+        chatViaDsh(toolContext, callback)
+    } else {
+        try {
+            chatViaClaudeProcess(toolContext, callback)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
+            val apiKey = AIConfig.ANTHROPIC_API_KEY
+            if (apiKey.isNotBlank()) {
+                chatViaAnthropicApi(apiKey, toolContext, callback)
+            } else {
+                throw e
+            }
+        }
     }
 
     /**
@@ -535,7 +566,41 @@ class DirectModelAgent(
         toolContext: String,
         callback: suspend (String, String, Boolean) -> Unit
     ): String {
-        val fullPrompt = buildString {
+        return claudeProcessClient.streamCompletion(
+            fullPrompt = buildFullPrompt(toolContext),
+            callback = callback,
+        )
+    }
+
+    /**
+     * 通过 DeepSeek Harness SDK runtime 调用模型（SILK_AI_PROVIDER=dsh）。
+     * 与 claude CLI 路径共用同一份 prompt 构建，保证 Silk 上下文注入（时间/引用/KB/工作区）不变。
+     * 每会话一个 runtime 进程（DshSdkClient 实例随本 agent 存活），dsh 会话 id 由 sessionId 确定性派生。
+     */
+    private suspend fun chatViaDsh(
+        toolContext: String,
+        callback: suspend (String, String, Boolean) -> Unit
+    ): String {
+        val client = dshClient ?: error("SILK_AI_PROVIDER=dsh 但 DSH_RUNTIME_CMD 未配置")
+        val dshSessionId = "silk-" + sha256Hex(sessionId).take(32)
+        return client.prompt(dshSessionId, buildFullPrompt(toolContext)) { event ->
+            when (event) {
+                is DshEvent.ThinkingDelta -> callback("thinking", event.text, false)
+                is DshEvent.TextDelta -> callback("streaming_incremental", event.text, false)
+                is DshEvent.ToolCall -> callback(
+                    "tool",
+                    "🔧 ${event.name ?: "工具"}${event.input?.let { " $it" } ?: ""}",
+                    false,
+                )
+                is DshEvent.ToolResult -> callback("tool", "✅ 工具完成", false)
+                is DshEvent.AssistantMessage -> {}
+                is DshEvent.TurnEnd -> {}
+            }
+        }
+    }
+
+    /** 与 claude CLI 路径一致的完整 prompt：system + 对话历史 + 时间钉扎 + 工具上下文。 */
+    private fun buildFullPrompt(toolContext: String): String = buildString {
             for (msg in conversationHistory) {
                 when (msg.role) {
                     "system" -> {
@@ -563,10 +628,10 @@ class DirectModelAgent(
             appendLine("Assistant:")
         }
 
-        return claudeProcessClient.streamCompletion(
-            fullPrompt = fullPrompt,
-            callback = callback,
-        )
+    private fun sha256Hex(input: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
     }
 
     private suspend fun chatViaAnthropicApi(

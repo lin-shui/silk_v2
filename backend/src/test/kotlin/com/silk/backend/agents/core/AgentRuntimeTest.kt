@@ -4,7 +4,11 @@ package com.silk.backend.agents.core
 import com.silk.backend.Message
 import com.silk.backend.MessageType
 import com.silk.backend.TestWorkspace
+import com.silk.backend.agents.acp.AcpClient
+import com.silk.backend.agents.acp.AcpRegistry
+import com.silk.backend.agents.acp.InMemoryAcpTransport
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
+import com.silk.backend.agents.adapters.codex.CodexDescriptor
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.models.KBEntryStatus
 import com.silk.backend.models.KBSourceType
@@ -24,6 +28,7 @@ class AgentRuntimeTest {
     fun setup() {
         AgentRegistry.clearForTest()
         AgentRuntime.clearForTest()
+        AcpRegistry.clearForTest()
         // Re-register because AgentRuntime.init only runs once (object singleton)
         AgentRegistry.register(ClaudeCodeDescriptor)
     }
@@ -84,6 +89,95 @@ class AgentRuntimeTest {
             broadcastFn = {},
         )
         assertFalse(handled)
+    }
+
+    @Test
+    fun `configuredDefaultAgentType normalizes names and ignores none`() {
+        AgentRegistry.register(CodexDescriptor)
+
+        AgentRuntime.defaultAgentOverride = "codex"
+        assertEquals("codex", AgentRuntime.configuredDefaultAgentType())
+
+        AgentRuntime.defaultAgentOverride = "claude_code"
+        assertEquals("claude-code", AgentRuntime.configuredDefaultAgentType())
+
+        AgentRuntime.defaultAgentOverride = "none"
+        assertNull(AgentRuntime.configuredDefaultAgentType())
+
+        AgentRuntime.defaultAgentOverride = "unknown-agent"
+        assertNull(AgentRuntime.configuredDefaultAgentType())
+
+        AgentRuntime.defaultAgentOverride = null
+        assertNull(AgentRuntime.configuredDefaultAgentType())
+    }
+
+    @Test
+    fun `handleIfActive auto activates configured default agent when connected`() = runTest {
+        AgentRegistry.register(CodexDescriptor)
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        AcpRegistry.put("u1", "codex", client, remoteIp = "127.0.0.1")
+        AgentRuntime.defaultAgentOverride = "codex"
+
+        val messages = mutableListOf<Message>()
+        val handled = AgentRuntime.handleIfActive(
+            userId = "u1",
+            groupId = "g1",
+            text = "hello from default agent",
+            userName = "Alice",
+            broadcastFn = { messages.add(it) },
+        )
+        assertTrue(handled)
+        val snap = assertNotNull(AgentRuntime.snapshotState("u1", "g1"))
+        assertEquals("codex", snap.agentType)
+        assertTrue(snap.active)
+    }
+
+    @Test
+    fun `handleIfActive falls back to Silk AI when default agent bridge not connected`() = runTest {
+        AgentRegistry.register(CodexDescriptor)
+        AgentRuntime.defaultAgentOverride = "codex"
+
+        val handled = AgentRuntime.handleIfActive(
+            userId = "u1",
+            groupId = "g1",
+            text = "plain text",
+            userName = "Alice",
+            broadcastFn = {},
+        )
+        assertFalse(handled)
+        assertNull(AgentRuntime.snapshotState("u1", "g1")?.agentType)
+    }
+
+    @Test
+    fun `use none disables configured default agent reactivation`() = runTest {
+        AgentRegistry.register(CodexDescriptor)
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        AcpRegistry.put("u1", "codex", client, remoteIp = "127.0.0.1")
+        AgentRuntime.defaultAgentOverride = "codex"
+
+        AgentRuntime.handleIfActive("u1", "g1", "/use none", "Alice") {}
+        val handled = AgentRuntime.handleIfActive("u1", "g1", "plain text", "Alice") {}
+        assertFalse(handled)
+        assertNull(AgentRuntime.snapshotState("u1", "g1")?.agentType)
+    }
+
+    @Test
+    fun `default agent disconnect reverts to Silk AI`() = runTest {
+        AgentRegistry.register(CodexDescriptor)
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        AcpRegistry.put("u1", "codex", client, remoteIp = "127.0.0.1")
+        AgentRuntime.defaultAgentOverride = "codex"
+
+        val handled1 = AgentRuntime.handleIfActive("u1", "g1", "first", "Alice") {}
+        assertTrue(handled1)
+
+        AcpRegistry.unregister("u1", "codex")
+        val handled2 = AgentRuntime.handleIfActive("u1", "g1", "second", "Alice") {}
+        assertFalse(handled2)
+        assertNull(AgentRuntime.snapshotState("u1", "g1")?.agentType)
     }
 
     @Test

@@ -1,6 +1,9 @@
 package com.silk.backend.ai
 
 import com.silk.backend.EnvLoader
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * AI 服务配置
@@ -17,6 +20,43 @@ object AIConfig {
         env("ANTHROPIC_API_BASE_URL") ?: env("ANTHROPIC_BASE_URL") ?: "https://api.anthropic.com"
     val ANTHROPIC_MODEL: String get() =
         env("ANTHROPIC_MODEL") ?: "claude-sonnet-4-20250514"
+
+    // ── DeepSeek Harness (dsh) 集成 ──────────────────────────────────────
+    /** DeepSeek 官方 API key（dsh 的 llm-deepseek 与 web-search-deepseek 共用） */
+    val DEEPSEEK_API_KEY: String get() = env("DEEPSEEK_API_KEY") ?: ""
+    /** DeepSeek chat-completions base URL（默认官方 https://api.deepseek.com） */
+    val DEEPSEEK_BASE_URL: String get() = env("DEEPSEEK_BASE_URL") ?: ""
+
+    /**
+     * 内置 Silk AI 的模型提供方：空 = 现有 claude CLI 路径；`dsh` = DeepSeek Harness runtime。
+     * 用户已决定：dsh 不可用时直接报错，不做 claude fallback。
+     */
+    val SILK_AI_PROVIDER: String get() = env("SILK_AI_PROVIDER") ?: ""
+
+    /** dsh runtime 启动命令（argv 列表；空格分隔或 JSON 数组），如 `node --import tsx <bin> <config>`；生产用 bundled exe 路径 */
+    val DSH_RUNTIME_CMD: List<String> get() = parseCmdList(env("DSH_RUNTIME_CMD"))
+    /** dsh runtime 工作目录（源码运行时为仓库根，需含依赖；bundled exe 可为任意目录） */
+    val DSH_RUNTIME_CWD: String get() = env("DSH_RUNTIME_CWD") ?: (System.getProperty("user.dir") ?: ".")
+    /** dsh provider 路由（llm-deepseek 注册的 `deepseek-official`） */
+    val DSH_PROVIDER: String get() = env("DSH_PROVIDER") ?: "deepseek-official"
+    /** dsh 模型（llm-deepseek 默认 deepseek-v4-flash） */
+    val DSH_MODEL: String get() = env("DSH_MODEL") ?: "deepseek-v4-flash"
+    /** 单轮 prompt 超时（毫秒），默认 120s */
+    val DSH_PROMPT_TIMEOUT_MS: Long get() =
+        env("DSH_PROMPT_TIMEOUT_MS")?.toLongOrNull()?.takeIf { it > 0 } ?: 120_000L
+
+    /** 解析 argv：JSON 数组优先，否则按空白切分；空值返回空列表。 */
+    private fun parseCmdList(raw: String?): List<String> {
+        if (raw.isNullOrBlank()) return emptyList()
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("[")) {
+            return runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(trimmed).jsonArray
+                    .map { it.jsonPrimitive.content }
+            }.getOrDefault(emptyList())
+        }
+        return trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+    }
 
     // ── OpenAI 兼容接口（已弃用，请换用 ANTHROPIC_*） ───────────────────
     @Deprecated("改用 ANTHROPIC_API_KEY", replaceWith = ReplaceWith("ANTHROPIC_API_KEY"))

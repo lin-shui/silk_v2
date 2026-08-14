@@ -48,6 +48,21 @@
 - `search/README.md` 是 Weaviate 上游 README，不是本仓库的项目说明。
 - 阅读 `search/` 时注意其内容已不反映当前架构。
 
+## `BackendWebSocketContractTest` 4/6 用例在本机稳定失败
+
+- 失败用例均为 `Timed out waiting for websocket message`（`chat websocket replays recent history...`、`ingests local html and pdf urls...`、`rejects non member...`、`reports corrupt pdf failure...`）。
+- 在 `feat/cc-connect-integration` 基线（无任何本地改动）上同样失败，判定为预存问题，与 `SILK_DEFAULT_AGENT` 改动无关。
+- 复现：`./gradlew :backend:test --tests "com.silk.backend.BackendWebSocketContractTest"`。
+- 若后续排查，优先看这些用例依赖的真实模型/WebSocket 时序（测试内有真实 `DirectModelAgent` 调用），而非 agent 框架改动。
+
+## DeepSeek Harness (dsh) 集成现状（P1 完成）
+
+- dsh（`@deepseek-ai/dsh`，v0.1.0-rc.5，MIT）SDK JSON-RPC 协议实测：**跨进程不自动恢复会话**（同一 sessionId + 同一 JSONL root，第二个进程上下文为空，且事件不追加进原 JSONL；根因 `createSession` 每次 `agents.create`）。Silk 的"加载"必须由 Silk 自己把 chat history 喂进 prompt，dsh JSONL 仅作引擎侧簿记。
+- SDK 协议无 per-prompt 结果（靠 `session.status=idle` 判定 turn 结束）、无 cancel/close（停止靠杀进程）、无 approval 流（server→client 是 dead capability）。
+- PyPI 上 `deepseek-harness-sdk` / `deepseek-harness-runtime-bin` 尚未发布（`pip index` 无匹配）；当前用源码 node 载体（`DSH_RUNTIME_CMD` 指向 jsonrpc-demo bin）。
+- dsh 的 `web-fetch-http` provider 官方自认是 SSRF 原语（无私网防护），Silk 组合里必须 `tool-web {search: true, fetch: false}`；受控 fetch 由 Silk 后端实现（P3）。
+- `DshSdkClient` 随 DirectModelAgent 实例存活（每会话一个 runtime 进程），空闲回收尚未实现（P2）。
+
 ## Generated / Runtime Paths May Be Dirty
 
 - 当前工作树里常见未跟踪目录：`.silk-runtime/`、`backend/bin/`、`frontend/desktopApp/bin/`

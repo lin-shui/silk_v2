@@ -1021,10 +1021,12 @@ class ChatServer(
      * 检查是否应该为 Claude Code 拦截消息
      */
     private fun shouldInterceptForClaudeCode(message: Message, isSilkPrivateChat: Boolean): Boolean {
-        return !isSilkPrivateChat
-            && message.type == MessageType.TEXT
-            && !message.isTransient
-            && !AgentRuntime.isAgentMessage(message)
+        if (message.type != MessageType.TEXT || message.isTransient || AgentRuntime.isAgentMessage(message)) {
+            return false
+        }
+        // [Silk] 专属私聊默认不走 agent 框架；仅当后端配置了默认 agent（SILK_DEFAULT_AGENT）时允许接管，
+        // 由 AgentRuntime 在 bridge 未连接时自动回退到普通 Silk AI。
+        return !isSilkPrivateChat || AgentRuntime.configuredDefaultAgentType() != null
     }
 
     suspend fun broadcast(message: Message) {
