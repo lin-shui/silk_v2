@@ -82,11 +82,21 @@ class AcpClientTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
         val deferred = async {
-            client.sessionPrompt("sess-1", listOf(ContentBlock.Text("hello")))
+            client.sessionPrompt(
+                "sess-1",
+                listOf(ContentBlock.Text("hello")),
+                executionPolicy = SilkExecutionPolicy(readFile = true, runCommand = false),
+            )
         }
         val sent = json.parseToJsonElement(transport.readClientSent()).jsonObject
         assertEquals("session/prompt", sent["method"]!!.jsonPrimitive.content)
         val id = sent["id"]!!.jsonPrimitive.long
+        val silk = sent["params"]!!.jsonObject["_silk"]!!.jsonObject
+        assertEquals("1", silk["protocolVersion"]!!.jsonPrimitive.content)
+        val executionPolicy = silk["executionPolicy"]!!.jsonObject
+        assertEquals("true", executionPolicy["readFile"]!!.jsonPrimitive.content)
+        assertEquals("false", executionPolicy["writeFile"]!!.jsonPrimitive.content)
+        assertEquals("false", executionPolicy["runCommand"]!!.jsonPrimitive.content)
         transport.pushFromServer(
             """{"jsonrpc":"2.0","id":$id,"result":{"stopReason":"end_turn"}}"""
         )

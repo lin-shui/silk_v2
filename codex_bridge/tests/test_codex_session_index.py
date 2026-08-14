@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from codex_bridge.codex_session_index import find_session_file, list_local_sessions
 
 

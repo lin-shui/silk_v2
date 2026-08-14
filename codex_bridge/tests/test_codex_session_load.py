@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-import pytest
-
 # Make codex_bridge package importable as flat modules (mirrors how the
 # adapter is launched at runtime).
 _PKG = Path(__file__).resolve().parents[1]

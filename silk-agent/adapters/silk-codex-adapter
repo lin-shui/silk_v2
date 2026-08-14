@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+adapter_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+bundle_root=$(CDPATH= cd -- "$adapter_dir/.." && pwd)
+if [ -f "$bundle_root/codex_bridge/codex_adapter.py" ]; then
+    repo_root=$bundle_root
+else
+    repo_root=$(CDPATH= cd -- "$adapter_dir/../.." && pwd)
+fi
+python_bin=${BRIDGE_PYTHON:-python3}
+
+exec "$python_bin" "$repo_root/codex_bridge/codex_adapter.py" --silk-host-stdio

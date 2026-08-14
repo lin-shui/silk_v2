@@ -1,6 +1,12 @@
 package com.silk.backend.routes
 
 import com.silk.backend.agents.acp.AcpRpcException
+import com.silk.backend.agents.auth.AgentAuthErrorResponse
+import com.silk.backend.agents.auth.AgentBindingAuthorizationService
+import com.silk.backend.agents.auth.AgentBindingMessageScope
+import com.silk.backend.agents.auth.AgentBindingTargetType
+import com.silk.backend.agents.auth.AgentCapability
+import com.silk.backend.agents.auth.AgentPermission
 import com.silk.backend.agents.core.AcpExtensions
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.agents.core.GitChangesAssembler
@@ -62,6 +68,15 @@ private suspend fun ApplicationCall.resolveControllableWorkspace(
 @Suppress("TooGenericExceptionCaught", "SwallowedException")
 private suspend fun ApplicationCall.respondGitChanges(workspaceManager: WorkspaceManager) {
     val workspace = resolveControllableWorkspace(workspaceManager) ?: return
+    when (requireAgentChangesBinding(workspace)) {
+        AgentChangesBindingState.DENIED -> return
+        AgentChangesBindingState.DISCONNECTED -> {
+            val reason = if (CcConnectRegistry.isConnected(workspace.roomId)) "ccconnect" else null
+            respond(GitChangesAssembler.assembleChanges(connected = false, supported = true, raw = null).copy(reason = reason))
+            return
+        }
+        AgentChangesBindingState.ALLOWED -> Unit
+    }
     val active = AgentRuntime.ensureActiveAcpSession(workspace.ownerId, workspace.workspaceId)
     if (active == null) {
         // cc-connect 群组无 ACP session：给专属空态而非误导的"未连接"
@@ -91,6 +106,14 @@ private suspend fun ApplicationCall.respondGitFileDiff(workspaceManager: Workspa
         return
     }
     val workspace = resolveControllableWorkspace(workspaceManager) ?: return
+    when (requireAgentChangesBinding(workspace)) {
+        AgentChangesBindingState.DENIED -> return
+        AgentChangesBindingState.DISCONNECTED -> {
+            respond(GitChangesAssembler.assembleDiff(connected = false, supported = true, raw = null))
+            return
+        }
+        AgentChangesBindingState.ALLOWED -> Unit
+    }
     val active = AgentRuntime.ensureActiveAcpSession(workspace.ownerId, workspace.workspaceId)
     if (active == null) {
         respond(GitChangesAssembler.assembleDiff(connected = false, supported = true, raw = null))
@@ -105,4 +128,29 @@ private suspend fun ApplicationCall.respondGitFileDiff(workspaceManager: Workspa
         GitChangesAssembler.assembleDiff(true, true, null).copy(message = "git error: ${e.message}")
     }
     respond(resp)
+}
+
+private enum class AgentChangesBindingState { ALLOWED, DISCONNECTED, DENIED }
+
+private suspend fun ApplicationCall.requireAgentChangesBinding(workspace: PersonalWorkspace): AgentChangesBindingState {
+    val agentType = workspace.activeAgent.ifBlank { workspace.agentType }
+    val authorization = AgentBindingAuthorizationService.authorize(
+        userId = workspace.ownerId,
+        agentType = agentType,
+        targetType = AgentBindingTargetType.WORKSPACE,
+        targetId = workspace.workspaceId,
+        messageScope = AgentBindingMessageScope.WORKSPACE,
+        requiredPermissions = setOf(AgentPermission.READ_WORKSPACE, AgentPermission.READ_FILE),
+        requiredCapabilities = setOf(AgentCapability.READ_WORKSPACE, AgentCapability.READ_FILE),
+    )
+    if (authorization.allowed) return AgentChangesBindingState.ALLOWED
+    if (authorization.errorCode == "AGENT_NOT_CONNECTED") return AgentChangesBindingState.DISCONNECTED
+    respond(
+        HttpStatusCode.Forbidden,
+        AgentAuthErrorResponse(
+            error = authorization.errorCode ?: "PERMISSION_DENIED",
+            message = authorization.message ?: "Agent is not authorized for this Workspace",
+        ),
+    )
+    return AgentChangesBindingState.DENIED
 }

@@ -237,7 +237,6 @@ fun LoginScene(appState: WebAppState) {
                                     val response = ApiClient.login(loginName, password)
                                     if (response.success && response.user != null) {
                                         console.log("✅ 登录成功:", response.user.fullName)
-                                        pendingUser = response.user
                                         // 保存 JWT Token，供绑定 API 使用
                                         if (response.accessToken != null) {
                                             JwtManager.setAccessToken(response.accessToken!!)
@@ -245,7 +244,12 @@ fun LoginScene(appState: WebAppState) {
                                                 JwtManager.setRefreshToken(response.refreshToken!!)
                                             }
                                         }
-                                        showBindPrompt = true
+                                        if (appState.pendingPairingCode != null) {
+                                            appState.setUser(response.user)
+                                        } else {
+                                            pendingUser = response.user
+                                            showBindPrompt = true
+                                        }
                                     } else {
                                         appState.loginError = response.message
                                     }

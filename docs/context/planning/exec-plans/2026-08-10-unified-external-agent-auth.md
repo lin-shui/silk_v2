@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 状态：方案设计完成，尚未开始代码实施。
+- 状态：Phase 0–7 已实现并完成仓库级验证（含 AgentBinding 双主体审批、服务端路由 ACL、每轮执行权限信封、Web 管理、Host IPC v2、单设备 WSS 多路复用、撤销广播、生产传输门禁、系统凭据存储、备份/轮换和签名发行包）；Phase 8 cc-connect 独立迁移仍未开始。
 - 目标读者：负责后续开发的 Agent、后端/前端/Connector 开发者和评审者。
 - 设计范围：Claude Code、Codex、Cursor 等通过 ACP bridge、cc-connect 或后续 Connector 接入 Silk 的统一身份、设备认证、Agent 注册、Room 使用和撤销。
 - 分阶段范围：第一阶段优先完成统一 Host、设备认证和直接 Bridge（主要是 ACP bridge）；cc-connect 明确延后，不作为第一阶段交付阻塞项。
@@ -15,6 +15,39 @@
 - [Task Router](../../TASK_ROUTER.md)
 - [cc-connect Silk 分支 feat/platform-silk](https://github.com/lin-shui/cc-connect/tree/feat/platform-silk)
 
+### 0.1 当前实现基线（2026-08-11）
+
+本节记录已经落入代码的事实。它是后续开发 Agent 判断“哪些可以复用、哪些仍需实现”的依据，不代表完整目标已经交付。
+
+已实现：
+
+- `backend/src/main/kotlin/com/silk/backend/agents/auth/` 固化了 v1 设备认证合同、Ed25519 公钥验证、配对状态数据、短时 challenge 和连接注册表。
+- SQLite 已创建 `agent_devices`、`agent_instances`、`agent_bindings`、`agent_binding_audit_events`、`agent_pairing_requests` 五张表；`DatabaseFactory` 和测试隔离数据库都会创建/补齐这些表。
+- `POST /api/agent-pairings` 创建 5 分钟配对事务。请求提交目标账号 loginName、Host 实际连接 origin、可选 Web origin、raw 32-byte Ed25519 公钥（无 padding 的 base64url）和 Agent 元数据；后端在出码前把 loginName 解析成不可变 userId 并预绑定，其他账号对该短码统一得到 not-found。返回 canonical `serverOrigin`、一次性 `userCode`、带 `#code=` fragment 的验证页地址、设备轮询 secret 和 `ws(s)` Agent 地址。fragment 不会随 HTTP 请求发送到服务端，Web 读取后清理地址栏。轮询 secret 只在响应中明文出现一次，数据库只保存 SHA-256 摘要。
+- JWT 保护的 `POST /api/agent-pairings/preview` 和 `POST /api/agent-pairings/approve` 复用 Silk 现有登录体系。Web 可从验证 URL fragment 自动填码并 preview，但审批 API 仍在 body 中携带短码；打开链接不会自动批准，必须先展示请求详情并由用户明确确认。首次设备审批成功后进入 `DEVICE_PROOF_PENDING`，proof 有效期最多 90 秒；已有设备新增 Agent 则在设备签名请求通过后等待同一页面审批，批准后直接进入 `CONSUMED`。
+- `GET /api/agent-pairings/{pairingId}/status` 使用 `X-Silk-Device-Poll-Secret`，`POST /api/agent-pairings/{pairingId}/proof` 使用同一短时 secret + Ed25519 签名完成设备和首个 Agent 登记。proof 成功后 pairing 进入 `CONSUMED`，设备和 Agent 进入 `ACTIVE`。
+- `GET/DELETE /api/agent-devices`、`GET/DELETE /api/agent-instances` 和 `GET/POST/PUT/DELETE /api/agent-bindings` 已提供用户级查询、创建、更新和软撤销底座，`POST /api/agent-bindings/{bindingId}/approval` 提供批准/拒绝。跨所有者 Binding 可由 Agent owner 或目标管理者发起，必须由 Agent owner 与 Room HOST/OPERATOR（或 Workspace owner）双方批准才进入 ACTIVE；配置更新会按当前发起者权限重置另一侧审批，拒绝/撤销后的同范围请求会重新打开审批 revision，历史状态保留在不可变 audit event 中。服务端授权器把设备签名连接钉到精确 `agentInstanceId`，Workspace prompt、Room TEAM、目录读取/切换和 Source Control RPC 均检查 ACTIVE Binding、所需权限与声明能力。删除 Agent 只撤销该 Agent 和其绑定；删除设备撤销该设备下全部 Agent 和绑定，并关闭当前 `/agent-connect` 会话。
+- `wss://<server>/agent-connect`（开发 HTTP 时为 `ws://`）已实现 `hello → challenge → authenticate → authenticated` 握手；challenge 有 30 秒有效期、一次性消费和 120 秒客户端时钟窗口。声明 `HOST_MULTIPLEXED_V1` 的 Host 在一次认证后以 `agent_open / agent_rpc / agent_close` v1 envelope 承载 ACP，每帧固定携带 `agentInstanceId`；未声明该模式的旧健康连接仍只接受 heartbeat。
+- 第一阶段新配对只接受 `ACP` + `claude-code` / `codex`。`cc-connect` 会明确返回 `CC_CONNECT_DEFERRED`；`/agent-bridge` 只支持设备签名 challenge 并拒绝旧 query Token，`/ccconnect-bridge` 仍是 legacy Token。
+- `silk-agent/` 已提供 Go Host 命令：`connect`、`run`、`start`、`status`、`stop`、`logs`、`service install/uninstall/status` 和 `identity backup/restore/rotate/migrate-keychain`；设备私钥优先使用 macOS Keychain、Windows DPAPI、Linux Secret Service，缺失时回退到 secure-file（Unix 0600/目录 0700；Windows 当前用户 owner + 受保护 DACL）。配对轮询/proof、origin 规范化、单一设备 WSS challenge/heartbeat/reconnect、Unix 0600/Windows 当前用户控制通道，以及受控 Adapter ProcessSupervisor 已完成。`logs --follow` 按 offset 增量输出并处理截断/替换；Windows Scheduled Task 显式持久化解析后的 `--config-dir`，profile 目录会收紧到当前用户/SYSTEM/Administrators 并让子文件继承；若提升进程创建目录导致 owner 为 Administrators，则只在当前进程确实 elevated 时转交给当前用户，其他账号 owner 拒绝。备份口令与发行私钥文件按 owner/DACL fail-closed 校验。已登记设备再次执行 `connect` 会发送覆盖 origin、一次性 requestId、Agent 元数据和能力集合的设备签名请求，审批后通过控制 socket 热加载新 Agent。Host IPC v2 以一次性 nonce 和固定 `agentInstanceId` 绑定子进程，再用 `adapter/acp` / `host/forwardAcp` 双向转发；Adapter 不再获得设备签名接口或建立 Silk WSS。Host 会把服务端撤销错误视为该身份的终止状态，全部启用身份被撤销时停止而非永久重连；Adapter 启动前校验 wrapper、入口脚本及全部随包 Python 模块的 owner/写权限，屏蔽 raw CLI I/O 日志并禁止 Python bytecode 写回发行目录。当前 `service` 为当前用户级 systemd user unit、macOS LaunchAgent 或 Windows Scheduled Task，不需要 root。
+- 当前每个设备的每种 Agent 类型只允许一个 `ACTIVE` 实例，因此一个 Host 可并存 Claude Code 与 Codex，但尚不支持同类型多实例；重复登记会返回 `AGENT_ALREADY_ENROLLED`。若 Phase 6 需要同类型多实例，必须同时调整本地配置索引、控制命令和后端唯一性约束，不能只扩展 WSS envelope。
+- 当前后端 ACP 运行时索引仍按 `(userId, agentType)` 只保留一个活动连接；同一账号在多个设备登记同类型 Agent 时，后建立的连接会替换前一个。Binding 数据和授权检查仍按精确 `agentInstanceId` 保存，但 Workspace 选择同类型设备需要后续引入显式 `deviceId/bridgeId` 路由。
+- `cc_bridge/acp_adapter.py` 与 `codex_bridge/codex_adapter.py` 支持 `--silk-host-stdio`：不接收 Token、不请求设备签名、不连接后端，只通过 Host IPC v2 处理 ACP；直接运行 Adapter 和旧 `/agent-bridge` query Token 均明确拒绝，避免旧客户端静默降级。
+- 设备签名连接的每次 ACP `session/prompt` 都要求 Agent 声明 `EXECUTION_POLICY_V1` 并携带版本化 `_silk.executionPolicy`。服务端仅从精确 ACTIVE Binding 与连接声明能力的交集生成 `READ_FILE` / `WRITE_FILE` / `RUN_COMMAND`；缺少版本能力的旧登记 Agent 拒绝 prompt，受管连接缺失信封、异常或未知信封均由 Adapter 按空权限处理。Claude Code 与 Codex 默认继承设备用户的原生认证和 CLI 配置（包括 hooks、MCP、插件和规则）；Silk 仅对核心本地文件/命令工具增加 Binding 权限上限：Claude 使用显式 deny、工作区路径检查和完整权限下的原生 Bash sandbox，Codex 使用 `read-only/workspace-write` sandbox 和 shell feature gate，受管路径不会主动开启 legacy dangerous bypass。
+- Web `/device` 页面复用现有 JWT 登录，支持区分新设备/新增 Agent 的配对预览、批准/拒绝、设备与 Agent 查询/实时连接状态/撤销，以及 Room/Workspace AgentBinding 增删改和双主体审批；`silk.sh` 静态服务与 Nginx 回退后的 Ktor 固定路由都支持 `/device` SPA 直达。
+- 已有 `AgentAuthProtocolTest`、`AgentAuthRouteContractTest` 和 `AgentBindingApprovalRouteContractTest` 覆盖 canonical 签名、错误/篡改 payload、origin 绑定、challenge 过期/重放、JWT 审批、proof 重放、已登记设备新增 Agent、Binding 双向发起/双审批/重新审批与撤销、双 Agent 连接隔离、WSS 认证和两级撤销。
+
+Phase 7 已完成的仓库级实现：
+
+- `DeploymentSecurity` 在生产模式强制 HTTPS origin、无凭据 URL 和显式 CORS allowlist；Host 生产连接强制 HTTPS/WSS，开发 HTTP/WS 需要显式开关。
+- challenge 和安全事件使用共享主数据库；`AgentRevocationWatcher` 按持久化事件序列关闭每个节点的本地 Agent/设备连接。Binding 审批和同设备同类型新增 Agent 均使用事务内行锁处理跨节点竞态。
+- `silk-agent` 提供系统凭据存储、加密身份备份、恢复、轮换和密钥迁移；发行脚本构建六个平台 bundle，并用 Ed25519 签名 manifest 校验版本、SHA-256 哈希和未签名文件，同时规范化文件/目录权限并拒绝 group/other 可写输出。
+- Adapter 权限下推覆盖直接 `cc_bridge` / `codex_bridge` 的设备签名 prompt；受管连接缺失或异常信封按空权限处理。Claude Bash 只有完整读/写/命令授权才开放；Codex 写入要求读+写、shell 要求读+命令，因此不完整组合会降级而不会扩权。
+
+仍需真实部署环境验证的事项：TLS 终止代理、各平台 Keychain/DPAPI/Secret Service 的实际桌面会话，以及发布系统中注入正式签名密钥后的安装升级验收。跨公网/NAT 与无浏览器审批已在当前 HTTP 受控环境通过，但生产 WSS 代理仍需单独验收。配对尝试限速目前是节点本地内存状态（已有周期清理和 10,000 桶硬上限）；若公网多节点部署需要全局限速，应在 ingress 或共享限流组件补齐。过期配对事务在新配对创建时清理 7 天前记录，安全审计事件继续保留。它们不应被本地单元测试冒充为已完成的生产部署。
+
+本切片的验证命令：`./gradlew :backend:test`、`./gradlew :frontend:webApp:nodeTest :frontend:webApp:compileProductionExecutableKotlinJs`、`cd silk-agent && go test ./... && go test -race ./... && go vet ./...`、Direct Bridge Python/语法检查与 `./gradlew silkLint`。这些检查已接入 CI fast validation；后续修改消息/RPC 合同时必须继续扩展相应合同测试。
+
 ---
 
 ## 1. 背景与要解决的问题
@@ -23,7 +56,7 @@ Silk 目前有两种历史上独立演进的外部 Agent 接入方式：
 
 1. ACP bridge：
    - Claude Code、Codex 等外部 adapter 连接后端的 /agent-bridge。
-   - 当前主要使用用户级 ccBridgeToken。
+   - 改造前主要使用用户级 ccBridgeToken；Phase 7 已销毁并拒绝该凭据。
    - 同一个用户 Token 可能被多个 Agent 类型复用。
    - Token 通常通过 URL query 参数传给 bridge。
    - 重新生成 Token 会断开该用户的 ACP 连接。
@@ -157,8 +190,8 @@ Host 可以检测本地已安装的 Agent，但检测结果只用于展示和 pr
 用户界面可以同时支持交互菜单和明确命令：
 
 ~~~text
-silk-agent connect codex
-silk-agent connect claude-code
+silk-agent connect codex --server https://silk.example.com --account <login-name>
+silk-agent connect claude-code --server https://silk.example.com --account <login-name>
 silk-agent status
 silk-agent stop codex
 silk-agent logs codex
@@ -285,7 +318,7 @@ READ_MESSAGE
 SEND_MESSAGE
 READ_FILE
 WRITE_FILE
-RUN_COMMAND（如未来暴露）
+RUN_COMMAND
 READ_WORKSPACE
 WRITE_WORKSPACE
 ~~~
@@ -335,7 +368,7 @@ Connector 只接收配对结果，并使用本地私钥证明设备持有权。
 推荐交互：
 
 ~~~text
-silk-agent connect codex
+silk-agent connect codex --server https://silk.example.com --account <login-name>
   → 本地生成或读取设备密钥
   → 创建配对请求
   → 自动打开 Silk 配对网页
@@ -371,7 +404,7 @@ silk-agent connect codex
 
 ~~~text
 silk-agent Host 创建配对请求
-  → 终端输出一次性网址和短码
+  → 终端输出在 fragment 中携带短码的一次性网址
   → 用户在手机或另一台电脑打开 Silk 页面
   → 用户登录并确认
   → Host 通过轮询或出站 WSS 得到结果
@@ -382,10 +415,7 @@ silk-agent Host 创建配对请求
 
 ~~~text
 请在任意浏览器打开：
-https://silk.example.com/device
-
-输入一次性代码：
-ABCD-EFGH
+https://silk.example.com/device#code=ABCD-EFGH
 
 有效期：5 分钟
 ~~~
@@ -397,7 +427,7 @@ ABCD-EFGH
 - 服务端限速；
 - 与设备侧持有的高熵 pairing handle 绑定；
 - 不能单独绕过登录和用户确认；
-- 不出现在普通日志中。
+- 只出现在不会发往服务端的 URL fragment 中，并由页面读取后立即清理地址栏；不出现在普通 access log 中。
 
 短码的作用类似 GitHub CLI 的 device authorization code：它解决“终端和浏览器不是同一台机器”的关联问题。
 
@@ -437,6 +467,9 @@ FAILED
   "protocolVersion": 1,
   "keyAlgorithm": "Ed25519",
   "publicKey": "<base64url>",
+  "accountLoginName": "<login-name>",
+  "connectionOrigin": "https://silk.example.com",
+  "verificationOrigin": "https://silk.example.com",
   "deviceName": "dev-server-01",
   "platform": "linux",
   "agentType": "codex",
@@ -457,13 +490,13 @@ FAILED
 {
   "pairingId": "<opaque-id>",
   "devicePollSecret": "<high-entropy-short-lived-secret>",
-  "verificationUri": "https://silk.example.com/device",
+  "verificationUri": "https://silk.example.com/device#code=ABCD-EFGH",
   "userCode": "ABCD-EFGH",
   "expiresAt": "..."
 }
 ~~~
 
-devicePollSecret 仅供当前设备查询配对结果，服务端只保存其哈希值。userCode 供用户在浏览器输入，熵较低且只用于定位请求。二者都不应成为后续长期连接凭据。
+devicePollSecret 仅供当前设备查询配对结果，服务端只保存其哈希值。userCode 供浏览器从 fragment 自动填入或由用户手工输入，熵较低且只用于定位请求。二者都不应成为后续长期连接凭据。
 
 deviceId 的生成方式必须在协议中固定：
 
@@ -570,13 +603,15 @@ WSS/TLS 负责：
    - 服务端登记 DeviceEnrollment 和 AgentInstance。
 
 2. 已认证设备新增 Agent：
-   - 已认证 Host 在现有设备连接上发送带私钥签名的“新增 Agent 请求”；
+   - 已认证 Host 发送带私钥签名的“新增 Agent 请求”；当前 Phase 5 使用 `POST /api/agent-pairings/agents`，Phase 6 再迁入统一设备 WSS；
    - 服务端识别该设备对应的用户；
    - 用户不需要再次输入账号密码；
    - Silk 页面仍显示并要求确认新增的 Agent；
    - 确认后创建独立 AgentInstance。
 
 新增 Agent 请求必须包含设备签名、requested agent metadata 和一次性 requestId。服务端不得因为请求来自 ACTIVE 设备就自动创建 AgentInstance。
+
+当前请求签名覆盖服务端 origin、协议版本、一次性 requestId、deviceId、Agent 类型/展示名、transport、connectorVersion、排序后的 capabilities 和时间戳。后端只接受 120 秒时钟窗口内的 ACTIVE 设备签名，并持久化 requestId 防止重放；请求预先绑定设备 owner，其他账号不能用短码认领。批准前不会创建 AgentInstance，拒绝不会改变已有设备或 Agent。
 
 3. 已批准 Agent 重启：
    - 直接 challenge-response；
@@ -690,8 +725,8 @@ Host 的默认部署约束：
 因此目标版本建议包含：
 
 ~~~text
-silk-agent connect codex
-silk-agent connect claude-code
+silk-agent connect codex --server https://silk.example.com --account <login-name>
+silk-agent connect claude-code --server https://silk.example.com --account <login-name>
 silk-agent status
 silk-agent stop codex
 silk-agent logs codex
@@ -869,7 +904,7 @@ Agent 接入 Silk 后，初始状态是不绑定任何 Room 的。连接成功�
 - Agent 所有者删除 Agent 时，所有绑定都失效；
 - Room 管理者删除绑定时，Agent 本身仍保留在所有者的 Agent 列表中。
 
-如果暂时不实现双重审批，至少要在数据模型中保留 createdBy、ownerId 和绑定审计字段，为后续补充所有权确认留出空间。
+当前实现以 `PENDING` 保存未完成的跨所有者请求，并分别记录 Agent owner 与目标管理者的批准人和批准时间；任一侧拒绝都会撤销请求，双方均批准才进入 `ACTIVE`。更新目标、Agent、触发策略或权限时不会沿用另一侧旧批准。
 
 ---
 
@@ -982,11 +1017,18 @@ triggerPolicy
 permissionsJson
 status
 createdBy
+ownerId
+agentOwnerApprovedBy / agentOwnerApprovedAt
+targetApprovedBy / targetApprovedAt
 createdAt
+updatedAt
+revokedBy
 revokedAt
 ~~~
 
 需要唯一性约束，避免同一个 Agent 对同一个目标重复创建相同绑定；如果需要不同权限配置，则把配置纳入业务判断。
+
+`agent_binding_audit_events` 以 `bindingId + actorId + eventAction + snapshotJson + createdAt` 保存创建、更新、审批、拒绝、撤销和重新打开前后的不可变快照。当前 SQLite 唯一约束要求同范围重新申请复用稳定 `bindingId`，因此不能只覆盖主表审计字段而不写事件快照。
 
 ### 11.4 agent_pairing_requests
 
@@ -1028,7 +1070,7 @@ userId + deviceId + agentInstanceId + transportAdapter
 
 ## 12. 建议的 HTTP/WebSocket 接口边界
 
-具体路径可以根据 Routing.kt 约定调整，以下是逻辑接口。
+以下是当前 Phase 0–2 已固定的实际路径；后续 Host/前端扩展不得改变签名字段和 secret 传递位置。
 
 ### 12.1 创建配对请求
 
@@ -1045,17 +1087,20 @@ POST /api/agent-pairings
 - 设备轮询用的临时 secret；
 - 过期时间。
 
-Host 使用用户配置的 Silk Server URL 生成 verificationUri 和 Agent WSS 地址。Server URL 可以是公网域名、内网域名、VPN 地址或开发阶段的 IP；URL 中不得包含账号密码、长期 Token 或私钥。
+初次请求必须携带目标 loginName，服务端在生成短码前解析并保存 `intendedOwnerId`；preview、approve、reject 都只允许该 userId，其他账号统一按无效码返回，避免泄露该码绑定关系。服务端返回 canonical `serverOrigin`、verificationUri 和 Agent WSS 地址。canonical origin 优先由 `BACKEND_BASE_URL` 控制；未配置时使用 Host 从 `--server` 提交的规范化连接 origin，不能回退到 Ktor 看到的内网监听地址。验证页优先使用 `BACKEND_WEB_APP_BASE_URL`，其次使用 Host `--web`，最后才与连接 origin 同源；Web/API 分端口时不能猜测端口。Host 分别持久化用户实际连接的 `serverOrigin` 与服务端用于签名绑定的 `authenticationOrigin`，并拒绝后续 challenge 更换该认证 origin，避免反向代理或内网别名导致签名 origin 不一致。Server URL 可以是公网域名、内网域名、VPN 地址或开发阶段的 IP；URL 中不得包含账号密码、长期 Token 或私钥。
 
 该接口必须限速，避免被用于无限制生成配对请求。
 
 ### 12.2 浏览器查看和确认
 
 ~~~text
-GET  /device
-POST /api/agent-pairings/{pairingId}/approve
+GET  /device                         // Web SPA 已实现；无登录态先进入现有登录流程
+POST /api/agent-pairings/preview     // 当前已实现；JWT；body.userCode
+POST /api/agent-pairings/approve     // 当前已实现；JWT；body.userCode + approve
 认证：Silk 普通登录会话/JWT
 ~~~
+
+审批 API 使用 body 传递 `userCode`，不使用 query 或 `/.../{userCode}`，避免短码进入 HTTP request target/access log。verification URI 只允许把短码放在浏览器 `#code=` fragment；Web 读取并保存在当前标签页后立即清理地址栏。浏览器页面必须先展示设备名、公钥指纹、Agent 类型、Connector 版本、能力和剩余有效期，再由用户明确调用 approve；不得因打开链接或已有登录态自动批准，用户拒绝时发送 `approve=false`。
 
 审批页面必须校验：
 
@@ -1067,6 +1112,17 @@ POST /api/agent-pairings/{pairingId}/approve
 
 账号登录应复用 Silk 现有认证体系，不能另造一套“连接密码”。当前账号可能通过本地账号密码、华为 OAuth、微信 OAuth 等方式登录，因此连接流程不能假设用户一定有密码。
 
+已登记设备新增 Agent 使用：
+
+~~~text
+POST /api/agent-pairings/agents       // 无 JWT；body 携带设备签名，不携带长期 Token
+POST /api/agent-pairings/preview      // JWT；仅设备 owner 可预览
+POST /api/agent-pairings/approve      // JWT；批准后创建独立 AgentInstance
+GET  /api/agent-pairings/{pairingId}/status
+~~~
+
+该流程复用短码与 `X-Silk-Device-Poll-Secret`，但不重复创建设备，也不需要第二次 pairing proof；设备签名已经证明请求来自现有信任根。当前它是统一 WSS 前的渐进实现，Phase 6 只迁移承载通道，不改变签名字段或浏览器审批要求。
+
 ### 12.3 设备获取配对结果
 
 ~~~text
@@ -1074,15 +1130,24 @@ GET /api/agent-pairings/{pairingId}/status
 认证：devicePollSecret（短时、仅本次配对）
 ~~~
 
+当前实现通过 `X-Silk-Device-Poll-Secret` 请求头传递 secret；不允许把它放在 query、路径、环境变量或日志中。审批完成后 status 返回 proof challenge；设备调用：
+
+~~~text
+POST /api/agent-pairings/{pairingId}/proof
+认证：同一 X-Silk-Device-Poll-Secret + body.signature
+~~~
+
 也可以使用配对期间保持的出站 WSS 通道接收状态变化。无论采用轮询还是 WSS，都不能把该临时 secret 当作后续长期凭据。
 
 ### 12.4 Agent 连接
 
-目标是提供统一逻辑入口，例如：
+当前统一 Host 认证与业务入口：
 
 ~~~text
 wss://<silk-server>/agent-connect
 ~~~
+
+握手顺序固定为 `hello → challenge → authenticate → authenticated`。新 Host 在 hello 声明 `connectionMode=HOST_MULTIPLEXED_V1`，认证后使用 `agent_open / agent_rpc / agent_close` v1 envelope；`agent_rpc.payload` 是 ACP JSON-RPC object，所有逻辑 envelope 都固定携带 `agentInstanceId`。每个逻辑流使用独立有界队列、ACP client 和关闭回调；Agent 撤销只关闭对应流，设备撤销或物理 WSS 断开才关闭全部流。未声明新模式的旧 Host 健康连接仍只接受 heartbeat。
 
 迁移期间可以保留：
 
@@ -1090,6 +1155,19 @@ wss://<silk-server>/agent-connect
 - /ccconnect-bridge
 
 但它们应共享认证服务和 AgentInstance/DeviceEnrollment 模型。旧路径不应继续创建新的长期 Token。
+
+### 12.5 AgentBinding 管理（当前最小版本）
+
+~~~text
+GET    /api/agent-bindings
+POST   /api/agent-bindings
+PUT    /api/agent-bindings/{bindingId}
+POST   /api/agent-bindings/{bindingId}/approval
+DELETE /api/agent-bindings/{bindingId}
+认证：Silk JWT；Agent owner 或目标管理者可发起，双方批准后才 ACTIVE
+~~~
+
+`POST` 和 `PUT` 的 body 固定包含 `agentInstanceId`、`targetType`、`targetId`、`messageScope`、`triggerPolicy` 和 `permissions`；approval body 为 `approve`。Agent owner 可向自己已加入的普通 Room 或可见共享 Workspace 发起请求，目标侧批准者为 Room HOST/OPERATOR 或 Workspace owner；目标管理者也可反向发起并等待 Agent owner 批准。新 Agent 不会自动生成绑定；Binding 删除只是撤销目标使用关系，不撤销 Agent 或设备。`AgentBindingAuthorizationService` 使用 `AcpRegistry` 当前连接携带的精确 `agentInstanceId`，而不是仅按 user/type 查找任意 Binding；Workspace prompt 要求消息读写权限与 `PROMPT` 能力，Room TEAM 另执行 `ALL / MENTION / EVENT` 触发策略，带 Workspace 目标的 `cc-fs` 和 Source Control RPC 分别要求文件/工作区权限及对应声明能力。首次创建 Workspace 时的目录选择 `_silk/list_dir` 和初始化 `_silk/set_cwd` 仍是已登录 owner（后者另有 TrustedDir）保护的 bootstrap 例外，否则会形成“必须先绑定已存在 Workspace、但创建 Workspace 又必须先调用 Agent”的循环；这些调用不携带 Room/Workspace 消息或服务端文件数据，创建完成后的目标消息与 RPC 均受 Binding 约束。未绑定 Agent 仍不能通过 `/agent-connect` 执行业务 RPC。
 
 ---
 
@@ -1256,7 +1334,7 @@ UI 可以提示用户“该 Agent 使用旧版认证，请完成设备配对升�
 
 ## 17. 推荐实施顺序
 
-本节是给开发 Agent 的拆分建议，不代表本轮已经实施。
+本节记录开发 Agent 的拆分和收束顺序。Phase 0–7 已完成仓库级实现与验证；仅 cc-connect 统一认证迁移按 Phase 8 后续推进。
 
 ### 17.1 代码落点与职责映射
 
@@ -1274,87 +1352,98 @@ UI 可以提示用户“该 Agent 使用旧版认证，请完成设备配对升�
 
 后端认证和授权应由 Silk 服务端统一完成。Adapter 不应各自实现用户账号登录、长期 Token 生成或 Room ACL。
 
-### Phase 0：合同和威胁模型
+### Phase 0：合同和威胁模型（已完成）
 
-- 固化对象名和状态机；
-- 固化 Ed25519、公钥格式、fingerprint 格式；
-- 固化 challenge 签名 canonical payload；
-- 固化配对码和设备轮询 secret 的生命周期；
-- 固化 AgentBinding 的 scope、trigger 和 permission；
-- 固化 Host 与 Adapter 的本地 IPC 协议；
-- 固化 Host 多 Agent WSS envelope 和 agentInstanceId 路由；
-- 明确 API 错误码与协议版本。
+- [x] 固化对象名和状态机（数据库状态包含 CREATED/USER_PENDING/USER_APPROVED/DEVICE_PROOF_PENDING/ENROLLED/CONSUMED 等；当前实现把审批/登记的瞬时状态收束在事务内）；
+- [x] 固化 Ed25519 raw 公钥、无 padding base64url、`SHA256:<base64url>` fingerprint 格式；
+- [x] 固化 challenge 签名 canonical payload：UTF-8、固定换行字段、时间单位 epoch milliseconds、无尾部换行；
+- [x] 固化 5 分钟配对、最多 90 秒 proof、30 秒连接 challenge、120 秒时钟窗口、一次性 userCode/poll secret 生命周期；
+- [x] 固化 AgentBinding 的 scope、trigger 和 permission，并接入当前服务端路由；
+- [x] 固化 Host 与 Adapter 的本地 IPC 协议；
+- [x] 固化 Host 多 Agent WSS envelope 和 agentInstanceId 路由；
+- [x] 明确 API 错误码与协议版本（当前后端使用 protocolVersion=1）；
 
-### Phase 1：后端设备和 Agent 数据模型
+### Phase 1：后端设备和 Agent 数据模型（当前服务端路由 ACL 已完成）
 
-- 新增 DeviceEnrollment、AgentInstance、AgentBinding、PairingRequest 持久化；
-- 增加公钥唯一性、所有权和状态约束；
-- 增加设备/Agent/Binding 查询和撤销服务；
-- 连接注册表按 AgentInstance 管理；
-- 预留多实例撤销广播机制。
+- [x] 新增 DeviceEnrollment、AgentInstance、AgentBinding、PairingRequest 持久化；
+- [x] 增加公钥唯一性、所有权和状态约束；
+- [x] 增加设备/Agent/Binding 查询和设备/Agent 撤销服务；
+- [x] 连接注册表按 AgentInstance 管理，并在撤销时关闭 `/agent-connect` 会话；
+- [x] 增加 Binding 创建/撤销 API，并对 Room HOST/OPERATOR、Workspace owner 做最小目标校验；
+- [x] 增加 Binding update API 和 Web 编辑入口；
+- [x] 增加 Agent owner 与目标管理者双主体审批、审计字段和 Web 批准/拒绝入口；
+- [x] 为设备签名 Agent 的 Workspace prompt 接入 ACTIVE Binding + `READ_MESSAGE`/`SEND_MESSAGE` 门禁；
+- [x] 完成 Room TEAM、目录/Source Control Workspace RPC 的消息 ACL，并按精确 AgentInstance 校验能力交集；
+- [x] 为设备签名 prompt 下发版本化执行权限信封，队列内每条消息保持各自授权快照；
+- 多实例撤销广播已由持久化安全事件序列和各节点 watcher 实现。
 
-### Phase 2：后端配对和 challenge-response
+### Phase 2：后端配对和 challenge-response（已完成）
 
-- 创建配对请求；
-- 浏览器查看和审批；
-- 设备轮询或出站 WSS 获取审批结果；
-- challenge-response；
-- 重放防护、过期、限速和日志脱敏；
-- 认证前资源访问拒绝。
+- [x] 创建配对请求；
+- [x] 提供 JWT preview/approve API，并由浏览器 `/device` 页面消费；
+- [x] 设备轮询获取审批结果并提交 proof，Host 完成出站 WSS 连接；
+- [x] `/agent-connect` challenge-response、heartbeat 与 Host ACP 多路复用；
+- [x] 重放防护、过期、限速和日志脱敏；
+- [x] 认证前不接受业务 RPC；
+- [x] 将 challenge/revocation 状态扩展到多节点一致性（共享 PostgreSQL 主库、持久化 challenge、撤销事件序列与节点 watcher）。
 
-### Phase 3：silk-agent CLI 与 Host 基础
+### Phase 3：silk-agent CLI 与 Host 基础（已完成）
 
-- 确定 Host 实现语言和跨平台交付方式；
-- 实现 silk-agent connect/status/start/stop/logs/run；
-- 实现前台模式和后台服务模式；
-- Host 持有 DeviceSigner；
-- 实现 Keychain/Credential Manager；
-- 实现 0600 secure-file fallback；
-- 实现本地 AgentRegistry 和稳定 AgentInstance ID；
-- 实现 ProcessSupervisor、健康检查和重启退避；
-- 实现 Host 与 Adapter 的受保护本地 IPC；
-- 清理 Token URL、环境变量和日志传递。
+- [x] 确定 Host 实现语言和仓库内独立 companion 交付方式（Go module `silk-agent/`）；
+- [x] 实现 silk-agent `connect/status/start/stop/logs/run`，其中 `logs --follow` 仅输出新增内容并识别日志截断/替换；
+- [x] 实现前台模式和后台 Host 模式（PID、0600 log、Unix 控制 socket）；
+- [x] Host 持有 DeviceSigner；
+- [x] 实现系统 Keychain/Credential Manager（macOS Keychain、Windows DPAPI、Linux Secret Service；不可用时回退 secure-file）；
+- [x] 实现 secure-file fallback（Unix 文件 0600/目录 0700；Windows 当前用户 owner + 受保护可继承 DACL；原子写入、缺失时不覆盖旧身份）；
+- [x] 实现本地 AgentRegistry 和稳定 AgentInstance ID（服务端配对返回 ID 后持久化）；
+- [x] 实现认证连接的健康检查和重连退避；
+- [x] 实现 Host 自身受保护的本地控制 IPC；
+- [x] 不把配对 secret/私钥/长期 Token 放入 URL、环境变量或日志；
+- [x] 实现 Adapter 子进程 ProcessSupervisor、受控 stdin/stdout JSON-RPC IPC（nonce + agentInstanceId 绑定、health/shutdown、崩溃退避）；
+- [x] 已登记设备可签名请求新增 Agent，运行中的 Host 通过受保护控制 IPC 热加载批准后的 Agent；
+- [x] Host 当前用户级服务安装和平台守护进程集成（Linux systemd user、macOS LaunchAgent、Windows Scheduled Task；显式固定实际 profile 路径）；
 
-### Phase 4：直接 Bridge 纳管（第一阶段不含 cc-connect）
+### Phase 4：直接 Bridge 纳管（已完成）
 
-- 先把 cc_bridge、codex_bridge 作为 Host 管理的子进程；
-- 为现有 Bridge 增加 Host IPC Adapter；
-- 让 Claude Code、Codex 等直接 Bridge 完成设备签名认证；
-- 验证多个直接 Bridge 可以在同一 Host 下并存；
-- 验证一个 Bridge 崩溃不会影响其他 Agent；
-- 保留 cc-connect 旧 Token 路径，仅作为兼容能力，不纳入新 Host 交付；
-- 验证单个 Adapter 崩溃不影响其他 Agent。
+- [x] 先把 cc_bridge、codex_bridge wrapper 作为 Host 管理的子进程；
+- [x] 为现有 Bridge 增加 `--silk-host-stdio` Host IPC Adapter；
+- [x] 让 Claude Code、Codex 等直接 Bridge 完成设备签名认证；
+- [x] 将 `READ_FILE` / `WRITE_FILE` / `RUN_COMMAND` 下推为 Claude 核心本地工具 deny/Bash sandbox 与 Codex 文件 sandbox/shell gate，同时保留设备用户原生 CLI 配置；以 `EXECUTION_POLICY_V1` 阻止旧 Adapter 静默绕过，未知或异常信封 fail-closed；
+- [x] 验证多个直接 Bridge 可以在同一 Host 下并存；
+- [x] 验证一个 Bridge 崩溃/背压不会关闭其他 Agent 逻辑流；
+- [x] 保留 cc-connect 旧 Token 路径，仅作为兼容能力，不纳入新 Host 交付；
+- [x] 验证单个 Adapter 崩溃不影响其他 Agent。
 
-### Phase 5：前端设备和 Agent 管理
+### Phase 5：前端设备和 Agent 管理（已完成）
 
-- 设备列表；
-- Agent 列表；
-- 配对审批页；
-- 新增 Agent 审批；
-- Agent/设备删除；
-- 公钥指纹、最近连接和连接状态；
-- Room/Workspace AgentBinding 配置。
+- [x] 设备列表；
+- [x] Agent 列表；
+- [x] 配对审批页；
+- [x] 已登记设备新增 Agent 的签名审批；
+- [x] Agent/设备删除；
+- [x] 公钥指纹、最近连接和连接状态；
+- [x] Room/Workspace AgentBinding 配置、细粒度权限选择、待审批状态及批准/拒绝操作。
 
-### Phase 6：统一 Host WSS 与协议收束
+### Phase 6：统一 Host WSS 与协议收束（已完成）
 
-- Host 维护设备级 WSS；
-- 每个消息 envelope 携带 agentInstanceId；
-- Adapter 不再直接持有设备私钥或长期 Silk 凭据；
-- 后端统一 AgentInstance 路由；
-- 保留旧 Token 兼容；
-- 添加迁移提示；
-- 验证直接 Bridge 支持的多个 Agent 并存（当前至少 Claude Code、Codex；Cursor 若仍仅通过 cc-connect 接入，则留到 Phase 8）。
+- [x] Host 维护单一设备级 WSS；
+- [x] 每个逻辑消息 envelope 携带 agentInstanceId；
+- [x] Adapter 不持有设备私钥、签名接口、长期 Silk 凭据或后端 WSS；
+- [x] 后端按 AgentInstance 创建独立 ACP transport、队列和关闭回调；
+- [x] 保留 `/agent-bridge` 旧 Host 设备签名兼容，并明确拒绝旧 query Token；
+- [x] 添加 Host IPC v1 → v2 同 bundle 升级提示；
+- [x] 验证一条 Host WSS 下 Claude Code 与 Codex 并存、Host 替换及跨流隔离；Cursor 仍仅通过 cc-connect 接入，留到 Phase 8。
 
-### Phase 7：安全加固和收尾
+### Phase 7：安全加固和收尾（已完成仓库级验收）
 
-- HTTPS/WSS 生产部署验证；
-- 撤销实时生效验证；
-- 多节点一致性；
-- 审计事件；
-- companion binary 版本、哈希、签名和升级验证；
-- Host/Adapter IPC 权限与伪造进程测试；
-- 直接 Bridge 的旧 Token 下线；cc-connect legacy Token 保留到 Phase 8；
-- 备份、轮换和密钥丢失恢复流程。
+- [x] HTTPS/WSS 生产传输门禁与 TLS WebSocket/反向代理合同测试；真实公网 ingress 仍需部署验收；
+- [x] 撤销实时生效验证（本地连接注册表 + 持久化安全事件 watcher）；
+- [x] 多节点一致性（共享 PostgreSQL challenge、撤销事件序列和事务行锁）；
+- [x] Binding/设备/Agent 安全审计事件与不可变快照；
+- [x] companion binary 版本、SHA-256 manifest、Ed25519 签名、完整性校验和六平台发行脚本；
+- [x] Host/Adapter IPC 权限与伪造边界（Unix ownership/parent checks、0600 socket、Windows 当前用户 pipe ACL、nonce + agentInstanceId 绑定）；
+- [x] 直接 Bridge 的旧 Token 下线；cc-connect legacy Token 保留到 Phase 8；
+- [x] 加密备份、恢复、设备密钥轮换和 Keychain/secure-file 迁移流程。
 
 ### Phase 8：cc-connect 独立接入（后续阶段）
 
@@ -1428,6 +1517,8 @@ UI 可以提示用户“该 Agent 使用旧版认证，请完成设备配对升�
 - 被删除 Agent 继续发送消息；
 - Agent 访问未绑定 Room；
 - Agent 访问其他 Workspace 或 PRIVATE 内容；
+- Host 管理连接缺失 `_silk` 信封、版本错误或字段畸形时按空权限处理；直接 Bridge 不再存在可省略信封的 Token 模式；
+- 未授予写入/命令权限时，受管 CLI 参数不得包含 dangerous bypass，且对应工具/shell 被关闭；
 - 未授权本地进程连接 Host IPC；
 - Adapter 冒用其他 agentInstanceId；
 - 一个 Adapter 崩溃、卡死或持续重启时其他 Agent 保持可用；
@@ -1461,26 +1552,22 @@ UI 可以提示用户“该 Agent 使用旧版认证，请完成设备配对升�
 
 ## 19. 暂留的实现决策
 
-以下事项不影响总体架构，但开发前需要在代码设计评审中确定：
+以下事项不影响总体架构，但后续 Host/前端/业务授权开发前需要在代码设计评审中确定。已经落地的协议项不再作为可变选项：
 
-1. 设备公钥的具体编码（raw Ed25519、JWK 或标准 PEM/DER）。
-2. deviceId 使用公钥指纹还是随机 UUID。
-3. silk-agent Host 的实现语言、Keychain 库和跨平台打包方式。
-4. secure-file fallback 是否只使用文件权限，还是再增加本地加密。
-5. 新增 Agent 是否通过网页确认、桌面通知确认或已登录 Silk 客户端确认。
-6. Agent 是否允许跨用户共享；第一版建议只允许所有者管理。
-7. 是否在第一版提供公钥指纹复制/导出功能；建议只显示，不要求用户操作。
-8. /agent-connect 是否第一版直接引入，还是先让 /agent-bridge 与 /ccconnect-bridge 共享认证层。
-9. 多后端实例的撤销事件使用数据库轮询、Redis、WebSocket 广播还是其他机制。
-10. 旧 Token 兼容期和最终下线版本。
-11. AgentBinding 的默认 messageScope、triggerPolicy 和权限集合。
-12. 是否允许同一 AgentInstance 同时绑定多个 Room，以及并发消息如何路由。
-13. Host 第一阶段是否保留每 Adapter 独立 WSS，统一 WSS 从哪个版本启用。
-14. Host 与 Adapter 采用 stdin/stdout JSON-RPC 还是 Unix socket/named pipe。
-15. cc-connect 依赖采用 submodule、CI checkout 还是独立制品仓库。
-16. cc-connect 固定的 commit/tag、许可证、NOTICE 和再分发条件。
-17. companion binary 是随 silk-agent 安装包捆绑，还是首次启用时按平台下载。
-18. cc-connect 多 project 是映射为一个进程多个 AgentInstance，还是一个 AgentInstance 一个子进程。
+已确定：raw 32-byte Ed25519 公钥使用无 padding base64url；fingerprint 使用 `SHA256:<base64url>`；deviceId 和 agentInstanceId 使用服务端 UUID；canonical payload 使用 UTF-8 固定换行且时间为 epoch milliseconds；`/agent-connect` 使用 `HOST_MULTIPLEXED_V1` + `agent_open / agent_rpc / agent_close` v1 envelope；Host 与 Adapter 使用 stdin/stdout JSON-RPC IPC v2；新增 Agent 使用设备签名请求 + Web 确认，当前仍由签名 HTTP 请求承载。
+
+1. silk-agent Host 的实现语言、Keychain 库和跨平台打包方式。
+2. secure-file fallback 是否只使用文件权限，还是再增加本地加密。
+3. Agent 是否允许跨用户共享；第一版建议只允许所有者管理。
+4. 是否在第一版提供公钥指纹复制/导出功能；建议只显示，不要求用户操作。
+5. 多后端实例的撤销事件使用数据库轮询、Redis、WebSocket 广播还是其他机制。
+6. 旧 Token 兼容期和最终下线版本。
+7. AgentBinding 的默认 messageScope、triggerPolicy 和权限集合。
+8. 是否允许同一 AgentInstance 同时绑定多个 Room，以及并发消息如何路由。
+9. cc-connect 依赖采用 submodule、CI checkout 还是独立制品仓库。
+10. cc-connect 固定的 commit/tag、许可证、NOTICE 和再分发条件。
+11. companion binary 是随 silk-agent 安装包捆绑，还是首次启用时按平台下载。
+12. cc-connect 多 project 是映射为一个进程多个 AgentInstance，还是一个 AgentInstance 一个子进程。
 
 这些事项只能细化实现，不应重新引入用户管理长期 Token、Connector 收集账号密码或设备认证自动覆盖所有 Agent。
 

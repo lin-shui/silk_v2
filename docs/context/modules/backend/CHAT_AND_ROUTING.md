@@ -32,6 +32,9 @@
 - `/api/calendar/workday/*`
 - `/api/user-todos/*`
 - `/api/messages/*`
+- `/api/agent-pairings*`（公开创建会在出码前预绑定目标 loginName，并使用 Host `--server` 作为未配置 canonical origin 的安全回退；设备轮询/proof、已登记设备签名新增 Agent + JWT preview/approve；非目标账号对短码统一返回 not-found）
+- `/api/agent-devices`、`/api/agent-instances`、`/api/agent-bindings`（JWT 管理与查询；Binding 支持 POST/PUT 创建和更新、`POST /{bindingId}/approval` 双主体批准/拒绝、DELETE 软撤销；设备/Agent 列表的 `connected` 汇总 `/agent-connect` 物理连接及逻辑流与兼容 `/agent-bridge` 活跃会话）
+- `/device`（固定返回已构建 Web `index.html`，供 Nginx 未命中静态文件后回退到 Ktor 的部署方式使用；页面内数据仍由 JWT API 保护）
 - `/api/workflows` (旧客户端兼容入口，POST **requires directory trust**)
 - `/api/kb/*`
 - `/api/files/app-version`
@@ -39,13 +42,14 @@
 - `/api/files/download-hap`
 - `/users/{userId}/cc-settings*`
 - `/users/{userId}/cc-state/{groupId}`
-- `/users/{userId}/cc-fs/list` (GET, query: path/showHidden)
-- `/users/{userId}/cc-fs/cd` (POST, JSON body: groupId/path; **rejects untrusted directories**)
+- `/users/{userId}/cc-fs/list` (GET, query: workspaceId/path/showHidden；指定 Workspace 时，设备签名 Agent 要求目标的 `READ_FILE` Binding 权限与能力；无 workspaceId 的调用只用于已登录 owner 在创建 Workspace 前选择本地目录，不携带 Silk 目标数据)
+- `/users/{userId}/cc-fs/cd` (POST, JSON body: workspaceId/path；**rejects untrusted directories**，设备签名 Agent 另要求 `WRITE_WORKSPACE` Binding 权限与能力)
 - `/users/{userId}/trusted-dirs/check` (GET, query: path)
 - `/users/{userId}/trusted-dirs` (POST, DELETE, GET)
 - `/chat` WebSocket
 - `/ws/audio-duplex` WebSocket proxy
-- `/agent-bridge` WebSocket（ACP 协议，Claude Code / Codex adapter 连接点）
+- `/agent-bridge` WebSocket（ACP 兼容入口，仅设备签名 Host 迁移握手；新 Host 使用 `/agent-connect`）
+- `/agent-connect` WebSocket（设备签名 challenge-response + heartbeat；Host 模式在一次认证后使用 `agent_open / agent_rpc / agent_close` envelope 按 `agentInstanceId` 多路复用 ACP）
 
 已拆出的专项路由：
 
@@ -79,7 +83,7 @@
 4. 未读计数
 5. 广播到所有 session
 7. 对普通文本异步触发 URL/PDF 处理
-8. Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
+8. Agent 框架（Claude Code / Codex）拦截：Workspace 走 `AgentRuntime.handleIfActive()`；设备签名 Agent 先按当前连接的精确 `agentInstanceId` 检查 ACTIVE Binding、消息权限以及 `PROMPT` / `EXECUTION_POLICY_V1` 能力，再把 Binding 文件/命令权限下推到 ACP `_silk.executionPolicy`。缺少该版本能力的旧登记 Agent 会拒绝 prompt，需升级 Host 后重新登记。Room TEAM 按 Binding 的 `ALL / MENTION / EVENT` 触发策略路由，当前 `EVENT` 不消费用户文本；TEAM 是无工作目录的消息上下文，`session/new` 使用空 cwd 让远程 Adapter 选择其本机默认目录，不把 Backend 或其他设备路径发送给 Agent。定向 `@cc /new` / `@codex /new` 由 Silk 清空对应 TEAM Agent 会话，不作为普通 prompt 转发给 CLI；TEAM `STOP_GENERATE` 会取消该 Room 中所有正在运行的 bound Agent ACP session，同时取消内置 Silk AI 任务并清理流状态；目录和 Source Control RPC 复用同一授权器
 9. `/recall` 命令交给 `UserHistoryAgent`，在 per-user hardlink workspace 中只读检索历史会话
 10. Silk AI / `DirectModelAgent` 响应
 
@@ -111,3 +115,4 @@
 - 改 WebSocket 权限或回放逻辑时，同步检查 `BackendWebSocketContractTest`
 - 改 `/ws/audio-duplex` 时，同步检查三端 Audio Duplex 调用端
 - 改 `/agent-bridge` 或 agent 指令路由时，同步检查 `AgentRuntime` / ACP 相关测试与 adapter
+- 改设备配对、新增 Agent 的设备签名、Ed25519 canonical payload 或 `/agent-connect` 时，同步检查 `AgentAuthRouteContractTest`、`AgentAuthProtocolTest` 与 `AcpMultiplexedTransportTest`；不得把配对 secret 放入 URL 或日志

@@ -8,7 +8,7 @@
 - Room/Group 与成员；`groups.room_kind` 显式区分 `CHAT / WORKFLOW / SILK_PRIVATE`，`updated_at` 记录通用元数据活动，`last_message_at` 独立记录最近一条持久化消息时间并由启动迁移从旧聊天历史回填
 - 联系人与好友请求
 - 未读计数
-- 用户设置（含 Claude Code bridge token、`app_auth_token` 用于前端 Bearer 鉴权）
+- 用户设置（含 `app_auth_token` 用于前端 Bearer 鉴权；读取/更新设置、资料更新、账号注销和 `/auth/validate/{userId}` 均要求当前用户 Bearer；遗留 Direct Bridge token 列仅为 schema 兼容并在启动迁移时清空）
 
 SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可用 `-Dsilk.databasePath=...` 覆盖。
 

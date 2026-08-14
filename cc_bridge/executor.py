@@ -16,8 +16,12 @@ import logging
 import os
 import platform
 import shutil
+import sys
 import time
 from typing import Any, Callable, Coroutine
+
+from bridge_common.execution_policy import ExecutionPolicy
+from bridge_common.unicode_safety import sanitize_json_value
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +144,12 @@ def _die_claude_not_found(system: str, extra: str = "") -> None:
     msg.append("  3. Set the path manually:")
     if system == "Windows":
         msg.append('     set CLAUDE_CODE_PATH=C:\\path\\to\\claude.cmd')
-        msg.append("     python acp_adapter.py --server ... --token ...")
+        msg.append("     silk-agent connect claude-code --server https://your-silk-host")
     else:
-        msg.append("     CLAUDE_CODE_PATH=/path/to/claude python acp_adapter.py --server ... --token ...")
+        msg.append("     CLAUDE_CODE_PATH=/path/to/claude silk-agent connect claude-code --server https://your-silk-host")
     msg.append("")
     msg.append("=" * 60)
-    print("\n".join(msg), flush=True)
+    print("\n".join(msg), file=sys.stderr, flush=True)
     raise SystemExit(1)
 
 
@@ -440,6 +444,7 @@ class Executor:
         resume: bool = False,
         on_session_upsert: Callable[[str, str, str], None] | None = None,
         on_permission_request: PermissionCallbackFn | None = None,
+        execution_policy: ExecutionPolicy | None = None,
     ) -> None:
         """Spawn claude CLI and stream parsed events to *send*.
 
@@ -473,14 +478,16 @@ class Executor:
             title = prompt[:50] + "\u2026" if len(prompt) > 50 else prompt
             on_session_upsert(session_id, working_dir, title)
 
-        cmd = self._build_command(session_id, resume)
+        cmd = self._build_command(session_id, resume, execution_policy)
         logger.info(
             "[Executor] Spawning subprocess: cmd=%s, cwd=%s",
             " ".join(f'"{c}"' for c in cmd),
             working_dir,
         )
 
-        # Build subprocess env: inherit current env + inject proxy for claude only
+        # Inherit the device user's native Claude environment. Claude itself
+        # loads the normal user/project settings, credentials, hooks, MCP and
+        # plugins. Optional bridge-specific proxy values override only proxies.
         sub_env: dict[str, str] | None = None
         if CLAUDE_HTTP_PROXY or CLAUDE_HTTPS_PROXY:
             sub_env = os.environ.copy()
@@ -584,7 +591,7 @@ class Executor:
                 if not line:
                     continue
                 if not line.startswith("{"):
-                    logger.info("[Executor] Non-JSON output: %s", line[:200])
+                    logger.info("[Executor] Ignored non-JSON output (%d chars)", len(line))
                     continue
 
                 if _raw_logger:
@@ -800,8 +807,8 @@ class Executor:
 
             if exit_code != 0:
                 logger.warning(
-                    "[Executor] Exit code=%d, stderr=%s",
-                    exit_code, stderr_text[:500] if stderr_text else "(empty)",
+                    "[Executor] Exit code=%d, stderr_chars=%d",
+                    exit_code, len(stderr_text),
                 )
 
             if self._cancel_requested:
@@ -855,7 +862,12 @@ class Executor:
     # Internals
     # ------------------------------------------------------------------
 
-    def _build_command(self, session_id: str, resume: bool) -> list[str]:
+    def _build_command(
+        self,
+        session_id: str,
+        resume: bool,
+        execution_policy: ExecutionPolicy | None = None,
+    ) -> list[str]:
         """Build the claude CLI command for stream-json stdin/stdout mode."""
         claude_args: list[str] = [
             CLAUDE_CODE_PATH,
@@ -865,7 +877,9 @@ class Executor:
             "--verbose",
             "--max-turns", str(CLAUDE_CODE_MAX_TURNS),
         ]
-        if CLAUDE_CODE_PERMISSION_MODE.lower() not in {"", "none", "off", "false", "0"}:
+        if execution_policy is not None:
+            claude_args.extend(execution_policy.claude_cli_args())
+        elif CLAUDE_CODE_PERMISSION_MODE.lower() not in {"", "none", "off", "false", "0"}:
             claude_args.extend(["--permission-mode", CLAUDE_CODE_PERMISSION_MODE])
         if resume:
             claude_args.extend(["--resume", session_id])
@@ -876,7 +890,7 @@ class Executor:
     ) -> None:
         """Write a JSON message to the process stdin."""
         assert process.stdin is not None
-        data = json.dumps(payload, ensure_ascii=False) + "\n"
+        data = json.dumps(sanitize_json_value(payload), ensure_ascii=False) + "\n"
         if _raw_logger:
             _raw_logger.debug("STDIN  >>> %s", data.rstrip())
         process.stdin.write(data.encode("utf-8"))

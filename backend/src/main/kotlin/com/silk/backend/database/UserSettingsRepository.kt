@@ -65,58 +65,6 @@ object UserSettingsRepository {
     }
 
     /**
-     * 生成 Bridge Token
-     * 用 SecureRandom 生成 32 字符 hex token 并存储
-     */
-    fun generateBridgeToken(userId: String): String {
-        val bytes = ByteArray(16)
-        secureRandom.nextBytes(bytes)
-        val token = bytes.joinToString("") { "%02x".format(it) }
-
-        transaction {
-            val existing = UserSettingsTable.select { UserSettingsTable.userId eq userId }
-                .singleOrNull()
-
-            if (existing == null) {
-                UserSettingsTable.insert {
-                    it[UserSettingsTable.userId] = userId
-                    it[ccBridgeToken] = token
-                    it[updatedAt] = LocalDateTime.now()
-                }
-            } else {
-                UserSettingsTable.update({ UserSettingsTable.userId eq userId }) {
-                    it[ccBridgeToken] = token
-                    it[updatedAt] = LocalDateTime.now()
-                }
-            }
-        }
-
-        return token
-    }
-
-    /**
-     * 获取 Bridge Token
-     */
-    fun getBridgeToken(userId: String): String? {
-        return transaction {
-            UserSettingsTable.select { UserSettingsTable.userId eq userId }
-                .singleOrNull()
-                ?.get(UserSettingsTable.ccBridgeToken)
-        }
-    }
-
-    /**
-     * 通过 token 反向查找 userId，用于 Bridge 认证
-     */
-    fun findUserIdByBridgeToken(token: String): String? {
-        return transaction {
-            UserSettingsTable.select { UserSettingsTable.ccBridgeToken eq token }
-                .singleOrNull()
-                ?.get(UserSettingsTable.userId)
-        }
-    }
-
-    /**
      * 获取或创建 App HTTP 认证 token（用于 KB 等 API bearer 认证）
      */
     fun getOrCreateAppAuthToken(userId: String): String {
@@ -183,7 +131,6 @@ object UserSettingsRepository {
             language = language,
             defaultAgentInstruction = row[UserSettingsTable.defaultAgentInstruction],
             appAuthToken = row[UserSettingsTable.appAuthToken],
-            ccBridgeToken = row[UserSettingsTable.ccBridgeToken],
         )
     }
 }

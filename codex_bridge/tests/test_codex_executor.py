@@ -5,8 +5,6 @@ import json
 import logging
 from pathlib import Path
 
-import pytest
-
 from codex_bridge.codex_executor import parse_jsonl_event
 
 FIXTURE = Path(__file__).parent / "fixtures" / "jsonl_simple_chat.jsonl"
@@ -364,6 +362,7 @@ def test_reasoning_fixture_round_trip():
 # ---- M2: cmd builder ----
 
 from codex_bridge.codex_executor import CodexExecutor
+from bridge_common.execution_policy import ExecutionPolicy
 
 
 def test_build_cmd_uses_global_cd_for_fresh():
@@ -395,6 +394,35 @@ def test_build_cmd_uses_global_cd_for_resume():
     # Reasoning flag present
     assert "show_raw_agent_reasoning=true" in cmd
     assert cmd[-1] == "-"
+
+
+def test_managed_read_policy_disables_shell_and_legacy_bypass():
+    ex = CodexExecutor(auto_approve=True)
+    cmd = ex._build_cmd(
+        cwd="/tmp",
+        resume_thread_id=None,
+        execution_policy=ExecutionPolicy(read_file=True),
+    )
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+    assert cmd[cmd.index("--ask-for-approval") + 1] == "never"
+    assert "shell_tool" in cmd
+    assert "unified_exec" in cmd
+    assert "--ignore-user-config" not in cmd
+    assert "--ignore-rules" not in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+
+
+def test_managed_write_and_command_policy_uses_workspace_sandbox():
+    ex = CodexExecutor(auto_approve=True)
+    cmd = ex._build_cmd(
+        cwd="/tmp",
+        resume_thread_id="thread-1",
+        execution_policy=ExecutionPolicy(read_file=True, write_file=True, run_command=True),
+    )
+    assert cmd[cmd.index("--sandbox") + 1] == "workspace-write"
+    assert "shell_tool" not in cmd
+    assert "unified_exec" not in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
 
 
 # ---- M2: cancel_process ----

@@ -161,11 +161,11 @@ fun LoginScreen(appState: AppState) {
                                         }
                                     }
                                     
-                                    if (response.success && response.user != null) {
+                                    if (response.success && response.user != null && !response.accessToken.isNullOrBlank()) {
                                         println("✅ ${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
-                                        appState.setUser(response.user)
+                                        appState.setUser(response.user, response.accessToken)
                                     } else {
-                                        errorMessage = response.message
+                                        errorMessage = if (response.success) "登录响应缺少认证令牌" else response.message
                                     }
                                 } catch (e: Exception) {
                                     errorMessage = "操作失败: ${e.message}"
@@ -207,4 +207,3 @@ fun LoginScreen(appState: AppState) {
         }
     }
 }
-

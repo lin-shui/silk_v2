@@ -20,7 +20,11 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - URL/PDF 下载提取
    - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
-5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
+5. Claude Code / Codex 的 ACP adapter 由 `silk-agent` 托管，通过本地 Host IPC v2 接入单一 `/agent-connect` 设备 WSS；兼容 `/agent-bridge` 只接受设备签名旧 Host。外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` 跑各自 CLI 并流式回传。
+   - 新设备认证底座已新增 `/api/agent-pairings*` 与 `/agent-connect`：初次请求在出码前把 `--account` 登录名解析为 owner userId，非目标账号对短码统一得到 not-found；返回的 `/device#code=...` 链接只在浏览器 fragment 中携带短码，Web 登录后自动预览但仍要求用户明确批准。设备以 raw Ed25519 公钥完成 proof，后续连接使用短时一次性 challenge-response。未配置 canonical 公网地址时认证 origin 取 Host `--server`，不使用后端内网监听地址；Web/API 分 origin 时由部署配置或 Host `--web` 明确提供验证页 origin。已登记设备可通过 `POST /api/agent-pairings/agents` 提交覆盖 Agent 元数据的一次性设备签名请求，仍需 owner 在 Web 明确批准才创建第二个 Agent。配对码尝试按来源与登录主体做节点内存限速，限速桶有周期清理与硬上限；创建新配对时会清理过期超过 7 天的配对事务，安全审计事件不随之删除。
+   - `/agent-connect` 已在一次设备签名认证后承载版本化 `agent_open / agent_rpc / agent_close` envelope，并按 `agentInstanceId` 多路复用 Claude Code 与 Codex ACP 逻辑流；每个流独立做 Agent 状态、能力、Binding 和权限检查。`/agent-bridge` 仅保留旧 Host 设备签名兼容握手，query Token 明确拒绝，`/ccconnect-bridge` 仍使用旧群组 Token。
+   - 仓库内 `silk-agent/` 是独立 Go companion Host：负责设备密钥、配对、已登记设备新增 Agent 的签名请求/热加载、单一设备 WSS、心跳/重连、前台/后台运行、增量日志跟随、当前用户级 systemd/LaunchAgent/Scheduled Task 服务安装、受保护的 Unix/Windows 控制 IPC、系统凭据存储、加密身份备份/轮换，以及受控 Adapter 子进程监督。Windows Scheduled Task 通过显式 `run --config-dir` 固定实际 profile；Windows profile 目录启动时会移除继承 ACL 并收紧到当前用户、SYSTEM 与 Administrators，若管理员提升进程创建的目录 owner 是 Administrators 则先安全转交给当前用户，其他普通账号 owner 仍拒绝，私密输入文件按 owner/DACL fail-closed 校验。Windows 受管 Adapter 使用 `CREATE_NO_WINDOW` 运行，不弹出可见的 Python 控制台窗口。Host IPC v2 只双向转发 ACP 对象，Adapter 不接触设备签名接口、Silk 凭据或后端 WSS；被撤销身份不会无限重连，所有启用身份都被撤销时 Host 终止并提示重新配对。Host 启动前校验 wrapper、入口脚本及所有随包 Python 模块的 owner/写权限，屏蔽 raw CLI I/O 日志并禁止在发行目录写 Python bytecode；六平台签名发行包由 `silk-agent/scripts/package-release.sh` 生成且拒绝 group/other 可写输出。
+   - Web `/device` 页面复用现有 JWT 登录，区分新设备/新增 Agent 的配对预览与批准/拒绝，并提供设备与 Agent 在线状态/撤销及 Room/Workspace Binding 增删改、细粒度权限选择和双主体审批。跨所有者 Binding 可由 Agent owner 或目标管理者发起，只有 Agent owner 与 Room HOST/OPERATOR（或 Workspace owner）均批准后才进入 ACTIVE；设备签名 Agent 的 Room TEAM、Workspace prompt、带 Workspace 目标的目录读取/切换和 Source Control RPC 均按当前连接的精确 `agentInstanceId` 检查 ACTIVE Binding、权限与声明能力。每次受管 prompt 还要求 `EXECUTION_POLICY_V1` 能力并携带版本化 `_silk.executionPolicy`。Claude Code 与 Codex 继承设备用户的原生认证、模型、hooks、MCP、插件和规则；Silk 只对核心本地文件/命令工具增加 Binding 权限上限，Claude 使用显式 deny、工作区路径检查和完整权限下的原生 Bash sandbox，Codex 使用 `read-only/workspace-write` sandbox 与 shell gate，受管路径不启用 dangerous bypass。缺少版本能力的旧登记 Agent 会拒绝 prompt 并需升级后重新登记。Ktor 的同名固定路由会在 Nginx fallback 场景返回已构建 SPA `index.html`。
 6. SQLite `groups.room_kind` 以 `CHAT / WORKFLOW / SILK_PRIVATE` 显式区分 Room，`groups.last_message_at` 独立记录最近一条持久化消息时间；启动迁移器分别从 Workflow/Workspace 元数据和历史消息幂等回填旧数据。`Group.name` 是 Room 展示名权威，Workflow 名称仅作旧数据兼容；运行时不再根据 `wf_` 或 `[Silk]` 名称前缀判断类型，也不以重命名等元数据更新时间代替消息活跃时间。
 7. Workflow Room 复用 Group（`roomId = groupId`），消息显式分为 `TEAM` 与 `WORKSPACE(roomId, workspaceId)`；TEAM 始终对 Room 成员广播，只有以 `@Silk` 开头的用户消息才进入 `DirectModelAgent`，WORKSPACE 经 Owner/Co-pilot 鉴权后进入 `AgentRuntime(ownerId, workspaceId)`。
 8. `WorkspaceManager` 在 `workspace_store.json` 持久化工作目录、active agent、权限模式、per-agent session、可见性、最后共享名称、Co-pilot 和 `ACTIVE/ARCHIVED` 生命周期；`workflow_store.json` 暂保留工作流入口元数据并作为一次性迁移源。Workflow Room 连接只恢复已显式创建且 cwd 非空的活动工作区，不会隐式创建默认编码工作区。SHARED 转 PRIVATE 后，Observer 的历史入口只返回 Owner 与最后共享名称，不暴露私有阶段名称或 runtime 元数据。
@@ -31,6 +35,8 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 ## Persistent State
 
 - SQLite：`./silk_database.db`（可用 `-Dsilk.databasePath=...` 覆盖）
+- 外部 Agent 身份：SQLite `agent_devices`、`agent_instances`、`agent_bindings`、`agent_binding_audit_events`、`agent_pairing_requests`；Binding 的安全相关状态变化写入不可变快照审计，设备表只保存 Ed25519 公钥，配对短码和轮询 secret 只保存 SHA-256 摘要。
+- silk-agent 本地身份：用户配置目录下的 `device_key`（raw Ed25519 私钥；Unix 0600，Windows DPAPI/当前用户 ACL）、`config.json`（Unix 0600，分别保存连接 `serverOrigin` 与签名绑定 `authenticationOrigin`）、`host.pid`、`host.sock`（Unix，0600）和 `host.log`（Unix 0600）；Unix profile 目录为 0700，Windows profile 目录使用受保护 DACL，只允许当前用户、SYSTEM 与 Administrators，并让子文件继承。Windows 的备份口令与发行私钥输入要求当前用户 owner，允许型 DACL 仅可包含当前用户、SYSTEM、Administrators 与 owner 占位主体。私钥不进入 HTTP/WSS 或 Adapter。受控 Adapter 通过 stdin/stdout JSON-RPC 接收一次性 nonce 和固定 `agentInstanceId`，不接收 Silk 凭据。
 - PostgreSQL（可选）：通过 `docker-compose-pg.yml` 启动，`SILK_KB_STORE=postgres` 切换 KB 主存储为 PostgreSQL + pgvector；`POST /api/admin/kb/migrate-to-pg` 从 JSON store 迁移
 - 聊天历史：`chat_history/<session>/session.json`、`chat_history.json`
 - 上传文件：`chat_history/<session>/uploads/`
@@ -54,13 +60,14 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | HTTP routes | `Routing.kt`, `routes/RoomRoutes.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt`, `routes/ObsidianRoutes.kt` | `RoomRoutes` 提供统一 Room 发现/创建；`Routing.kt` 仍然是其他路由的主索引点 |
 | Obsidian integration | `obsidian-plugin/silk-sync/` | Obsidian 插件，一键同步 Silk 聊天记录和 KB 条目到 vault |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt`, `workspace/WorkspaceAccessPolicy.kt` | 消息主链、scope ACL、历史、URL 下载 |
-| Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
+| Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/`, `agents/auth/`, `routes/AgentAuthRoutes.kt` | Claude Code 与 Codex 的既有执行路径仍走 ACP；`agents/auth/` 提供新设备/Agent 配对、签名合同、持久化、Binding 授权与撤销底座 |
+| silk-agent Host | `silk-agent/` | 独立 Go companion；提供 DeviceSigner、系统凭据/加密备份、配对、单一设备 WSS、`agentInstanceId` 多路复用、重连、本地 Host 控制、受控 Adapter ProcessSupervisor/stdio IPC v2、密钥轮换和签名发行包 |
 | AI/tools/search | `ai/`（AnthropicClient + DirectModelAgent）, `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Card system | `card/CardBuilder.kt`, `card/CardReplyRouter.kt`, `card/CardModels.kt` | 交互卡片构造、JSON schema、回复路由 |
 | Domain modules | `todos/`, `workflow/`, `workspace/`, `trust/`, `kb/`, `git/`, `export/`, `pdf/` | Todo/Workflow/PersonalWorkspace/TrustedDir/KB/GitHub integration（GitHub 支持 Webhook/Polling 双接收；含 `[[kb:...]]` 内联引用）混合文件存储 + 可选 PostgreSQL（`SILK_KB_STORE=postgres`） |
 | Shared client contract | `frontend/shared/` | 三端消息/文件/Audio Duplex 合同面 |
-| Web | `frontend/webApp/` | 当前最完整的桌面浏览器 UI |
+| Web | `frontend/webApp/` | 当前最完整的桌面浏览器 UI；`DeviceManagementScene.kt` 提供 `/device` 配对与外部 Agent 管理 |
 | Android | `frontend/androidApp/` | 四 Tab + 移动端流程 |
 | Desktop | `frontend/desktopApp/` | 可编译/可测试，但能力面窄于 Web/Android |
 | Harmony | `frontend/harmonyApp/` | 独立 ArkTS 应用，含 Todo/Workflow/KB/Audio Duplex |

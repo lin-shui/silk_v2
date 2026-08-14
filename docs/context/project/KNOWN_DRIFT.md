@@ -68,7 +68,7 @@ CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` /
 - **文件系统操作走 ACP**：`/cc-fs/cd` → `_silk/set_cwd`；`/cc-fs/list` → `_silk/list_dir`
 - **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.cliSessionId` 写入 `Workflow.agentSessions[agentType]`（per-agent）；`autoActivateForWorkflow` 用 seed 续会话
 - **Multi-agent UX（F1 M4）**：`/codex <text>` inline 文本一步切换+提问；`@codex <text>` 跨 agent 路由不再静默；`Workflow.activeAgent` 持久化，`/use` 切换落盘，下次进工作流自动恢复；前端工作流标题显示 active agent badge
-- **`/session <id>` 真正加载**：`AgentRuntime` 调 ACP `session/load`，cc_bridge 复用 `SessionManager.resume_session`，codex_bridge 新增 `codex_session_index.find_session_file`
+- **`/session <id>` 真正加载**：`AgentRuntime` 调 ACP `session/load`，cc_bridge 通过 `cc_session_index.find_session_file` 查找 Claude 原生会话文件，codex_bridge 通过 `codex_session_index.find_session_file` 查找 Codex 会话文件
 - **Token 重生踢连接**：`AcpRegistry.disconnect(userId)` 关闭老 ACP 连接
 - **TrustedDir bridgeId**：`resolveBridgeId(userId)` 从 `AcpRegistry.getRemoteIp` 拿，格式 `"ip:<remoteIp>"` 不变
 - **`/cc-bridge` WebSocket 端点已删除**

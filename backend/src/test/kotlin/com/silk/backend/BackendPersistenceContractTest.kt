@@ -67,9 +67,7 @@ class BackendPersistenceContractTest {
             assertEquals(Language.ENGLISH, settings.language)
             assertEquals("Keep existing instruction.", settings.defaultAgentInstruction)
 
-            val bridgeToken = UserSettingsRepository.generateBridgeToken(user.id)
-            assertEquals(bridgeToken, UserSettingsRepository.getBridgeToken(user.id))
-            assertEquals(user.id, UserSettingsRepository.findUserIdByBridgeToken(bridgeToken))
+            assertNull(readRetiredBridgeToken(dbFile, user.id))
 
             val group = assertNotNull(GroupRepository.findGroupById("legacy-group-id"))
             assertEquals("Legacy Group", group.name)
@@ -89,7 +87,7 @@ class BackendPersistenceContractTest {
 
             val loginAfterSecondInit = AuthService.login(LoginRequest("legacy-user", "legacy-secret"))
             assertTrue(loginAfterSecondInit.success, loginAfterSecondInit.message)
-            assertEquals(bridgeToken, UserSettingsRepository.getBridgeToken(user.id))
+            assertNull(readRetiredBridgeToken(dbFile, user.id))
             assertEquals(listOf(group.id), GroupRepository.getUserGroups(user.id).map { it.id })
             assertEquals(6_000L, GroupRepository.findGroupById(group.id)?.lastMessageAt)
         }
@@ -260,6 +258,7 @@ class BackendPersistenceContractTest {
                         user_id VARCHAR(128) PRIMARY KEY,
                         language VARCHAR(20) NOT NULL,
                         default_agent_instruction TEXT NOT NULL,
+                        cc_bridge_token VARCHAR(64),
                         updated_at TEXT NOT NULL
                     )
                     """.trimIndent()
@@ -308,11 +307,12 @@ class BackendPersistenceContractTest {
                 statement.executeUpdate(
                     """
                     INSERT INTO user_settings (
-                        user_id, language, default_agent_instruction, updated_at
+                        user_id, language, default_agent_instruction, cc_bridge_token, updated_at
                     ) VALUES (
                         'legacy-user-id',
                         'ENGLISH',
                         'Keep existing instruction.',
+                        'legacy-direct-bridge-token',
                         '2024-01-04 03:04:05'
                     )
                     """.trimIndent()
@@ -320,6 +320,21 @@ class BackendPersistenceContractTest {
             }
         }
     }
+
+    private fun readRetiredBridgeToken(dbFile: File, userId: String): String? =
+        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { connection ->
+            readRetiredBridgeToken(connection, userId)
+        }
+
+    private fun readRetiredBridgeToken(connection: java.sql.Connection, userId: String): String? =
+        connection.prepareStatement(
+            "SELECT cc_bridge_token FROM user_settings WHERE user_id = ?",
+        ).use { statement ->
+            statement.setString(1, userId)
+            statement.executeQuery().use { rows ->
+                if (rows.next()) rows.getString(1) else null
+            }
+        }
 
     private fun seedLegacyRoomKinds(dbFile: File) {
         DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { connection ->

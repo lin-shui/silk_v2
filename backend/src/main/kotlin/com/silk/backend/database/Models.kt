@@ -486,7 +486,6 @@ data class UserSettings(
     val language: Language = Language.CHINESE,
     val defaultAgentInstruction: String = "You are a helpful technical research assistant. ",
     val appAuthToken: String? = null,
-    val ccBridgeToken: String? = null,
 )
 
 /**
@@ -516,7 +515,6 @@ data class UserSettingsResponse(
 data class CcSettingsResponse(
     val success: Boolean,
     val message: String,
-    val ccBridgeToken: String? = null,
     val bridgeConnected: Boolean = false,
     val bridgeIp: String? = null,
 )

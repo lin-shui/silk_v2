@@ -19,6 +19,7 @@ import com.silk.backend.card.CardBuilder
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.acp.ContentBlock
 import com.silk.backend.agents.acp.PermissionResponse
+import com.silk.backend.agents.acp.SilkExecutionPolicy
 import com.silk.backend.agents.acp.StopReason
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
 import com.silk.backend.agents.adapters.codex.CodexDescriptor
@@ -196,6 +197,7 @@ object AgentRuntime {
         workspaceId: String,
         text: String,
         userName: String,
+        executionPolicy: SilkExecutionPolicy? = null,
         broadcastFn: suspend (Message) -> Unit,
     ): Boolean {
         val ctx = context(userId, workspaceId)
@@ -213,12 +215,20 @@ object AgentRuntime {
             is CommandRouter.RouteResult.TriggerAgent -> {
                 handleTriggerAgent(ctx, route.agentType, broadcastFn)
                 if (!route.inlineText.isNullOrBlank()) {
-                    handlePrompt(ctx, route.inlineText, userId, userName, broadcastFn)
+                    handlePrompt(ctx, route.inlineText, userId, userName, broadcastFn, executionPolicy = executionPolicy)
                 }
                 true
             }
             is CommandRouter.RouteResult.AtAgent -> {
-                handleAtAgent(ctx, route.agentType, route.remainingText, userId, userName, broadcastFn)
+                handleAtAgent(
+                    ctx,
+                    route.agentType,
+                    route.remainingText,
+                    userId,
+                    userName,
+                    broadcastFn,
+                    executionPolicy,
+                )
                 true
             }
             is CommandRouter.RouteResult.Command -> {
@@ -226,13 +236,55 @@ object AgentRuntime {
                 true
             }
             is CommandRouter.RouteResult.Prompt -> {
-                handlePrompt(ctx, route.text, userId, userName, broadcastFn)
+                handlePrompt(ctx, route.text, userId, userName, broadcastFn, executionPolicy = executionPolicy)
                 true
             }
             is CommandRouter.RouteResult.PassThrough -> {
                 false
             }
         }
+    }
+
+    /** Sends a prompt to an explicitly bound TEAM Agent without changing a Workspace pointer. */
+    suspend fun handleBoundTeamPrompt(
+        userId: String,
+        roomId: String,
+        agentType: String,
+        text: String,
+        userName: String,
+        executionPolicy: SilkExecutionPolicy? = null,
+        broadcastFn: suspend (Message) -> Unit,
+    ): Boolean {
+        if (text.isBlank()) return false
+        val ctx = context(userId, "room:$roomId")
+        ctx.roomId = roomId
+        // A TEAM binding is a message-only context. Its Agent may run on a
+        // different OS from both Silk and a previously connected Agent, so a
+        // server-local or previous-device path must never become its cwd.
+        // An empty cwd asks the Adapter to use its own local default.
+        ctx.workingDir = ""
+        ctx.currentAgentType = agentType
+        val route = CommandRouter.route(text, userId, ctx.workspaceId, agentType)
+        if (route is CommandRouter.RouteResult.Command && route.cmd is SilkCommand.New) {
+            // TEAM mentions are resolved by the Binding trigger before they
+            // reach AgentRuntime, so "@cc /new" arrives here as "/new".
+            // Reset the authorized bound Agent session instead of forwarding
+            // the slash command as a vendor prompt. Other commands keep their
+            // existing message-only TEAM behavior until their local-data
+            // permission requirements are modeled explicitly.
+            handleCommand(ctx, route.cmd, broadcastFn)
+            return true
+        }
+        handlePrompt(
+            ctx = ctx,
+            text = text,
+            userId = userId,
+            userName = userName,
+            broadcastFn = broadcastFn,
+            overrideAgentType = agentType,
+            executionPolicy = executionPolicy,
+        )
+        return true
     }
 
     /**
@@ -251,6 +303,25 @@ object AgentRuntime {
 
         handleCancel(session, broadcastFn)
         return true
+    }
+
+    /** Cancel every external Agent currently running in one bound TEAM channel. */
+    suspend fun cancelBoundTeamAgents(
+        roomId: String,
+        broadcastFn: suspend (Message) -> Unit,
+    ): Int {
+        val contextId = "room:$roomId"
+        val runningSessions = contexts.values
+            .filter { it.workspaceId == contextId }
+            .flatMap { context -> context.sessions.values.filter { it.running } }
+
+        var cancelled = 0
+        for (session in runningSessions) {
+            if (!session.running) continue
+            handleCancel(session, broadcastFn)
+            cancelled += 1
+        }
+        return cancelled
     }
 
     /**
@@ -420,6 +491,7 @@ object AgentRuntime {
         userId: String,
         userName: String,
         broadcastFn: suspend (Message) -> Unit,
+        executionPolicy: SilkExecutionPolicy? = null,
     ) {
         val descriptor = AgentRegistry.getByType(agentType) ?: return
 
@@ -437,8 +509,24 @@ object AgentRuntime {
         val route = CommandRouter.route(remainingText, userId, ctx.workspaceId, agentType)
         when (route) {
             is CommandRouter.RouteResult.Command -> handleCommand(ctx, route.cmd, broadcastFn)
-            is CommandRouter.RouteResult.Prompt -> handlePrompt(ctx, route.text, userId, userName, broadcastFn, overrideAgentType = agentType)
-            else -> handlePrompt(ctx, remainingText, userId, userName, broadcastFn, overrideAgentType = agentType)
+            is CommandRouter.RouteResult.Prompt -> handlePrompt(
+                ctx,
+                route.text,
+                userId,
+                userName,
+                broadcastFn,
+                overrideAgentType = agentType,
+                executionPolicy = executionPolicy,
+            )
+            else -> handlePrompt(
+                ctx,
+                remainingText,
+                userId,
+                userName,
+                broadcastFn,
+                overrideAgentType = agentType,
+                executionPolicy = executionPolicy,
+            )
         }
     }
 
@@ -765,6 +853,7 @@ object AgentRuntime {
         userName: String,
         broadcastFn: suspend (Message) -> Unit,
         overrideAgentType: String? = null,
+        executionPolicy: SilkExecutionPolicy? = null,
     ) {
         val agentType = overrideAgentType ?: ctx.currentAgentType ?: return
         val descriptor = AgentRegistry.getByType(agentType) ?: return
@@ -801,7 +890,7 @@ object AgentRuntime {
 
         if (session.running) {
             logger.info("[AgentRuntime] Message queued: running=true, pendingQuestion=null, textLen={}", text.length)
-            session.messageQueue.add(QueuedMessage(text, userId, userName))
+            session.messageQueue.add(QueuedMessage(text, userId, userName, executionPolicy))
             broadcastFn(AgentMessages.status(
                 "任务运行中，消息已加入队列 (${session.messageQueue.size} 条)",
                 agentUserId = descriptor.agentUserId,
@@ -858,7 +947,16 @@ object AgentRuntime {
                 setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope, ctx)
 
                 // 3. Execute prompt (executeSinglePrompt no longer does sessionNew)
-                executeSinglePrompt(ctx, acp, session, descriptor, text, broadcastFn, accumulated)
+                executeSinglePrompt(
+                    ctx,
+                    acp,
+                    session,
+                    descriptor,
+                    text,
+                    broadcastFn,
+                    accumulated,
+                    executionPolicy,
+                )
 
                 // 4. Drain queued messages one-by-one, still under running=true
                 var next = session.messageQueue.pollFirst()
@@ -870,7 +968,16 @@ object AgentRuntime {
                     val drainSessionId = session.acpSessionId ?: break
                     val nextAccumulated = StringBuilder()
                     setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope, ctx)
-                    executeSinglePrompt(ctx, acp, session, descriptor, next.text, broadcastFn, nextAccumulated)
+                    executeSinglePrompt(
+                        ctx,
+                        acp,
+                        session,
+                        descriptor,
+                        next.text,
+                        broadcastFn,
+                        nextAccumulated,
+                        next.executionPolicy,
+                    )
                     next = session.messageQueue.pollFirst()
                 }
             } finally {
@@ -894,6 +1001,7 @@ object AgentRuntime {
         text: String,
         broadcastFn: suspend (Message) -> Unit,
         accumulated: StringBuilder,
+        executionPolicy: SilkExecutionPolicy?,
     ) {
         // 发送 prompt
         val requestId = UUID.randomUUID().toString()
@@ -903,6 +1011,7 @@ object AgentRuntime {
             val result = acp.sessionPrompt(
                 sessionId = session.acpSessionId!!,
                 prompt = listOf(ContentBlock.Text(text)),
+                executionPolicy = executionPolicy,
             )
 
             // 从 result.meta 拿 cliSessionId 持久化（adapter complete.meta.sessionId → response.meta.cliSessionId）

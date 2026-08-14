@@ -1,6 +1,7 @@
 // backend/src/main/kotlin/com/silk/backend/agents/core/AgentSession.kt
 package com.silk.backend.agents.core
 
+import com.silk.backend.agents.acp.SilkExecutionPolicy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentLinkedDeque
@@ -43,7 +44,12 @@ class AgentSession(
     val acpSessionLock: Mutex = Mutex()
 }
 
-data class QueuedMessage(val text: String, val userId: String, val userName: String)
+data class QueuedMessage(
+    val text: String,
+    val userId: String,
+    val userName: String,
+    val executionPolicy: SilkExecutionPolicy? = null,
+)
 
 /**
  * Claude Code AskUserQuestion 的单个选项。

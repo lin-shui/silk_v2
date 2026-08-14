@@ -22,6 +22,7 @@ import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
+import java.net.URI
 
 @Suppress("TooGenericExceptionCaught")
 fun main() {
@@ -274,6 +275,7 @@ private fun syncGroupsToWeaviate(logger: org.slf4j.Logger) {
 }
 
 fun Application.module() {
+    val deploymentSecurity = DeploymentSecurity.load()
     install(CallLogging)
     install(Compression)
 
@@ -313,8 +315,14 @@ fun Application.module() {
         // 允许凭据（cookies）
         allowCredentials = true
 
-        // 允许所有来源（生产环境建议限制为特定域名）
-        anyHost()
+        if (deploymentSecurity.production) {
+            deploymentSecurity.allowedCorsOrigins.forEach { origin ->
+                val uri = URI(origin)
+                allowHost(uri.rawAuthority, schemes = listOf(uri.scheme))
+            }
+        } else {
+            anyHost()
+        }
 
         // 设置预检请求缓存时间（24小时）
         maxAgeInSeconds = 86400

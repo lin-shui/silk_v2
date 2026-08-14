@@ -22,6 +22,7 @@
 
 - Compose for Web
 - 登录后是左侧 `NavRail` + 右侧内容区；联系人作为底部全局入口放在设置齿轮上方，退出登录统一放在设置页账户区
+- `/device` 是复用现有登录态的设备与外部 Agent 管理入口；无登录态先显示既有登录页，登录后回到配对页。`/device#code=ABCD-EFGH` 会把 fragment 中的短码保留在当前标签页、立即清理地址栏并在登录后自动预览；首次打开链接和已打开 `/device` 页面再次粘贴链接都会消费 `hashchange`，不需要用户再次复制短码。错误账号只能得到不泄露详情的提示并可切换账号，任何情况下仍需点击“批准连接”，不会因打开链接自动绑定。手工输入短码继续兼容。页面还支持设备和 Agent 列表/在线状态/撤销、Room/Workspace Binding 增删改、权限勾选及双主体审批；Room 展示消息读写权限，Workspace 展示消息、文件、命令和工作区权限。开启 `WRITE_FILE` 或 `RUN_COMMAND` 会同时包含 `READ_FILE`，关闭 `READ_FILE` 会撤掉这两项；最终安全边界仍由服务端权限信封和 Adapter 强制执行。待审批项显示缺失的批准侧，并仅按服务端能力字段展示批准、拒绝、编辑或撤销操作。导航栏底部也提供同一入口
 - 主 Tab：
   - 会话
   - Knowledge Base
@@ -37,6 +38,7 @@
 
 - 从 `.env` 读取后端端口并生成 `BuildConfig.kt`
 - 生产构建最终供后端静态分发
+- `silk.sh` 使用 `scripts/silk_static_server.py` 提供本地生产静态包，使 `/device` 直达请求回落到 SPA `index.html`
 - JS 轻量测试跑 `nodeTest`，不依赖浏览器自动化
 
 ## Watch Points

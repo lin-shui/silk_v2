@@ -104,6 +104,23 @@ class AgentRuntimeTest {
     }
 
     @Test
+    fun `bound team new resets the Silk session instead of forwarding to the agent`() = runTest {
+        val messages = mutableListOf<Message>()
+
+        val handled = AgentRuntime.handleBoundTeamPrompt(
+            userId = "owner",
+            roomId = "room-1",
+            agentType = "claude-code",
+            text = "/new",
+            userName = "Alice",
+            broadcastFn = { messages.add(it) },
+        )
+
+        assertTrue(handled)
+        assertEquals(listOf("已开启新会话"), messages.map(Message::content))
+    }
+
+    @Test
     fun `cancelIfActive returns false when no agent active`() = runTest {
         val cancelled = AgentRuntime.cancelIfActive("u1", "g1") {}
         assertFalse(cancelled)

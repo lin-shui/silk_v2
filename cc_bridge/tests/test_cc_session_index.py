@@ -7,8 +7,6 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
-
 # sys.path hack to import flat modules (same pattern as codex_bridge tests)
 _PKG = Path(__file__).resolve().parents[1]
 if str(_PKG) not in sys.path:
@@ -145,7 +143,7 @@ class TestListLocalSessions:
             content="old",
             timestamp="2026-05-01T10:00:00.000Z",
         )
-        new_f = _write_cc_session(
+        _write_cc_session(
             tmp_path,
             project_dir="-home-user-proj",
             session_id="new-session",
@@ -305,7 +303,7 @@ class TestFindSessionFile:
             cwd="/proj",
             content="old session",
         )
-        new_f = _write_cc_session(
+        _write_cc_session(
             tmp_path,
             project_dir="-home-user-proj",
             session_id=uuid_new,

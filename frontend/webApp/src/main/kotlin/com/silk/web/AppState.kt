@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.browser.localStorage
+import kotlinx.browser.window
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
@@ -15,7 +16,8 @@ enum class Scene {
     GROUP_LIST,
     CONTACTS,
     CHAT_ROOM,
-    SETTINGS
+    SETTINGS,
+    DEVICES,
 }
 
 enum class NavTab {
@@ -62,6 +64,15 @@ class WebAppState {
     private var explicitLogoutRequested = false
     
     private val sceneHistory = mutableListOf<Scene>()
+
+    private val openedDeviceRoute: Boolean
+        get() = window.location.pathname == "/device" || window.location.pathname.startsWith("/device/")
+
+    private val incomingPairingCode = pairingCodeFromFragment(window.location.hash)
+    var pendingPairingCode by mutableStateOf(
+        incomingPairingCode ?: restorePendingPairingCode().takeIf { openedDeviceRoute },
+    )
+        private set
     
     init {
         console.log("🔧 AppState 初始化...")
@@ -69,6 +80,12 @@ class WebAppState {
         // 清除任何可能的残留状态
         selectedGroup = null
         sceneHistory.clear()
+
+        incomingPairingCode?.let { code ->
+            persistPendingPairingCode(code)
+            window.history.replaceState(null, "", window.location.pathname + window.location.search)
+        }
+        if (!openedDeviceRoute) clearPendingPairingCode()
         
         // 清除可能的旧版本LocalStorage数据
         @Suppress("TooGenericExceptionCaught")
@@ -100,7 +117,7 @@ class WebAppState {
         if (isNewUser) {
             navigateTo(Scene.NICKNAME_SETUP)
         } else {
-            navigateTo(Scene.GROUP_LIST)
+            navigateTo(initialMainScene())
         }
     }
     
@@ -110,7 +127,8 @@ class WebAppState {
     fun setUser(user: User) {
         currentUser = user
         JwtManager.setStoredUser(user)
-        navigateTo(Scene.GROUP_LIST)
+        explicitLogoutRequested = false
+        navigateTo(initialMainScene())
     }
     
     fun selectGroup(group: Group) {
@@ -143,12 +161,62 @@ class WebAppState {
         navigateTo(Scene.CONTACTS)
     }
 
+    /** Open the device/Agent management surface and keep its shareable URL. */
+    fun openDeviceManagement() {
+        if (currentScene == Scene.DEVICES) return
+        window.history.pushState(null, "", "/device")
+        navigateTo(Scene.DEVICES)
+    }
+
+    fun closeDeviceManagement() {
+        clearPendingPairingCode()
+        if (!navigateBack()) {
+            currentScene = if (selectedGroup != null) Scene.CHAT_ROOM else Scene.GROUP_LIST
+        }
+        window.history.replaceState(null, "", "/")
+    }
+
+    fun clearPendingPairingCode() {
+        pendingPairingCode = null
+        try {
+            kotlinx.browser.sessionStorage.removeItem(PENDING_PAIRING_CODE_KEY)
+        } catch (_: Exception) {}
+    }
+
+    /** Consume a pairing link pasted into an already-open `/device` tab. */
+    fun consumeCurrentPairingFragment(): Boolean {
+        if (!openedDeviceRoute) return false
+        val code = pairingCodeFromFragment(window.location.hash) ?: return false
+        pendingPairingCode = code
+        persistPendingPairingCode(code)
+        window.history.replaceState(null, "", window.location.pathname + window.location.search)
+        if (currentUser != null && currentScene != Scene.DEVICES) {
+            navigateTo(Scene.DEVICES)
+        }
+        return true
+    }
+
+    fun finishNicknameSetup() {
+        navigateTo(initialMainScene())
+    }
+
+    fun openSettings() {
+        if (currentScene == Scene.SETTINGS) return
+        if (currentScene == Scene.DEVICES) closeDeviceManagement()
+        navigateTo(Scene.SETTINGS)
+    }
+
     private fun closeUtilityScenes() {
-        while (currentScene == Scene.SETTINGS || currentScene == Scene.CONTACTS) {
+        val wasDeviceRoute = currentScene == Scene.DEVICES
+        while (currentScene == Scene.SETTINGS || currentScene == Scene.CONTACTS || currentScene == Scene.DEVICES) {
             if (!navigateBack()) {
                 currentScene = if (selectedGroup != null) Scene.CHAT_ROOM else Scene.GROUP_LIST
                 break
             }
+        }
+        if (wasDeviceRoute) {
+            clearPendingPairingCode()
+            window.history.replaceState(null, "", "/")
         }
     }
 
@@ -290,7 +358,7 @@ class WebAppState {
         if (user != null && token != null) {
             console.log("🔄 检测到保存的 JWT 会话，自动恢复")
             currentUser = user
-            currentScene = Scene.GROUP_LIST
+            currentScene = initialMainScene()
             sceneHistory.clear()
             return true
         }
@@ -308,7 +376,7 @@ class WebAppState {
         
         if (user != null && token != null) {
             currentUser = user
-            currentScene = Scene.GROUP_LIST
+            currentScene = initialMainScene()
             console.log("🔄 JWT 自动登录:", user.fullName)
         } else {
             // fallback: 尝试旧版 localStorage 兼容
@@ -317,10 +385,30 @@ class WebAppState {
                 if (json != null) {
                     val oldUser = Json.decodeFromString<User>(json)
                     currentUser = oldUser
-                    currentScene = Scene.GROUP_LIST
+                    currentScene = initialMainScene()
                     console.log("🔄 旧版 localStorage 登录:", oldUser.fullName)
                 }
             } catch (_: Exception) {}
         }
+    }
+
+    private fun initialMainScene(): Scene = if (openedDeviceRoute) Scene.DEVICES else Scene.GROUP_LIST
+
+    private fun restorePendingPairingCode(): String? = try {
+        kotlinx.browser.sessionStorage.getItem(PENDING_PAIRING_CODE_KEY)
+            ?.let(::formatPairingCode)
+            ?.takeIf { normalizePairingCode(it).length == 8 }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun persistPendingPairingCode(code: String) {
+        try {
+            kotlinx.browser.sessionStorage.setItem(PENDING_PAIRING_CODE_KEY, code)
+        } catch (_: Exception) {}
+    }
+
+    private companion object {
+        const val PENDING_PAIRING_CODE_KEY = "silk_pending_pairing_code"
     }
 }

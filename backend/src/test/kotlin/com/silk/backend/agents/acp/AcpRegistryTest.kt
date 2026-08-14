@@ -38,6 +38,18 @@ class AcpRegistryTest {
     }
 
     @Test
+    fun `conditional unregister does not remove replacement client`() = runTest {
+        val previous = AcpClient(InMemoryAcpTransport(), scope = backgroundScope)
+        val replacement = AcpClient(InMemoryAcpTransport(), scope = backgroundScope)
+        AcpRegistry.put("user1", "claude-code", previous, remoteIp = null)
+        AcpRegistry.put("user1", "claude-code", replacement, remoteIp = null)
+
+        AcpRegistry.unregister("user1", "claude-code", previous)
+
+        assertEquals(replacement, AcpRegistry.get("user1", "claude-code"))
+    }
+
+    @Test
     fun `put evicts previous client for same user+agent`() = runTest {
         val t1 = InMemoryAcpTransport()
         val c1 = AcpClient(t1, scope = backgroundScope)
@@ -47,5 +59,16 @@ class AcpRegistryTest {
         val evicted = AcpRegistry.put("u", "claude-code", c2, remoteIp = null)
         assertEquals(c1, evicted, "old client must be returned for caller to close")
         assertEquals(c2, AcpRegistry.get("u", "claude-code"))
+    }
+
+    @Test
+    fun `registry defaults to device signature authentication`() = runTest {
+        val signed = AcpClient(InMemoryAcpTransport(), scope = backgroundScope)
+        AcpRegistry.put("u", "codex", signed, remoteIp = null)
+
+        assertEquals(
+            AcpRegistry.AuthenticationMode.DEVICE_SIGNATURE,
+            AcpRegistry.authenticationMode("u", "codex"),
+        )
     }
 }

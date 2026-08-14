@@ -3,6 +3,13 @@ package com.silk.backend
 import com.silk.backend.database.ContactRequests
 import com.silk.backend.database.Contacts
 import com.silk.backend.database.CcConnectTokens
+import com.silk.backend.database.AgentBindings
+import com.silk.backend.database.AgentBindingAuditEvents
+import com.silk.backend.database.AgentDevices
+import com.silk.backend.database.AgentInstances
+import com.silk.backend.database.AgentPairingRequests
+import com.silk.backend.database.AgentConnectionChallenges
+import com.silk.backend.database.AgentSecurityEvents
 import com.silk.backend.database.GroupMembers
 import com.silk.backend.database.Groups
 import com.silk.backend.database.RefreshTokensTable
@@ -43,6 +50,13 @@ internal class TestWorkspace : AutoCloseable {
                 UserSettingsTable,
                 CcConnectTokens,
                 RefreshTokensTable,
+                AgentDevices,
+                AgentInstances,
+                AgentBindings,
+                AgentBindingAuditEvents,
+                AgentPairingRequests,
+                AgentConnectionChallenges,
+                AgentSecurityEvents,
             )
         }
     }
