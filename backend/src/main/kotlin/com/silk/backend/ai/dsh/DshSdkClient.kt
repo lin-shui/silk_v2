@@ -146,6 +146,8 @@ class DshSdkClient(
 ) {
     private val logger = LoggerFactory.getLogger(DshSdkClient::class.java)
     private val json = Json { ignoreUnknownKeys = true }
+    /** 绝对化会话 cwd：进程 cwd 是 runtime 根，相对路径会被沙箱/DSH_CWD/initialize 按 runtime 根错误解析 */
+    private val absoluteSessionCwd: String = java.io.File(sessionCwd).absolutePath
     /** 沙箱启动器绝对路径（相对 JVM cwd 解析，runtime 工作目录可能是 harness 仓库） */
     private val sandboxLauncher: String? by lazy {
         val raw = sandboxScript.takeIf { it.isNotBlank() } ?: return@lazy null
@@ -184,14 +186,14 @@ class DshSdkClient(
 
         idleCloseJob?.cancel()
         val pb = ProcessBuilder(
-            buildLaunchCommand(launchCommand, sandboxLauncher, sessionCwd, runtimeCwd.absolutePath),
+            buildLaunchCommand(launchCommand, sandboxLauncher, absoluteSessionCwd, runtimeCwd.absolutePath),
         )
             .directory(runtimeCwd)
             .redirectErrorStream(false)
         pb.environment()["DEEPSEEK_API_KEY"] = apiKey
         if (baseUrl.isNotBlank()) pb.environment()["DEEPSEEK_BASE_URL"] = baseUrl
         pb.environment()["DSH_SESSION_ROOT"] = sessionRoot
-        pb.environment()["DSH_CWD"] = sessionCwd
+        pb.environment()["DSH_CWD"] = absoluteSessionCwd
         if (sandboxLauncher != null) {
             // tsx 默认在 /tmp 建磁盘缓存；Landlock 下 /tmp 不可写，禁用缓存避免启动失败
             pb.environment()["TSX_DISABLE_CACHE"] = "1"
@@ -208,12 +210,12 @@ class DshSdkClient(
         rpc(
             "initialize",
             buildJsonObject {
-                put("cwd", sessionCwd)
+                put("cwd", absoluteSessionCwd)
                 put("provider", provider)
                 put("model", model)
             },
         )
-        logger.info("[DshSdkClient] runtime ready: cwd={}, provider={}, model={}", sessionCwd, provider, model)
+        logger.info("[DshSdkClient] runtime ready: cwd={}, provider={}, model={}", absoluteSessionCwd, provider, model)
     }
 
     /**

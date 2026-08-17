@@ -166,11 +166,20 @@ def apply_landlock(workspace_dir: str, runtime_root: str):
             if os.path.isdir(syspath):
                 _add_path_rule(ruleset_fd, syspath, ACCESS_RUNTIME)
         try:
+            # 非特权进程（无 CAP_SYS_ADMIN）必须先设 no_new_privs，
+            # 否则 landlock_restrict_self 返回 EPERM（参考 samples/landlock/sandboxer.c）。
+            if ctypes.CDLL(None, use_errno=True).prctl(38, 1, 0, 0, 0) != 0:
+                print(
+                    "WARNING: prctl(PR_SET_NO_NEW_PRIVS) failed; running dsh runtime "
+                    "unsandboxed",
+                    file=sys.stderr,
+                )
+                return
             _syscall(LANDLOCK_RESTRICT_SELF, ruleset_fd, 0)
         except RuntimeError as e:
             print(
                 f"WARNING: Landlock restrict_self failed ({e}); running dsh runtime "
-                "unsandboxed (container seccomp or kernel.landlock_restrict_self sysctl?)",
+                "unsandboxed (container seccomp or host kernel restriction?)",
                 file=sys.stderr,
             )
             return

@@ -113,7 +113,7 @@ class DirectModelAgent(
             launchCommand = cmd,
             runtimeCwd = java.io.File(AIConfig.DSH_RUNTIME_CWD),
             sessionRoot = java.io.File(workspaceDir, ".dsh_sessions").absolutePath,
-            sessionCwd = workspaceDir,
+            sessionCwd = java.io.File(workspaceDir).absolutePath,
         )
     }
 

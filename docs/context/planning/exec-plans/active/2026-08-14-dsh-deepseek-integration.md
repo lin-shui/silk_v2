@@ -65,7 +65,7 @@ DirectModelAgent（Silk 编排层，保留）
 - `DshSdkClient`：沙箱启动器包装（`buildLaunchCommand`，脚本路径多候选解析）；超时/取消（STOP_GENERATE）→ 杀进程且可重启；单轮结束后 `DSH_IDLE_TIMEOUT_MS` 空闲自动关闭；`TSX_DISABLE_CACHE=1` 沙箱模式下避免写 /tmp。
 - `AIConfig` 新增 `DSH_SANDBOX_SCRIPT` / `DSH_IDLE_TIMEOUT_MS`。
 - 验证：`DshSdkClientIntegrationTest` 3 例（真实 runtime + 真实 key + 沙箱启动器）：流式回答、超时杀进程后可重启、空闲回收；单测 9 例；detekt 无新增问题。
-- 已知限制：本容器宿主内核 6.12.30 支持 Landlock，但 `/proc` ABI 被隐藏且 `restrict_self` 返回 EPERM（seccomp/sysctl），沙箱在本容器降级；launcher 已支持 syscall 探测 + restrict 失败降级说明，实际内核约束需在允许 landlock syscalls 的容器/主机上实测。
+- 已知限制（2026-08-17 修正）：初版 launcher 未设 no_new_privs，导致无 CAP_SYS_ADMIN 的进程 `restrict_self` 恒 EPERM，曾误判为容器 seccomp / 宿主 sysctl；补 `prctl(PR_SET_NO_NEW_PRIVS)` 后**本容器实测沙箱生效**（workspace 外写/读被拒、系统路径放行）。`/proc/sys/kernel/landlock` 在容器内被隐藏，launcher 走 syscall 探测；restrict_self 仍失败时打印原因并降级不沙箱。生产要求：Linux 6.7+、landlock LSM 启用、容器 seccomp 放行 landlock syscalls；非特权进程无需 CAP_SYS_ADMIN。
 - P2：每会话 runtime + Landlock 沙箱固化（放行 runtime 自身可执行路径与依赖，用户文件仅 workspace 根）。
 - P3（可选）：Silk 受控 web_fetch（SSRF 拒绝私网/保留段 + 大小上限 + 超时；补 harness 未做的私网防护）；等 SDK 支持 server→client 后考虑审批流。
 - P4：单测 + 冒烟 + 文档同步（ARCHITECTURE / BOOTSTRAP / KNOWN_DRIFT：协议 0.0.1 无版本协商、无 cancel/approval）。
