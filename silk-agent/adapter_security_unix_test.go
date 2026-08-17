@@ -17,6 +17,11 @@ func TestManagedAdapterRejectsWritableOrSymlinkExecutable(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o775); err != nil {
 		t.Fatal(err)
 	}
+	// os.WriteFile applies the process umask, so make the mode under test
+	// explicit instead of relying on the runner's umask.
+	if err := os.Chmod(executable, 0o775); err != nil {
+		t.Fatal(err)
+	}
 	if err := validateAdapterExecutable(executable); err == nil {
 		t.Fatal("expected group-writable Adapter executable to be rejected")
 	}
