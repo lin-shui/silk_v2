@@ -20,9 +20,11 @@ import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.io.File
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.io.path.createTempDirectory
 
 internal class TestWorkspace : AutoCloseable {
+    private val lock = workspaceLock
     private val rootDir = createTempDirectory("silk-backend-test").toFile()
     private val dbFile = File(rootDir, "silk-test.db")
     val chatHistoryDir = File(rootDir, "chat_history")
@@ -31,35 +33,41 @@ internal class TestWorkspace : AutoCloseable {
     val workflowDir = File(rootDir, "workflows")
 
     init {
-        System.setProperty("silk.databasePath", dbFile.absolutePath)
-        System.setProperty("silk.chatHistoryDir", chatHistoryDir.absolutePath)
-        System.setProperty("silk.userTodoBaseDir", userTodoDir.absolutePath)
-        System.setProperty("silk.kbDir", knowledgeBaseDir.absolutePath)
-        System.setProperty("silk.workflowDir", workflowDir.absolutePath)
+        lock.lock()
+        try {
+            System.setProperty("silk.databasePath", dbFile.absolutePath)
+            System.setProperty("silk.chatHistoryDir", chatHistoryDir.absolutePath)
+            System.setProperty("silk.userTodoBaseDir", userTodoDir.absolutePath)
+            System.setProperty("silk.kbDir", knowledgeBaseDir.absolutePath)
+            System.setProperty("silk.workflowDir", workflowDir.absolutePath)
 
-        val database = Database.connect(
-            url = "jdbc:sqlite:${dbFile.absolutePath}",
-            driver = "org.sqlite.JDBC"
-        )
-        transaction(database) {
-            SchemaUtils.create(
-                Users,
-                Groups,
-                GroupMembers,
-                Contacts,
-                ContactRequests,
-                UserSettingsTable,
-                CcConnectTokens,
-                RefreshTokensTable,
-                AgentDevices,
-                AgentDeviceRevocationTombstones,
-                AgentInstances,
-                AgentBindings,
-                AgentBindingAuditEvents,
-                AgentPairingRequests,
-                AgentConnectionChallenges,
-                AgentSecurityEvents,
+            val database = Database.connect(
+                url = "jdbc:sqlite:${dbFile.absolutePath}",
+                driver = "org.sqlite.JDBC"
             )
+            transaction(database) {
+                SchemaUtils.create(
+                    Users,
+                    Groups,
+                    GroupMembers,
+                    Contacts,
+                    ContactRequests,
+                    UserSettingsTable,
+                    CcConnectTokens,
+                    RefreshTokensTable,
+                    AgentDevices,
+                    AgentDeviceRevocationTombstones,
+                    AgentInstances,
+                    AgentBindings,
+                    AgentBindingAuditEvents,
+                    AgentPairingRequests,
+                    AgentConnectionChallenges,
+                    AgentSecurityEvents,
+                )
+            }
+        } catch (error: Throwable) {
+            lock.unlock()
+            throw error
         }
     }
 
@@ -70,5 +78,10 @@ internal class TestWorkspace : AutoCloseable {
         System.clearProperty("silk.kbDir")
         System.clearProperty("silk.workflowDir")
         rootDir.deleteRecursively()
+        lock.unlock()
+    }
+
+    private companion object {
+        val workspaceLock = ReentrantLock(true)
     }
 }
