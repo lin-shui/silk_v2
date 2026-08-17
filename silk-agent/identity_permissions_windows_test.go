@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,6 +34,7 @@ func TestSecretFileProtectedChecksWindowsDACL(t *testing.T) {
 		windowsFullAccessEntry(systemSID, windows.TRUSTEE_IS_WELL_KNOWN_GROUP),
 		windowsFullAccessEntry(administratorsSID, windows.TRUSTEE_IS_GROUP),
 	}
+	setWindowsTestOwner(t, path)
 	setWindowsTestDACL(t, path, privateEntries)
 	info, err := os.Stat(path)
 	if err != nil {
@@ -85,6 +87,7 @@ func TestProtectPrivateDirectoryReplacesInheritedBroadWindowsDACL(t *testing.T) 
 		t.Fatal(err)
 	}
 	if !secretFileProtected(child, info) {
+		t.Logf("child ACL: %s", describeWindowsACL(child))
 		t.Fatal("expected child files to inherit the private directory DACL")
 	}
 }
@@ -177,6 +180,21 @@ func setWindowsTestDACL(t *testing.T, path string, entries []windows.EXPLICIT_AC
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		acl,
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setWindowsTestOwner(t *testing.T, path string) {
+	t.Helper()
 	tokenUser, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
@@ -184,12 +202,36 @@ func setWindowsTestDACL(t *testing.T, path string, entries []windows.EXPLICIT_AC
 	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
-		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		windows.OWNER_SECURITY_INFORMATION,
 		tokenUser.User.Sid,
 		nil,
-		acl,
+		nil,
 		nil,
 	); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func describeWindowsACL(path string) string {
+	descriptor, err := windows.GetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		return fmt.Sprintf("read security descriptor: %v", err)
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil {
+		return fmt.Sprintf("read owner: %v", err)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return fmt.Sprintf("read DACL: %v", err)
+	}
+	entries, err := readWindowsACLEntries(dacl)
+	if err != nil {
+		return fmt.Sprintf("read entries: owner=%v error=%v", owner, err)
+	}
+	return fmt.Sprintf("owner=%v entries=%+v", owner, entries)
 }
