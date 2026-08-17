@@ -24,6 +24,11 @@ func protectPrivateDirectory(path string) error {
 	return nil
 }
 
+func protectPrivateFile(path string) error {
+	_ = path
+	return nil
+}
+
 func secretFileProtected(path string, info os.FileInfo) bool {
 	_ = path
 	return info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0

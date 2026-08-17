@@ -82,6 +82,9 @@ func TestProtectPrivateDirectoryReplacesInheritedBroadWindowsDACL(t *testing.T) 
 	if err := os.WriteFile(child, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := protectPrivateFile(child); err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Stat(child)
 	if err != nil {
 		t.Fatal(err)

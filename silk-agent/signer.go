@@ -172,6 +172,9 @@ func writePrivateKeyAtomically(path string, key ed25519.PrivateKey) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close device key: %w", err)
 	}
+	if err := protectPrivateFile(temporaryPath); err != nil {
+		return err
+	}
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("install device key: %w", err)
 	}

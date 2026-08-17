@@ -12,7 +12,48 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-var getExplicitEntriesFromACL = windows.NewLazySystemDLL("advapi32.dll").NewProc("GetExplicitEntriesFromAclW")
+var getAceFromACL = windows.NewLazySystemDLL("advapi32.dll").NewProc("GetAce")
+
+const (
+	accessAllowedAceType = 0x00
+	accessDeniedAceType  = 0x01
+)
+
+type windowsACLHeader struct {
+	aclRevision byte
+	sbz1        byte
+	aclSize     uint16
+	aceCount    uint16
+	sbz2        uint16
+}
+
+type windowsACEHeader struct {
+	aceType  byte
+	aceFlags byte
+	aceSize  uint16
+}
+
+func protectPrivateFile(path string) error {
+	tokenUser, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return fmt.Errorf("resolve current Windows user SID: %w", err)
+	}
+	if tokenUser.User.Sid == nil || !tokenUser.User.Sid.IsValid() {
+		return fmt.Errorf("resolve current Windows user SID: invalid SID")
+	}
+	if err := windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+		tokenUser.User.Sid,
+		nil,
+		nil,
+		nil,
+	); err != nil {
+		return fmt.Errorf("transfer protected file ownership to the current Windows user: %w", err)
+	}
+	return nil
+}
 
 func protectPrivateDirectory(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
@@ -151,43 +192,44 @@ func windowsPathACLIsPrivate(path string) bool {
 }
 
 func readWindowsACLEntries(dacl *windows.ACL) ([]windowsACLEntry, error) {
-	var count uint32
-	var explicitEntries *windows.EXPLICIT_ACCESS
-	result, _, _ := getExplicitEntriesFromACL.Call(
-		uintptr(unsafe.Pointer(dacl)),
-		uintptr(unsafe.Pointer(&count)),
-		uintptr(unsafe.Pointer(&explicitEntries)),
-	)
-	if result != 0 {
-		return nil, syscall.Errno(result)
+	if dacl == nil {
+		return nil, syscall.EINVAL
 	}
-	if explicitEntries == nil {
-		return []windowsACLEntry{}, nil
-	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(explicitEntries)))
-
-	resultEntries := make([]windowsACLEntry, 0, count)
-	for _, entry := range unsafe.Slice(explicitEntries, count) {
-		if entry.AccessPermissions == 0 {
-			continue
+	header := (*windowsACLHeader)(unsafe.Pointer(dacl))
+	resultEntries := make([]windowsACLEntry, 0, header.aceCount)
+	for index := uint16(0); index < header.aceCount; index++ {
+		var ace uintptr
+		result, _, _ := getAceFromACL.Call(
+			uintptr(unsafe.Pointer(dacl)),
+			uintptr(index),
+			uintptr(unsafe.Pointer(&ace)),
+		)
+		if result == 0 || ace == 0 {
+			return nil, syscall.EINVAL
+		}
+		acePointer := unsafe.Pointer(ace)
+		aceHeader := (*windowsACEHeader)(acePointer)
+		if aceHeader.aceSize < 8 {
+			return nil, syscall.EINVAL
 		}
 		allowsAccess := false
-		switch entry.AccessMode {
-		case windows.GRANT_ACCESS, windows.SET_ACCESS:
+		switch aceHeader.aceType {
+		case accessAllowedAceType:
 			allowsAccess = true
-		case windows.DENY_ACCESS:
+		case accessDeniedAceType:
 		default:
 			return nil, syscall.EINVAL
 		}
-		sid, ok := windowsTrusteeSID(entry.Trustee)
-		if !ok {
+		permissions := *(*uint32)(unsafe.Add(acePointer, 4))
+		sid := (*windows.SID)(unsafe.Add(acePointer, 8))
+		if !sid.IsValid() {
 			return nil, syscall.EINVAL
 		}
 		resultEntries = append(resultEntries, windowsACLEntry{
 			SID:               sid.String(),
-			AccessPermissions: uint32(entry.AccessPermissions),
+			AccessPermissions: permissions,
 			AllowsAccess:      allowsAccess,
-			InheritOnly:       entry.Inheritance&windows.INHERIT_ONLY != 0,
+			InheritOnly:       aceHeader.aceFlags&windows.INHERIT_ONLY_ACE != 0,
 		})
 	}
 	return resultEntries, nil
@@ -225,23 +267,4 @@ func windowsExecutablePathIsTrusted(path string) bool {
 		}
 	}
 	return true
-}
-
-func windowsTrusteeSID(trustee windows.TRUSTEE) (*windows.SID, bool) {
-	if trustee.MultipleTrustee != nil || trustee.MultipleTrusteeOperation != windows.NO_MULTIPLE_TRUSTEE {
-		return nil, false
-	}
-	var sid *windows.SID
-	switch trustee.TrusteeForm {
-	case windows.TRUSTEE_IS_SID:
-		sid = *(**windows.SID)(unsafe.Pointer(&trustee.TrusteeValue))
-	case windows.TRUSTEE_IS_OBJECTS_AND_SID:
-		objects := *(**windows.OBJECTS_AND_SID)(unsafe.Pointer(&trustee.TrusteeValue))
-		if objects != nil {
-			sid = objects.Sid
-		}
-	default:
-		return nil, false
-	}
-	return sid, sid != nil && sid.IsValid()
 }

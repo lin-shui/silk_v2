@@ -353,6 +353,9 @@ func writeNewProtectedFile(path string, contents []byte) error {
 	if err := file.Chmod(0o600); err != nil {
 		return err
 	}
+	if err := protectPrivateFile(absolute); err != nil {
+		return err
+	}
 	if _, err := file.Write(contents); err != nil {
 		return err
 	}

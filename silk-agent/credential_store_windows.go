@@ -130,5 +130,8 @@ func writeCredentialBlob(path string, contents []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
+	if err := protectPrivateFile(temporaryPath); err != nil {
+		return err
+	}
 	return os.Rename(temporaryPath, path)
 }
