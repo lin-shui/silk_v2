@@ -58,6 +58,7 @@
 
 - `routes/FileRoutes.kt`:
   - `/api/files/upload`
+  - 上传后仅图片进入异步 Vision 路径；普通文件只进入文件预处理与 `FILE` 消息路径
   - `/api/files/download/{sessionId}/{fileId}`
   - `/api/files/list/{sessionId}`
   - `/api/files/download-apk`
