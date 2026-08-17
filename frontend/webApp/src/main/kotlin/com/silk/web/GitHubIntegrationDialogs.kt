@@ -13,6 +13,8 @@ import com.silk.web.workspace.IssueToWorkspaceResponse
 import com.silk.web.workspace.WorkspaceApiException
 import com.silk.web.workspace.WorkspaceDto
 import com.silk.web.workspace.createWorkspaceFromGithubIssue
+import com.silk.web.workspace.fetchRecentWorkingDir
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.web.attributes.InputType
 import org.jetbrains.compose.web.css.AlignItems
@@ -232,21 +234,68 @@ internal fun GithubIssueWorkspaceDialog(
     userId: String,
     roomId: String,
     issueNumber: Int,
-    agents: List<AgentInfo>,
     initialWorkingDir: String,
+    preferredAgentInstanceId: String,
     onDismiss: () -> Unit,
     onCreated: (IssueToWorkspaceResponse) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var name by remember(issueNumber) { mutableStateOf("Issue #$issueNumber") }
     var workingDir by remember(issueNumber) { mutableStateOf(initialWorkingDir) }
-    var agentType by remember(agents) { mutableStateOf(agents.firstOrNull { it.connected }?.agentType.orEmpty()) }
+    var devices by remember(issueNumber) { mutableStateOf<List<ManagedDeviceDto>>(emptyList()) }
+    var agents by remember(issueNumber) { mutableStateOf<List<ManagedAgentDto>>(emptyList()) }
+    var selectedAgentId by remember(issueNumber) { mutableStateOf("") }
+    var loadingAgents by remember(issueNumber) { mutableStateOf(true) }
     var visibility by remember { mutableStateOf("PRIVATE") }
     var saving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showFolderPicker by remember { mutableStateOf(false) }
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustBridgeId by remember { mutableStateOf<String?>(null) }
+    var rememberedDirAgentId by remember(issueNumber) { mutableStateOf<String?>(null) }
+    val activeAgents = agents.filter { it.status == ManagedAgentStatus.ACTIVE }
+    val selectedAgent = activeAgents.firstOrNull { it.agentInstanceId == selectedAgentId }
+    val agentType = selectedAgent?.agentType.orEmpty()
+    val deviceNames = devices.associate { it.deviceId to it.displayName }
+
+    LaunchedEffect(issueNumber) {
+        loadingAgents = true
+        try {
+            devices = ApiClient.getManagedDevices()
+            agents = ApiClient.getManagedAgents()
+            val preferred = agents.firstOrNull {
+                it.agentInstanceId == preferredAgentInstanceId &&
+                    it.status == ManagedAgentStatus.ACTIVE && it.connected
+            }
+            val selected = preferred ?: agents.firstOrNull {
+                it.status == ManagedAgentStatus.ACTIVE && it.connected
+            }
+            selectedAgentId = selected?.agentInstanceId.orEmpty()
+        } catch (error: Exception) {
+            errorMessage = error.message ?: "加载 Agent 失败"
+        } finally {
+            loadingAgents = false
+        }
+    }
+
+    LaunchedEffect(issueNumber, selectedAgentId) {
+        val agentInstanceId = selectedAgentId
+        rememberedDirAgentId = null
+        if (agentInstanceId.isBlank()) return@LaunchedEffect
+        val token = JwtManager.getAccessToken() ?: return@LaunchedEffect
+        val recentDir = try {
+            fetchRecentWorkingDir(roomId, token, agentInstanceId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            ""
+        }
+        if (selectedAgentId == agentInstanceId) {
+            val fallback = initialWorkingDir.takeIf { agentInstanceId == preferredAgentInstanceId }.orEmpty()
+            workingDir = recentDir.ifBlank { fallback }
+            rememberedDirAgentId = agentInstanceId.takeIf { recentDir.isNotBlank() }
+        }
+    }
 
     suspend fun create() {
         val token = JwtManager.getAccessToken()
@@ -254,7 +303,7 @@ internal fun GithubIssueWorkspaceDialog(
             errorMessage = "登录状态已失效"
             return
         }
-        if (workingDir.isBlank() || agentType.isBlank()) {
+        if (workingDir.isBlank() || selectedAgent == null) {
             errorMessage = "请填写 Agent 和工作目录"
             return
         }
@@ -267,6 +316,7 @@ internal fun GithubIssueWorkspaceDialog(
                 issueNumber = issueNumber,
                 workingDir = workingDir.trim(),
                 agentType = agentType,
+                agentInstanceId = selectedAgent.agentInstanceId,
                 visibility = visibility,
                 name = name.trim().ifBlank { null },
             )
@@ -290,7 +340,7 @@ internal fun GithubIssueWorkspaceDialog(
             errorMessage = "请选择工作目录"
             return
         }
-        when (val trust = ApiClient.checkTrustedDir(userId, workingDir.trim())) {
+        when (val trust = ApiClient.checkTrustedDir(userId, workingDir.trim(), selectedAgentId)) {
             is ApiClient.TrustCheckResult.Trusted -> create()
             is ApiClient.TrustCheckResult.NotTrusted -> {
                 trustBridgeId = trust.bridgeId
@@ -327,33 +377,55 @@ internal fun GithubIssueWorkspaceDialog(
             WorkspaceFormLabel("Agent")
             Select({
                 style { workspaceFormInputStyle() }
-                onChange { agentType = it.value ?: "" }
+                onChange {
+                    selectedAgentId = it.value ?: ""
+                    workingDir = ""
+                    rememberedDirAgentId = null
+                    errorMessage = null
+                }
             }) {
-                if (agents.isEmpty()) Option("") { Text("没有可用 Agent") }
-                agents.forEach { agent ->
-                    Option(agent.agentType, attrs = {
+                if (activeAgents.none { it.connected }) {
+                    Option("") { Text(if (loadingAgents) "正在加载 Agent…" else "没有已连接的 Agent") }
+                }
+                activeAgents.forEach { agent ->
+                    Option(agent.agentInstanceId, attrs = {
                         if (!agent.connected) attr("disabled", "")
-                        if (agent.agentType == agentType) attr("selected", "")
-                    }) { Text("${agent.displayName}${if (agent.connected) "" else "（离线）"}") }
+                        if (agent.agentInstanceId == selectedAgentId) attr("selected", "")
+                    }) {
+                        val deviceName = deviceNames[agent.deviceId] ?: "未知设备"
+                        val state = if (agent.connected) "在线" else "离线"
+                        Text("${agent.displayName} · $deviceName · ${agent.agentType} · $state")
+                    }
                 }
             }
             WorkspaceFormLabel("工作目录")
             Div({ style { display(DisplayStyle.Flex); property("gap", "8px") } }) {
                 Input(InputType.Text) {
                     value(workingDir)
-                    onInput { workingDir = it.value }
+                    onInput {
+                        workingDir = it.value
+                        rememberedDirAgentId = null
+                    }
                     attr("placeholder", "工作目录路径")
                     style { workspaceFormInputStyle(flex = true) }
                 }
                 Button({
                     attr("title", "选择工作目录")
+                    if (selectedAgent == null) attr("disabled", "")
                     style {
                         width(40.px); height(40.px); padding(0.px)
                         borderRadius(6.px); border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                        backgroundColor(Color.white); color(Color(SilkColors.primary)); property("cursor", "pointer")
+                        backgroundColor(Color.white); color(Color(SilkColors.primary))
+                        property("cursor", if (selectedAgent == null) "default" else "pointer")
+                        if (selectedAgent == null) property("opacity", "0.55")
                     }
-                    onClick { showFolderPicker = true }
+                    onClick { if (selectedAgent != null) showFolderPicker = true }
                 }) { Text("📂") }
+            }
+            if (rememberedDirAgentId == selectedAgentId && workingDir.isNotBlank()) {
+                Div({ style { marginTop(6.px); fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
+                    Text("已自动填入此工作群组在该 Agent 上最近使用的目录")
+                }
             }
             Div({
                 style {
@@ -399,6 +471,7 @@ internal fun GithubIssueWorkspaceDialog(
     if (showFolderPicker) {
         FolderPickerDialog(
             userId = userId,
+            agentInstanceId = selectedAgentId,
             zIndex = 2400,
             initialPath = workingDir.ifBlank { null },
             onDismiss = { showFolderPicker = false },
@@ -416,7 +489,7 @@ internal fun GithubIssueWorkspaceDialog(
             onTrust = {
                 scope.launch {
                     saving = true
-                    val added = ApiClient.addTrustedDir(userId, workingDir.trim())
+                    val added = ApiClient.addTrustedDir(userId, workingDir.trim(), selectedAgentId)
                     saving = false
                     if (!added) {
                         errorMessage = "添加信任记录失败"

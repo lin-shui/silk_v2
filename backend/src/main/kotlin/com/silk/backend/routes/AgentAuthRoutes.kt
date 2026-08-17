@@ -45,6 +45,7 @@ import com.silk.backend.agents.auth.CreateAgentPairingRequest
 import com.silk.backend.agents.auth.CreateAgentPairingResponse
 import com.silk.backend.agents.auth.CreateTrustedDeviceAgentRequest
 import com.silk.backend.agents.auth.UpdateAgentBindingRequest
+import com.silk.backend.agents.auth.UpdateAgentResourceNameRequest
 import com.silk.backend.agents.auth.DeviceEnrollmentStatus
 import com.silk.backend.agents.auth.AgentInstanceStatus
 import com.silk.backend.agents.auth.PairingDeviceProofChallenge
@@ -512,6 +513,26 @@ fun Route.agentAuthRoutes() {
             call.respond(AgentDeviceListResponse(devices))
         }
 
+        put("/api/agent-devices/{deviceId}") {
+            val userId = call.principal<UserIdPrincipal>()?.name
+                ?: return@put call.respondAgentError(io.ktor.http.HttpStatusCode.Unauthorized, "UNAUTHENTICATED", "Login required")
+            val deviceId = call.parameters["deviceId"].orEmpty()
+            val request = runCatching { call.receive<UpdateAgentResourceNameRequest>() }.getOrElse {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_REQUEST", "Invalid device update")
+                return@put
+            }
+            val displayName = request.displayName.trim()
+            if (displayName.isBlank() || displayName.length > 256 || !displayName.isSafeMetadata()) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_DISPLAY_NAME", "Device name is invalid")
+                return@put
+            }
+            if (!AgentAuthRepository.renameDevice(userId, deviceId, displayName)) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.NotFound, "DEVICE_NOT_FOUND", "Active device not found")
+                return@put
+            }
+            call.respond(AgentManagementActionResponse(true, "Device renamed"))
+        }
+
         delete("/api/agent-devices/{deviceId}") {
             val userId = call.principal<UserIdPrincipal>()?.name
                 ?: return@delete call.respondAgentError(io.ktor.http.HttpStatusCode.Unauthorized, "UNAUTHENTICATED", "Login required")
@@ -538,6 +559,26 @@ fun Route.agentAuthRoutes() {
                 )
             }
             call.respond(AgentInstanceListResponse(agents))
+        }
+
+        put("/api/agent-instances/{agentInstanceId}") {
+            val userId = call.principal<UserIdPrincipal>()?.name
+                ?: return@put call.respondAgentError(io.ktor.http.HttpStatusCode.Unauthorized, "UNAUTHENTICATED", "Login required")
+            val agentInstanceId = call.parameters["agentInstanceId"].orEmpty()
+            val request = runCatching { call.receive<UpdateAgentResourceNameRequest>() }.getOrElse {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_REQUEST", "Invalid Agent update")
+                return@put
+            }
+            val displayName = request.displayName.trim()
+            if (displayName.isBlank() || displayName.length > 256 || !displayName.isSafeMetadata()) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_DISPLAY_NAME", "Agent name is invalid")
+                return@put
+            }
+            if (!AgentAuthRepository.renameAgent(userId, agentInstanceId, displayName)) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.NotFound, "AGENT_NOT_FOUND", "Active Agent not found")
+                return@put
+            }
+            call.respond(AgentManagementActionResponse(true, "Agent renamed"))
         }
 
         get("/api/agent-security-events") {

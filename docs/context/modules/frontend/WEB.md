@@ -17,10 +17,13 @@
 - `SettingsScene.kt`
 - `SilkChatStyles.kt` -- claudian 风格 CSS 样式注入（消息卡片、头像、hover 操作栏、动画）
 - `ApiClient.kt` 提供 Workflow Room GitHub binding 的脱敏状态读取、绑定和解绑 API；PAT 只作为请求字段，不进入 Web 状态模型，换绑时可留空复用服务端已有密文。Workflow Team Channel 头部提供 GitHub 集成面板，Owner 可绑定/换绑/解绑，成员只读查看仓库、接收方式（定时同步/Webhook）、事件范围、最近同步和可恢复错误。`workspace/WorkspaceApiClient.kt` 提供 Issue-to-Workspace 请求合同和可选 `linkedGithubRef` DTO 字段；GitHub 卡片链接会打开 GitHub，Issue 的“开始开发”会进入工作区创建、目录信任和 Issue 摘要展示流程，摘要以 `SYSTEM` 消息发送且不触发 Agent
+- Room/Team Channel 头部提供“管理 Agent”入口；Workspace 头部由 Owner 管理该 Workspace 的 Agent。`AgentBindingManagementDialog.kt` 复用 `/api/agent-bindings` 合同，按具体 `agentInstanceId` 展示 Agent 类型、设备和在线状态，支持添加、编辑、审批、移除、Room 唯一 mention 与权限选择。Workspace 的当前 Agent 也保存具体实例，同类型 Agent 位于不同设备时不会再按类型猜测；`/device` 继续负责设备/Agent 库存、安全撤销与全局使用范围总览
 
 ## Current Shape
 
 - Compose for Web
+- 新建 Workspace 与 GitHub Issue “开始开发”会从当前用户所有 ACTIVE Agent 实例中选择具体 `agentInstanceId`；同类型多设备全部列出，显示自定义 Agent 名、设备名、类型与在线状态，离线实例可见但不可选。目录选择和信任请求固定到所选实例；新建时会自动预填当前用户在同一工作群组、同一 Agent 实例上最近成功使用的目录，切换实例时改读该实例自己的记忆，避免不同设备路径串用
+- `/device` 的 ACTIVE 设备和 Agent 卡片支持所有者重命名；名称更新不影响设备密钥、Agent 类型或 Binding，并同步用于 Binding、Workspace 当前 Agent 与各实例选择项
 - 登录后是左侧 `NavRail` + 右侧内容区；联系人作为底部全局入口放在设置齿轮上方，退出登录统一放在设置页账户区
 - `/device` 是复用现有登录态的设备与外部 Agent 管理入口；无登录态先显示既有登录页，登录后回到配对页。`/device#code=ABCD-EFGH` 会把 fragment 中的短码保留在当前标签页、立即清理地址栏并在登录后自动预览；首次打开链接和已打开 `/device` 页面再次粘贴链接都会消费 `hashchange`，不需要用户再次复制短码。错误账号只能得到不泄露详情的提示并可切换账号，任何情况下仍需点击“批准连接”，不会因打开链接自动绑定。手工输入短码继续兼容。页面还支持设备和 Agent 列表/在线状态/撤销、Room/Workspace Binding 增删改、权限勾选及双主体审批；Agent 与 Binding 选择项同时展示设备名，同一 Agent 类型可在不同设备上作为独立实例选择。Room Binding 需要设置 Room 内唯一的提及词（如 `cc`、`cc2`），消息按该别名精确路由到所选实例；表单会在提交前检测同一 Room 的提及词冲突并给出下一个可用建议，服务端并发冲突也会在表单附近明确提示。Agent 主卡片只显示设备归属、类型、版本和连接状态，声明能力及该 Agent 的 Binding 权限按需在详情面板查看。Room 展示消息读写权限，Workspace 展示消息、文件、命令和工作区权限。开启 `WRITE_FILE` 或 `RUN_COMMAND` 会同时包含 `READ_FILE`，关闭 `READ_FILE` 会撤掉这两项；最终安全边界仍由服务端权限信封和 Adapter 强制执行。待审批项显示缺失的批准侧，并仅按服务端能力字段展示批准、拒绝、编辑或撤销操作。导航栏底部也提供同一入口
 - 主 Tab：

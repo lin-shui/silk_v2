@@ -66,6 +66,8 @@ data class CcStateResponse(
     val bridgeConnected: Boolean = false,
     /** 当前激活 agent 的 type（如 "claude-code"、"codex"）；未激活则为空字符串 */
     val agentType: String = "",
+    /** 当前激活的精确 Agent 实例；旧 Workspace 或未激活时为空字符串。 */
+    val agentInstanceId: String = "",
     /** 当前激活 agent 的显示名称（含 emoji）；未激活则为空字符串 */
     val agentDisplayName: String = "",
     /** 当前工具权限模式（INTERACTIVE / ACCEPT_EDITS / BYPASS）；空字符串表示默认 */

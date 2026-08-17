@@ -748,6 +748,15 @@ object ApiClient {
         agentRequest("DELETE", "/api/agent-devices/${encodeUri(deviceId)}")
     )
 
+    suspend fun renameManagedDevice(deviceId: String, displayName: String): AgentManagementActionResponse =
+        jsonParser.decodeFromString(
+            agentRequest(
+                "PUT",
+                "/api/agent-devices/${encodeUri(deviceId)}",
+                jsonParser.encodeToString(UpdateManagedResourceNameRequest(displayName)),
+            )
+        )
+
     suspend fun cleanupRevokedAgentHistory(): AgentRevocationCleanupResponse = jsonParser.decodeFromString(
         agentRequest("POST", "/api/agent-revocation-history/cleanup")
     )
@@ -759,6 +768,15 @@ object ApiClient {
     suspend fun revokeManagedAgent(agentInstanceId: String): AgentManagementActionResponse = jsonParser.decodeFromString(
         agentRequest("DELETE", "/api/agent-instances/${encodeUri(agentInstanceId)}")
     )
+
+    suspend fun renameManagedAgent(agentInstanceId: String, displayName: String): AgentManagementActionResponse =
+        jsonParser.decodeFromString(
+            agentRequest(
+                "PUT",
+                "/api/agent-instances/${encodeUri(agentInstanceId)}",
+                jsonParser.encodeToString(UpdateManagedResourceNameRequest(displayName)),
+            )
+        )
 
     suspend fun getManagedBindings(): List<ManagedBindingDto> = jsonParser
         .decodeFromString<ManagedBindingListResponse>(agentRequest("GET", "/api/agent-bindings"))
@@ -1174,6 +1192,7 @@ object ApiClient {
         path: String? = null,
         showHidden: Boolean = false,
         workspaceId: String? = null,
+        agentInstanceId: String? = null,
     ): DirListingResponse {
         return try {
             val query = buildString {
@@ -1185,6 +1204,10 @@ object ApiClient {
                 if (!workspaceId.isNullOrBlank()) {
                     append("&workspaceId=")
                     append(encodeUri(workspaceId))
+                }
+                if (!agentInstanceId.isNullOrBlank()) {
+                    append("&agentInstanceId=")
+                    append(encodeUri(agentInstanceId))
                 }
             }
             val response = get("/users/$userId/cc-fs/list$query")
@@ -1220,6 +1243,7 @@ object ApiClient {
         userId: String,
         workspaceId: String,
         activeAgent: String? = null,
+        activeAgentInstanceId: String? = null,
         permissionMode: String? = null,
     ): CcStateResponse {
         return try {
@@ -1227,6 +1251,9 @@ object ApiClient {
                 put("workspaceId", kotlinx.serialization.json.JsonPrimitive(workspaceId))
                 if (!activeAgent.isNullOrBlank()) {
                     put("activeAgent", kotlinx.serialization.json.JsonPrimitive(activeAgent))
+                }
+                if (!activeAgentInstanceId.isNullOrBlank()) {
+                    put("activeAgentInstanceId", kotlinx.serialization.json.JsonPrimitive(activeAgentInstanceId))
                 }
                 if (!permissionMode.isNullOrBlank()) {
                     put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
@@ -1655,9 +1682,12 @@ object ApiClient {
         data class Error(val message: String) : TrustCheckResult()
     }
 
-    suspend fun checkTrustedDir(userId: String, path: String): TrustCheckResult {
+    suspend fun checkTrustedDir(userId: String, path: String, agentInstanceId: String? = null): TrustCheckResult {
         return try {
-            val query = "?path=${encodeUri(path)}"
+            val query = buildString {
+                append("?path=${encodeUri(path)}")
+                if (!agentInstanceId.isNullOrBlank()) append("&agentInstanceId=${encodeUri(agentInstanceId)}")
+            }
             val response = get("/users/$userId/trusted-dirs/check$query")
             val parsed = jsonParser.decodeFromString<TrustedDirCheckResponse>(response)
             when {
@@ -1674,11 +1704,11 @@ object ApiClient {
         }
     }
 
-    suspend fun addTrustedDir(userId: String, path: String): Boolean {
+    suspend fun addTrustedDir(userId: String, path: String, agentInstanceId: String? = null): Boolean {
         return try {
-            val body = kotlinx.serialization.json.buildJsonObject {
-                put("path", kotlinx.serialization.json.JsonPrimitive(path))
-            }.toString()
+            val body = jsonParser.encodeToString(
+                com.silk.shared.models.AddTrustRequest(path, agentInstanceId.orEmpty())
+            )
             val response = post("/users/$userId/trusted-dirs", body)
             val json = jsonParser.parseToJsonElement(response).jsonObject
             json["success"]?.jsonPrimitive?.booleanOrNull ?: false

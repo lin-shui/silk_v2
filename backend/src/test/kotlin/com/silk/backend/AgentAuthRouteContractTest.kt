@@ -38,6 +38,7 @@ import com.silk.backend.agents.auth.CreateAgentBindingRequest
 import com.silk.backend.agents.auth.CreateAgentPairingResponse
 import com.silk.backend.agents.auth.CreateTrustedDeviceAgentRequest
 import com.silk.backend.agents.auth.UpdateAgentBindingRequest
+import com.silk.backend.agents.auth.UpdateAgentResourceNameRequest
 import com.silk.backend.agents.auth.DeviceEnrollmentStatus
 import com.silk.backend.auth.JwtProvider
 import com.silk.backend.database.CcSettingsResponse
@@ -255,6 +256,38 @@ class AgentAuthRouteContractTest {
                         .decode<AgentInstanceListResponse>()
                     assertEquals(listOf(completed.agentInstanceId), agents.agents.map { it.agentInstanceId })
                     assertEquals(AgentInstanceStatus.ACTIVE, agents.agents.single().status)
+
+                    val otherCannotRename = client.put("/api/agent-devices/${completed.deviceId}") {
+                        bearer(otherAccessToken)
+                        contentType(ContentType.Application.Json)
+                        setBody(json.encodeToString(UpdateAgentResourceNameRequest("Other device")))
+                    }
+                    assertEquals(HttpStatusCode.NotFound, otherCannotRename.status)
+                    val blankAgentName = client.put("/api/agent-instances/${completed.agentInstanceId}") {
+                        bearer(accessToken)
+                        contentType(ContentType.Application.Json)
+                        setBody(json.encodeToString(UpdateAgentResourceNameRequest("  ")))
+                    }
+                    assertEquals(HttpStatusCode.BadRequest, blankAgentName.status)
+                    val renameDevice = client.put("/api/agent-devices/${completed.deviceId}") {
+                        bearer(accessToken)
+                        contentType(ContentType.Application.Json)
+                        setBody(json.encodeToString(UpdateAgentResourceNameRequest("Development laptop")))
+                    }
+                    assertEquals(HttpStatusCode.OK, renameDevice.status)
+                    val renameAgent = client.put("/api/agent-instances/${completed.agentInstanceId}") {
+                        bearer(accessToken)
+                        contentType(ContentType.Application.Json)
+                        setBody(json.encodeToString(UpdateAgentResourceNameRequest("Codex on laptop")))
+                    }
+                    assertEquals(HttpStatusCode.OK, renameAgent.status)
+                    val renamedDevices = client.get("/api/agent-devices") { bearer(accessToken) }
+                        .decode<AgentDeviceListResponse>()
+                    val renamedAgents = client.get("/api/agent-instances") { bearer(accessToken) }
+                        .decode<AgentInstanceListResponse>()
+                    assertEquals("Development laptop", renamedDevices.devices.single().displayName)
+                    assertEquals("Codex on laptop", renamedAgents.agents.single().displayName)
+
                     val bindings = client.get("/api/agent-bindings") { bearer(accessToken) }
                         .decode<AgentBindingListResponse>()
                     assertTrue(bindings.bindings.isEmpty())

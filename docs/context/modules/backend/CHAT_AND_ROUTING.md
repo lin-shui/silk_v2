@@ -45,6 +45,8 @@
 - `/users/{userId}/cc-state/{groupId}`
 - `/users/{userId}/cc-fs/list` (GET, query: workspaceId/path/showHidden；指定 Workspace 时，设备签名 Agent 要求目标的 `READ_FILE` Binding 权限与能力；无 workspaceId 的调用只用于已登录 owner 在创建 Workspace 前选择本地目录，不携带 Silk 目标数据)
 - `/users/{userId}/cc-fs/cd` (POST, JSON body: workspaceId/path；**rejects untrusted directories**，设备签名 Agent 另要求 `WRITE_WORKSPACE` Binding 权限与能力)
+- `/api/rooms/{roomId}/workspaces/recent-working-dir?agentInstanceId=...` (GET, 当前用户必须是工作群组成员且 Agent 实例属于当前用户；返回该群组/精确 Agent 实例最近一次成功应用的目录，供新建 Workspace 预填)
+- `/users/{userId}/cc-settings/update` 的 Agent 切换可同时提交 `activeAgent` 与 `activeAgentInstanceId`；实例必须属于 Workspace Owner 且已有该 Workspace 的 ACTIVE Binding。Workspace 消息、目录与代码审查随后均使用这个精确实例授权和路由；旧 Workspace 的空实例字段继续走唯一 Binding 的兼容解析
 - `/users/{userId}/trusted-dirs/check` (GET, query: path)
 - `/users/{userId}/trusted-dirs` (POST, DELETE, GET)
 - `/chat` WebSocket

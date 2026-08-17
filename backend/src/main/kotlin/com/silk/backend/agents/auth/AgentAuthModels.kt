@@ -240,6 +240,11 @@ data class AgentInstanceDto(
 )
 
 @Serializable
+data class UpdateAgentResourceNameRequest(
+    val displayName: String,
+)
+
+@Serializable
 data class AgentBindingDto(
     val bindingId: String,
     val agentInstanceId: String,

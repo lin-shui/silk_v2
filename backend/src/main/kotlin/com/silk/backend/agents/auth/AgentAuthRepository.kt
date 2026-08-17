@@ -502,6 +502,16 @@ internal object AgentAuthRepository {
             .sortedByDescending { it.createdAtEpochMs }
     }
 
+    fun renameDevice(userId: String, deviceId: String, newDisplayName: String): Boolean = transaction {
+        AgentDevices.update({
+            (AgentDevices.id eq deviceId) and
+                (AgentDevices.userId eq userId) and
+                (AgentDevices.status eq DeviceEnrollmentStatus.ACTIVE.name)
+        }) { row ->
+            row[displayName] = newDisplayName
+        } == 1
+    }
+
     fun configuredRevocationRetentionDays(): Long = configuredRevocationRetentionDaysValue()
 
     /**
@@ -607,6 +617,16 @@ internal object AgentAuthRepository {
         AgentInstances.select { AgentInstances.userId eq userId }
             .map { it.toAgentDto() }
             .sortedByDescending { it.createdAtEpochMs }
+    }
+
+    fun renameAgent(userId: String, agentInstanceId: String, newDisplayName: String): Boolean = transaction {
+        AgentInstances.update({
+            (AgentInstances.id eq agentInstanceId) and
+                (AgentInstances.userId eq userId) and
+                (AgentInstances.status eq AgentInstanceStatus.ACTIVE.name)
+        }) { row ->
+            row[displayName] = newDisplayName
+        } == 1
     }
 
     fun listBindings(): List<AgentBindingDto> = transaction {

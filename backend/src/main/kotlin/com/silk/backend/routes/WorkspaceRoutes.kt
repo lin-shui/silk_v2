@@ -3,6 +3,13 @@ package com.silk.backend.routes
 import com.silk.backend.ChatHistoryManager
 import com.silk.backend.MessageScope
 import com.silk.backend.agents.acp.AcpRegistry
+import com.silk.backend.agents.auth.AgentAuthRepository
+import com.silk.backend.agents.auth.AgentBindingMessageScope
+import com.silk.backend.agents.auth.AgentBindingTargetType
+import com.silk.backend.agents.auth.AgentInstanceStatus
+import com.silk.backend.agents.auth.AgentPermission
+import com.silk.backend.agents.auth.AgentTriggerPolicy
+import com.silk.backend.agents.auth.CreateAgentBindingRequest
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.UserRepository
@@ -29,6 +36,7 @@ data class CreateWorkspaceRequest(
     val name: String,
     val workingDir: String = "",
     val agentType: String = "claude-code",
+    val agentInstanceId: String = "",
     val visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
 )
 
@@ -58,6 +66,7 @@ data class WorkspaceDto(
     val name: String,
     val workingDir: String = "",
     val agentType: String = "claude-code",
+    val activeAgentInstanceId: String = "",
     val visibility: WorkspaceVisibility,
     val copilots: List<String> = emptyList(),
     val role: String,
@@ -77,12 +86,20 @@ data class WorkspaceErrorResponse(
     val bridgeId: String? = null,
 )
 
+@Serializable
+data class RecentWorkingDirResponse(
+    val workingDir: String = "",
+)
+
 private fun PersonalWorkspace.activityDto(): WorkspaceActivityDto {
     val runtimeAgentType = activeAgent.ifBlank { agentType }
     val runtime = AgentRuntime.snapshotState(ownerId, workspaceId)
     val state = when {
         lifecycleState == WorkspaceLifecycleState.ARCHIVED -> WorkspaceActivityState.IDLE
-        !AcpRegistry.isConnected(ownerId, runtimeAgentType) -> WorkspaceActivityState.OFFLINE
+        activeAgentInstanceId.isNotBlank() &&
+            !AcpRegistry.isConnectedInstance(activeAgentInstanceId) -> WorkspaceActivityState.OFFLINE
+        activeAgentInstanceId.isBlank() &&
+            !AcpRegistry.isConnected(ownerId, runtimeAgentType) -> WorkspaceActivityState.OFFLINE
         AgentRuntime.snapshotPendingQuestion(ownerId, workspaceId) != null -> WorkspaceActivityState.WAITING
         runtime?.running == true -> WorkspaceActivityState.RUNNING
         else -> WorkspaceActivityState.IDLE
@@ -104,6 +121,7 @@ internal fun PersonalWorkspace.toDto(callerId: String): WorkspaceDto {
         name = name,
         workingDir = workingDir.takeIf { canInspectRuntime }.orEmpty(),
         agentType = activeAgent.ifBlank { agentType },
+        activeAgentInstanceId = activeAgentInstanceId.takeIf { canInspectRuntime }.orEmpty(),
         visibility = visibility,
         copilots = copilots.takeIf { ownerId == callerId }.orEmpty(),
         role = when {
@@ -128,6 +146,7 @@ private fun PersonalWorkspace.toHistoricalDto(callerId: String): WorkspaceDto =
         name = lastSharedName?.takeIf { it.isNotBlank() } ?: name,
         workingDir = "",
         agentType = "",
+        activeAgentInstanceId = "",
         visibility = WorkspaceVisibility.PRIVATE,
         copilots = emptyList(),
         role = "OBSERVER",
@@ -158,6 +177,36 @@ fun Route.workspaceRoutes(
     isWorkflowRoom: (String) -> Boolean,
 ) {
     route("/api/rooms/{roomId}/workspaces") {
+        get("recent-working-dir") {
+            val userId = call.resolveAuthenticatedUserId()
+            if (userId == null) return@get call.respond(HttpStatusCode.Unauthorized)
+            val roomId = call.parameters["roomId"] ?: return@get call.respond(HttpStatusCode.BadRequest)
+            if (!isWorkflowRoom(roomId) || !GroupRepository.isUserInGroup(roomId, userId)) {
+                return@get call.respond(HttpStatusCode.NotFound)
+            }
+            val agentInstanceId = call.request.queryParameters["agentInstanceId"].orEmpty().trim()
+            if (agentInstanceId.isBlank()) {
+                return@get call.respond(
+                    HttpStatusCode.BadRequest,
+                    WorkspaceErrorResponse("AGENT_INSTANCE_REQUIRED", "Agent 实例必填"),
+                )
+            }
+            val agentExists = AgentAuthRepository.listAgents(userId).any {
+                it.agentInstanceId == agentInstanceId && it.status == AgentInstanceStatus.ACTIVE
+            }
+            if (!agentExists) {
+                return@get call.respond(
+                    HttpStatusCode.NotFound,
+                    WorkspaceErrorResponse("AGENT_NOT_FOUND", "所选 Agent 不存在或已失效"),
+                )
+            }
+            call.respond(
+                RecentWorkingDirResponse(
+                    workspaceManager.recentWorkingDir(roomId, userId, agentInstanceId).orEmpty(),
+                ),
+            )
+        }
+
         post {
             val userId = call.resolveAuthenticatedUserId()
             if (userId == null) return@post call.respond(HttpStatusCode.Unauthorized)
@@ -168,7 +217,20 @@ fun Route.workspaceRoutes(
             val req = call.receive<CreateWorkspaceRequest>()
             val name = req.name.trim()
             val workingDir = req.workingDir.trim()
-            val agentType = req.agentType.trim().replace('_', '-').ifBlank { "claude-code" }
+            val requestedAgentInstanceId = req.agentInstanceId.trim()
+            val selectedAgent = requestedAgentInstanceId.takeIf(String::isNotBlank)?.let { instanceId ->
+                AgentAuthRepository.listAgents(userId).firstOrNull {
+                    it.agentInstanceId == instanceId && it.status == AgentInstanceStatus.ACTIVE
+                }
+            }
+            if (requestedAgentInstanceId.isNotBlank() && selectedAgent == null) {
+                return@post call.respond(
+                    HttpStatusCode.NotFound,
+                    WorkspaceErrorResponse("AGENT_NOT_FOUND", "所选 Agent 不存在或已失效"),
+                )
+            }
+            val agentType = selectedAgent?.agentType
+                ?: req.agentType.trim().replace('_', '-').ifBlank { "claude-code" }
             if (name.isBlank()) return@post call.respond(HttpStatusCode.BadRequest)
             if (workingDir.isBlank()) {
                 return@post call.respond(
@@ -182,13 +244,22 @@ fun Route.workspaceRoutes(
                     WorkspaceErrorResponse("UNSUPPORTED_AGENT", "不支持的 Agent: $agentType"),
                 )
             }
-            if (!AcpRegistry.isConnected(userId, agentType)) {
+            val agentConnected = if (selectedAgent != null) {
+                AcpRegistry.isConnectedInstance(selectedAgent.agentInstanceId)
+            } else {
+                AcpRegistry.isConnected(userId, agentType)
+            }
+            if (!agentConnected) {
                 return@post call.respond(
                     HttpStatusCode.Conflict,
                     WorkspaceErrorResponse("BRIDGE_OFFLINE", "所选 Agent Bridge 未连接"),
                 )
             }
-            val bridgeId = AcpRegistry.getRemoteIp(userId, agentType)?.let { "ip:$it" }
+            val bridgeId = if (selectedAgent != null) {
+                AcpRegistry.getRemoteIpByInstance(selectedAgent.agentInstanceId)?.let { "ip:$it" }
+            } else {
+                AcpRegistry.getRemoteIp(userId, agentType)?.let { "ip:$it" }
+            }
             if (bridgeId == null || !trustedDirManager.isTrusted(userId, bridgeId, workingDir)) {
                 return@post call.respond(
                     HttpStatusCode.BadRequest,
@@ -206,10 +277,22 @@ fun Route.workspaceRoutes(
                 ownerId = userId,
                 name = name,
                 agentType = agentType,
+                activeAgentInstanceId = requestedAgentInstanceId,
                 visibility = req.visibility,
             )
-            AgentRuntime.autoActivateForWorkspace(userId, workspace.workspaceId, agentType)
-            when (val result = AgentRuntime.cdSync(userId, workspace.workspaceId, workingDir, agentType)) {
+            AgentRuntime.autoActivateForWorkspace(
+                userId,
+                workspace.workspaceId,
+                agentType,
+                requestedAgentInstanceId,
+            )
+            when (val result = AgentRuntime.cdSync(
+                userId,
+                workspace.workspaceId,
+                workingDir,
+                agentType,
+                requestedAgentInstanceId,
+            )) {
                 is AgentRuntime.CdResult.Err -> {
                     AgentRuntime.cleanupState(userId, workspace.workspaceId)
                     workspaceManager.deleteWorkspace(workspace.workspaceId)
@@ -220,6 +303,34 @@ fun Route.workspaceRoutes(
                 }
                 is AgentRuntime.CdResult.Ok -> {
                     workspaceManager.updateWorkingDir(workspace.workspaceId, result.resolvedPath)
+                    if (selectedAgent != null) {
+                        val bindingCreated = runCatching {
+                            AgentAuthRepository.createBinding(
+                                userId = userId,
+                                request = CreateAgentBindingRequest(
+                                    agentInstanceId = selectedAgent.agentInstanceId,
+                                    targetType = AgentBindingTargetType.WORKSPACE,
+                                    targetId = workspace.workspaceId,
+                                    messageScope = AgentBindingMessageScope.WORKSPACE,
+                                    triggerPolicy = AgentTriggerPolicy.ALL,
+                                    permissions = setOf(
+                                        AgentPermission.READ_MESSAGE,
+                                        AgentPermission.SEND_MESSAGE,
+                                    ),
+                                ),
+                                approveAsAgentOwner = true,
+                                approveAsTargetManager = true,
+                            )
+                        }.isSuccess
+                        if (!bindingCreated) {
+                            AgentRuntime.cleanupState(userId, workspace.workspaceId)
+                            workspaceManager.deleteWorkspace(workspace.workspaceId)
+                            return@post call.respond(
+                                HttpStatusCode.Conflict,
+                                WorkspaceErrorResponse("AGENT_BINDING_FAILED", "无法为工作区添加所选 Agent"),
+                            )
+                        }
+                    }
                     val created = workspaceManager.getWorkspace(workspace.workspaceId)
                         ?: return@post call.respond(HttpStatusCode.InternalServerError)
                     call.respond(HttpStatusCode.Created, created.toDto(userId))

@@ -13,6 +13,7 @@ internal fun ConversationRoomHeaderActions(
     isExporting: Boolean,
     exportHint: String?,
     showMembershipActions: Boolean = true,
+    onAgents: (() -> Unit)? = null,
     onOpenFiles: () -> Unit,
     onExport: () -> Unit,
     onChooseVault: () -> Unit,
@@ -35,6 +36,13 @@ internal fun ConversationRoomHeaderActions(
         )
     }
     if (showMembershipActions) {
+        onAgents?.let { openAgents ->
+            ConversationHeaderActionButton(
+                label = "管理 Agent",
+                icon = "🤖",
+                onClick = openAgents,
+            )
+        }
         ConversationHeaderActionButton(
             label = inviteLabel,
             text = inviteLabel,

@@ -52,6 +52,7 @@ class WorkspaceHistoryMetadataContractTest {
                 visibility = WorkspaceVisibility.SHARED,
             )
             seedObserverVisibleHistory(group.id, owner, historical.workspaceId)
+            assertTrue(manager.updateActiveAgent(historical.workspaceId, "claude-code", "owner-agent-instance"))
             assertTrue(manager.updateVisibility(historical.workspaceId, WorkspaceVisibility.PRIVATE))
             assertTrue(manager.updateName(historical.workspaceId, "Private Secret Project"))
 
@@ -59,6 +60,7 @@ class WorkspaceHistoryMetadataContractTest {
                 application { module() }
                 val ownerWorkspace = fetchWorkspaces(group.id, owner.id).single()
                 assertEquals("Private Secret Project", ownerWorkspace.name)
+                assertEquals("owner-agent-instance", ownerWorkspace.activeAgentInstanceId)
                 assertFalse(ownerWorkspace.historyOnly)
 
                 val observerHistory = fetchWorkspaces(group.id, observer.id).single()
@@ -66,6 +68,7 @@ class WorkspaceHistoryMetadataContractTest {
                 assertEquals("Shared Project", observerHistory.name)
                 assertEquals("", observerHistory.workingDir)
                 assertEquals("", observerHistory.agentType)
+                assertEquals("", observerHistory.activeAgentInstanceId)
                 assertEquals("OBSERVER", observerHistory.role)
                 assertEquals(WorkspaceVisibility.PRIVATE, observerHistory.visibility)
                 assertTrue(observerHistory.copilots.isEmpty())

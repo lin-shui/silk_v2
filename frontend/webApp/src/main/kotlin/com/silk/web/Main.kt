@@ -1153,6 +1153,7 @@ fun ChatAppWithGroup(
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
+    var showAgentBindings by remember(group.id) { mutableStateOf(false) }
     var isLoadingFiles by remember { mutableStateOf(false) }
 
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
@@ -1442,6 +1443,11 @@ fun ChatAppWithGroup(
                     isExporting = isExportingMarkdown,
                     exportHint = exportMarkdownHint,
                     showMembershipActions = group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE,
+                    onAgents = if (group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE) {
+                        { showAgentBindings = true }
+                    } else {
+                        null
+                    },
                     onOpenFiles = {
                         showFolderExplorer = true
                         isLoadingFiles = true
@@ -2802,6 +2808,15 @@ fun ChatAppWithGroup(
             group = group,
             strings = strings,
             onDismiss = { showInvitationDialog = false }
+        )
+    }
+
+    if (showAgentBindings) {
+        AgentBindingManagementDialog(
+            targetType = BindingTargetType.ROOM,
+            targetId = group.id,
+            targetName = group.name,
+            onDismiss = { showAgentBindings = false },
         )
     }
     

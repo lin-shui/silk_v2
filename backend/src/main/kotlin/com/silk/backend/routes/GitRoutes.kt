@@ -5,6 +5,13 @@ package com.silk.backend.routes
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.MemberRole
 import com.silk.backend.agents.acp.AcpRegistry
+import com.silk.backend.agents.auth.AgentAuthRepository
+import com.silk.backend.agents.auth.AgentBindingMessageScope
+import com.silk.backend.agents.auth.AgentBindingTargetType
+import com.silk.backend.agents.auth.AgentInstanceStatus
+import com.silk.backend.agents.auth.AgentPermission
+import com.silk.backend.agents.auth.AgentTriggerPolicy
+import com.silk.backend.agents.auth.CreateAgentBindingRequest
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.git.GitBindingDto
 import com.silk.backend.git.GitBindingRequest
@@ -54,6 +61,7 @@ data class IssueToWorkspaceRequest(
     val name: String? = null,
     val workingDir: String,
     val agentType: String = "claude-code",
+    val agentInstanceId: String = "",
     val visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
 )
 
@@ -308,14 +316,28 @@ private fun Route.routeBindingRoutes(
         if (request.issueNumber <= 0 || request.workingDir.trim().isBlank()) {
             return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("INVALID_REQUEST", "Issue 编号和工作目录必填"))
         }
-        val agentType = request.agentType.trim().replace('_', '-').ifBlank { "claude-code" }
+        val requestedAgentInstanceId = request.agentInstanceId.trim()
+        val selectedAgent = requestedAgentInstanceId.takeIf(String::isNotBlank)?.let { instanceId ->
+            AgentAuthRepository.listAgents(caller).firstOrNull {
+                it.agentInstanceId == instanceId && it.status == AgentInstanceStatus.ACTIVE
+            }
+        }
+        if (requestedAgentInstanceId.isNotBlank() && selectedAgent == null) {
+            return@post call.respond(HttpStatusCode.NotFound, GitErrorResponse("AGENT_NOT_FOUND", "所选 Agent 不存在或已失效"))
+        }
+        val agentType = selectedAgent?.agentType
+            ?: request.agentType.trim().replace('_', '-').ifBlank { "claude-code" }
         if (AgentRuntime.listRegisteredAgents().none { it.agentType == agentType }) {
             return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("UNSUPPORTED_AGENT", "不支持的 Agent: $agentType"))
         }
-        if (!AcpRegistry.isConnected(caller, agentType)) {
+        val agentConnected = selectedAgent?.let { AcpRegistry.isConnectedInstance(it.agentInstanceId) }
+            ?: AcpRegistry.isConnected(caller, agentType)
+        if (!agentConnected) {
             return@post call.respond(HttpStatusCode.Conflict, GitErrorResponse("BRIDGE_OFFLINE", "所选 Agent Bridge 未连接"))
         }
-        val bridgeId = AcpRegistry.getRemoteIp(caller, agentType)?.let { "ip:$it" }
+        val bridgeId = selectedAgent?.let {
+            AcpRegistry.getRemoteIpByInstance(it.agentInstanceId)?.let { ip -> "ip:$ip" }
+        } ?: AcpRegistry.getRemoteIp(caller, agentType)?.let { "ip:$it" }
         val workingDir = request.workingDir.trim()
         if (bridgeId == null || !trustedDirManager.isTrusted(caller, bridgeId, workingDir)) {
             return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("DIRECTORY_NOT_TRUSTED", "目录未被信任"))
@@ -345,17 +367,59 @@ private fun Route.routeBindingRoutes(
             ownerId = caller,
             name = workspaceName,
             agentType = agentType,
+            activeAgentInstanceId = requestedAgentInstanceId,
             visibility = request.visibility,
             linkedGithubRef = linked,
         )
-        AgentRuntime.autoActivateForWorkspace(caller, workspace.workspaceId, agentType)
-        when (val result = AgentRuntime.cdSync(caller, workspace.workspaceId, workingDir, agentType)) {
+        AgentRuntime.autoActivateForWorkspace(
+            caller,
+            workspace.workspaceId,
+            agentType,
+            requestedAgentInstanceId,
+        )
+        when (val result = AgentRuntime.cdSync(
+            caller,
+            workspace.workspaceId,
+            workingDir,
+            agentType,
+            requestedAgentInstanceId,
+        )) {
             is AgentRuntime.CdResult.Err -> {
                 AgentRuntime.cleanupState(caller, workspace.workspaceId)
                 workspaceManager.deleteWorkspace(workspace.workspaceId)
                 return@post call.respond(HttpStatusCode.Conflict, GitErrorResponse("WORKING_DIR_REJECTED", result.reason))
             }
-            is AgentRuntime.CdResult.Ok -> workspaceManager.updateWorkingDir(workspace.workspaceId, result.resolvedPath)
+            is AgentRuntime.CdResult.Ok -> {
+                workspaceManager.updateWorkingDir(workspace.workspaceId, result.resolvedPath)
+                if (selectedAgent != null) {
+                    val bindingCreated = runCatching {
+                        AgentAuthRepository.createBinding(
+                            userId = caller,
+                            request = CreateAgentBindingRequest(
+                                agentInstanceId = selectedAgent.agentInstanceId,
+                                targetType = AgentBindingTargetType.WORKSPACE,
+                                targetId = workspace.workspaceId,
+                                messageScope = AgentBindingMessageScope.WORKSPACE,
+                                triggerPolicy = AgentTriggerPolicy.ALL,
+                                permissions = setOf(
+                                    AgentPermission.READ_MESSAGE,
+                                    AgentPermission.SEND_MESSAGE,
+                                ),
+                            ),
+                            approveAsAgentOwner = true,
+                            approveAsTargetManager = true,
+                        )
+                    }.isSuccess
+                    if (!bindingCreated) {
+                        AgentRuntime.cleanupState(caller, workspace.workspaceId)
+                        workspaceManager.deleteWorkspace(workspace.workspaceId)
+                        return@post call.respond(
+                            HttpStatusCode.Conflict,
+                            GitErrorResponse("AGENT_BINDING_FAILED", "无法为工作区添加所选 Agent"),
+                        )
+                    }
+                }
+            }
         }
         val created = workspaceManager.getWorkspace(workspace.workspaceId)
             ?: return@post call.respond(HttpStatusCode.InternalServerError, GitErrorResponse("WORKSPACE_CREATE_FAILED", "工作区创建失败"))

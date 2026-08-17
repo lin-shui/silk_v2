@@ -15,6 +15,11 @@ class WorkflowPathUtilsTest {
     }
 
     @Test
+    fun `unix breadcrumb restores root omitted by legacy adapter`() {
+        assertEquals("/home/u", buildBreadcrumbPath(listOf("home", "u", "work"), 1, "/"))
+    }
+
+    @Test
     fun `windows breadcrumb root keeps trailing separator`() {
         assertEquals("C:\\", buildBreadcrumbPath(listOf("C:\\", "Users", "x"), 0, "\\"))
     }

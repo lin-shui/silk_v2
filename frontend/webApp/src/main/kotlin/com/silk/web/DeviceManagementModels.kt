@@ -134,6 +134,11 @@ data class ManagedAgentDto(
 )
 
 @Serializable
+data class UpdateManagedResourceNameRequest(
+    val displayName: String,
+)
+
+@Serializable
 data class ManagedBindingDto(
     val bindingId: String,
     val agentInstanceId: String,

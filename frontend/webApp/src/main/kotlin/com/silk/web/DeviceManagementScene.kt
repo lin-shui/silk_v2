@@ -67,6 +67,7 @@ fun DeviceManagementScene(appState: WebAppState) {
     var busyAction by remember { mutableStateOf<String?>(null) }
     var showRevokedHistory by remember { mutableStateOf(false) }
     var detailsAgentId by remember { mutableStateOf<String?>(null) }
+    var renameTarget by remember { mutableStateOf<ManagedResourceRenameTarget?>(null) }
 
     var pairingCode by remember(user.id) { mutableStateOf(appState.pendingPairingCode.orEmpty()) }
     var pairingPreview by remember { mutableStateOf<PairingPreviewDto?>(null) }
@@ -243,24 +244,35 @@ fun DeviceManagementScene(appState: WebAppState) {
             } else {
                 Div({ style { deviceGridStyle() } }) {
                     activeDevices.forEach { device ->
-                        DeviceCard(device, busyAction == "device:${device.deviceId}") {
-                            if (window.confirm("撤销设备 ${device.displayName}？该设备上的 Agent 将同时失效。")) {
-                                scope.launch {
-                                    busyAction = "device:${device.deviceId}"
-                                    feedback = null
-                                    pageError = null
-                                    try {
-                                        ApiClient.revokeManagedDevice(device.deviceId)
-                                        feedback = "设备已撤销。"
-                                        refreshKey++
-                                    } catch (error: Exception) {
-                                        pageError = error.message ?: "撤销设备失败"
-                                    } finally {
-                                        busyAction = null
+                        DeviceCard(
+                            device = device,
+                            busy = busyAction == "device:${device.deviceId}",
+                            onRename = {
+                                renameTarget = ManagedResourceRenameTarget(
+                                    ManagedResourceKind.DEVICE,
+                                    device.deviceId,
+                                    device.displayName,
+                                )
+                            },
+                            onRevoke = {
+                                if (window.confirm("撤销设备 ${device.displayName}？该设备上的 Agent 将同时失效。")) {
+                                    scope.launch {
+                                        busyAction = "device:${device.deviceId}"
+                                        feedback = null
+                                        pageError = null
+                                        try {
+                                            ApiClient.revokeManagedDevice(device.deviceId)
+                                            feedback = "设备已撤销。"
+                                            refreshKey++
+                                        } catch (error: Exception) {
+                                            pageError = error.message ?: "撤销设备失败"
+                                        } finally {
+                                            busyAction = null
+                                        }
                                     }
                                 }
-                            }
-                        }
+                            },
+                        )
                     }
                 }
             }
@@ -278,6 +290,13 @@ fun DeviceManagementScene(appState: WebAppState) {
                             deviceName = devices.deviceName(agent.deviceId),
                             busy = busyAction == "agent:${agent.agentInstanceId}",
                             onDetails = { detailsAgentId = agent.agentInstanceId },
+                            onRename = {
+                                renameTarget = ManagedResourceRenameTarget(
+                                    ManagedResourceKind.AGENT,
+                                    agent.agentInstanceId,
+                                    agent.displayName,
+                                )
+                            },
                             onRevoke = {
                                 if (window.confirm("撤销 Agent ${agent.displayName}？相关 Binding 将同时失效。")) {
                                     scope.launch {
@@ -538,6 +557,34 @@ fun DeviceManagementScene(appState: WebAppState) {
             onDismiss = { detailsAgentId = null },
         )
     }
+
+    renameTarget?.let { target ->
+        ManagedResourceRenameDialog(
+            target = target,
+            saving = busyAction == "rename:${target.id}",
+            onDismiss = { renameTarget = null },
+            onSave = { newName ->
+                scope.launch {
+                    busyAction = "rename:${target.id}"
+                    feedback = null
+                    pageError = null
+                    try {
+                        when (target.kind) {
+                            ManagedResourceKind.DEVICE -> ApiClient.renameManagedDevice(target.id, newName)
+                            ManagedResourceKind.AGENT -> ApiClient.renameManagedAgent(target.id, newName)
+                        }
+                        feedback = if (target.kind == ManagedResourceKind.DEVICE) "设备名称已更新。" else "Agent 名称已更新。"
+                        renameTarget = null
+                        refreshKey++
+                    } catch (error: Exception) {
+                        pageError = error.message ?: "名称更新失败"
+                    } finally {
+                        busyAction = null
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -668,7 +715,7 @@ private fun RevokedHistorySection(
         if (expanded) {
             Div({ style { marginTop(12.px) } }) {
                 devices.forEach { device ->
-                    DeviceCard(device = device, busy = false, onRevoke = null)
+                    DeviceCard(device = device, busy = false, onRename = null, onRevoke = null)
                 }
                 agents.forEach { agent ->
                     AgentCard(
@@ -676,6 +723,7 @@ private fun RevokedHistorySection(
                         deviceName = deviceNames[agent.deviceId] ?: "未知设备",
                         busy = false,
                         onDetails = { onAgentDetails(agent.agentInstanceId) },
+                        onRename = null,
                         onRevoke = null,
                     )
                 }
@@ -688,7 +736,12 @@ private fun RevokedHistorySection(
 }
 
 @Composable
-private fun DeviceCard(device: ManagedDeviceDto, busy: Boolean, onRevoke: (() -> Unit)?) {
+private fun DeviceCard(
+    device: ManagedDeviceDto,
+    busy: Boolean,
+    onRename: (() -> Unit)?,
+    onRevoke: (() -> Unit)?,
+) {
     Div({ style { deviceCardStyle() } }) {
         Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.SpaceBetween); gap(12.px) } }) {
             Div({ style { minWidth(0.px) } }) {
@@ -714,7 +767,8 @@ private fun DeviceCard(device: ManagedDeviceDto, busy: Boolean, onRevoke: (() ->
         } ?: "尚未连接")
         device.lastSeenIp?.let { DeviceMetadata("最近地址", it) }
         if (device.status == DeviceEnrollmentStatus.ACTIVE && onRevoke != null) {
-            Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); marginTop(14.px) } }) {
+            Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); gap(8.px); marginTop(14.px) } }) {
+                if (onRename != null) DeviceSecondaryButton("重命名", busy, onRename)
                 DeviceDangerButton(if (busy) "撤销中…" else "撤销设备", busy, onRevoke)
             }
         }
@@ -727,6 +781,7 @@ private fun AgentCard(
     deviceName: String,
     busy: Boolean,
     onDetails: () -> Unit,
+    onRename: (() -> Unit)?,
     onRevoke: (() -> Unit)?,
 ) {
     Div({ style { deviceCardStyle() } }) {
@@ -754,8 +809,55 @@ private fun AgentCard(
         DeviceMetadata("设备", deviceName)
         Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); gap(8.px); marginTop(14.px) } }) {
             DeviceSecondaryButton("查看详情", busy, onDetails)
+            if (agent.status == ManagedAgentStatus.ACTIVE && onRename != null) {
+                DeviceSecondaryButton("重命名", busy, onRename)
+            }
             if (agent.status == ManagedAgentStatus.ACTIVE && onRevoke != null) {
                 DeviceDangerButton(if (busy) "撤销中…" else "撤销 Agent", busy, onRevoke)
+            }
+        }
+    }
+}
+
+private enum class ManagedResourceKind { DEVICE, AGENT }
+
+private data class ManagedResourceRenameTarget(
+    val kind: ManagedResourceKind,
+    val id: String,
+    val currentName: String,
+)
+
+@Composable
+private fun ManagedResourceRenameDialog(
+    target: ManagedResourceRenameTarget,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var displayName by remember(target.kind, target.id) { mutableStateOf(target.currentName) }
+    val resourceLabel = if (target.kind == ManagedResourceKind.DEVICE) "设备" else "Agent"
+    ModalOverlay(onDismiss = { if (!saving) onDismiss() }, zIndex = 2300) {
+        Div({ style { agentDetailsDialogStyle(); width(420.px) } }) {
+            Div({ style { fontSize(18.px); fontWeight("600"); color(Color(SilkColors.textPrimary)); marginBottom(16.px) } }) {
+                Text("重命名$resourceLabel")
+            }
+            Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginBottom(6.px) } }) {
+                Text("显示名称")
+            }
+            Input(InputType.Text) {
+                value(displayName)
+                attr("maxlength", "256")
+                attr("aria-label", "$resourceLabel 显示名称")
+                onInput { displayName = it.value }
+                style { deviceInputStyle() }
+            }
+            Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); gap(8.px); marginTop(18.px) } }) {
+                DeviceSecondaryButton("取消", saving, onDismiss)
+                DevicePrimaryButton(
+                    label = if (saving) "保存中…" else "保存",
+                    disabled = saving || displayName.trim().isBlank() || displayName.trim() == target.currentName,
+                    onClick = { onSave(displayName.trim()) },
+                )
             }
         }
     }
@@ -1270,7 +1372,7 @@ private fun DeviceDangerButton(label: String, disabled: Boolean, onClick: () -> 
     }) { Text(label) }
 }
 
-private fun triggerPolicyLabel(policy: BindingTriggerPolicy): String = when (policy) {
+internal fun triggerPolicyLabel(policy: BindingTriggerPolicy): String = when (policy) {
     BindingTriggerPolicy.ALL -> "所有消息"
     BindingTriggerPolicy.MENTION -> "提及时"
     BindingTriggerPolicy.EVENT -> "事件"

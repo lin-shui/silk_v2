@@ -41,7 +41,7 @@
 
 - Command: `./gradlew :backend:test`
 - Primary tests:
-  - `AgentAuthRouteContractTest` — 目标 loginName 预绑定、fragment 配对链接、跨账号短码 not-found、JWT 配对审批、设备 proof、已登记设备签名新增 Agent、requestId/账号隔离、未绑定初始状态、单设备 WSS 双 Agent ACP 初始化/Host 替换、兼容 Bridge 连接、Agent/设备分级撤销
+  - `AgentAuthRouteContractTest` — 目标 loginName 预绑定、fragment 配对链接、跨账号短码 not-found、JWT 配对审批、设备 proof、已登记设备签名新增 Agent、requestId/账号隔离、未绑定初始状态、设备/Agent 所有者重命名与输入校验、单设备 WSS 双 Agent ACP 初始化/Host 替换、兼容 Bridge 连接、Agent/设备分级撤销
   - `DeviceManagementModelsTest` — 配对短码格式化、`#code=` fragment 解析与无效 fragment 拒绝，以及 Binding 展示/权限纯逻辑
   - `AgentPairingOriginTest` — 未配置时使用 Host `--server` 而不是监听地址、canonical 配置覆盖连接别名、Web 分端口显式 origin 与非法 origin 拒绝
   - `AgentBindingApprovalRouteContractTest` — 跨所有者 Binding 双向发起、双方审批、更新后重新审批、目标管理者撤销、拒绝后重新申请
@@ -82,7 +82,7 @@
 
 - Command: `./gradlew :backend:test`
 - Primary tests:
-  - `workspace/WorkspaceManagerTest` — workspace CRUD、runtime seed 与 legacy workflow migration
+  - `workspace/WorkspaceManagerTest` — workspace CRUD、精确 Agent 实例选择、同类型多设备 session seed 与最近目录隔离、runtime seed 与 legacy workflow migration
   - `workspace/WorkspaceAccessPolicyTest` — Owner/Co-pilot/Observer 权限、发送时可见性快照、历史 scope 持久化与 fail-closed 消息目标
   - `workspace/WorkspaceHistoryMetadataContractTest` — 已撤销共享历史的 Owner/名称展示、PRIVATE 重命名隔离与 runtime 元数据脱敏
   - `SilkAiTriggerPolicyTest` — `[Silk]` 私聊隐式触发，Team Channel 仅完整的前置 `@Silk` mention 触发且与成员数无关

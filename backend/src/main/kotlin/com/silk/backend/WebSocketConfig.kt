@@ -821,6 +821,7 @@ class ChatServer(
         val authorization = AgentBindingAuthorizationService.authorize(
             userId = workspace.ownerId,
             agentType = agentType,
+            agentInstanceId = workspace.activeAgentInstanceId,
             targetType = AgentBindingTargetType.WORKSPACE,
             targetId = workspace.workspaceId,
             messageScope = AgentBindingMessageScope.WORKSPACE,

@@ -20,6 +20,7 @@ data class PersonalWorkspace(
     val cliSessionId: String? = null,
     val sessionStarted: Boolean = false,
     val activeAgent: String = "",
+    val activeAgentInstanceId: String = "",
     val agentSessions: Map<String, AgentSessionState> = emptyMap(),
     val permissionMode: String = "",
     val visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
@@ -33,4 +34,16 @@ data class PersonalWorkspace(
 )
 
 @Serializable
-data class WorkspaceStore(val workspaces: MutableList<PersonalWorkspace> = mutableListOf())
+data class RecentWorkingDirectory(
+    val roomId: String,
+    val ownerId: String,
+    val agentInstanceId: String,
+    val workingDir: String,
+    val updatedAt: Long = System.currentTimeMillis(),
+)
+
+@Serializable
+data class WorkspaceStore(
+    val workspaces: MutableList<PersonalWorkspace> = mutableListOf(),
+    val recentWorkingDirectories: MutableList<RecentWorkingDirectory> = mutableListOf(),
+)
