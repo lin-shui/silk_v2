@@ -1,6 +1,5 @@
 package com.silk.web
 
-import com.silk.shared.models.CcSettingsResponse
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.CreateRoomRequest
 import com.silk.shared.models.CreateRoomResponse
@@ -731,6 +730,81 @@ object ApiClient {
         return jsonParser.decodeFromString(response)
     }
 
+    suspend fun previewAgentPairing(userCode: String): PairingPreviewDto {
+        val body = jsonParser.encodeToString(PairingCodeRequest(userCode))
+        return jsonParser.decodeFromString(agentRequest("POST", "/api/agent-pairings/preview", body))
+    }
+
+    suspend fun decideAgentPairing(userCode: String, approve: Boolean): PairingApprovalDto {
+        val body = jsonParser.encodeToString(PairingApprovalRequest(userCode, approve))
+        return jsonParser.decodeFromString(agentRequest("POST", "/api/agent-pairings/approve", body))
+    }
+
+    suspend fun getManagedDevices(): List<ManagedDeviceDto> = jsonParser
+        .decodeFromString<ManagedDeviceListResponse>(agentRequest("GET", "/api/agent-devices"))
+        .devices
+
+    suspend fun revokeManagedDevice(deviceId: String): AgentManagementActionResponse = jsonParser.decodeFromString(
+        agentRequest("DELETE", "/api/agent-devices/${encodeUri(deviceId)}")
+    )
+
+    suspend fun renameManagedDevice(deviceId: String, displayName: String): AgentManagementActionResponse =
+        jsonParser.decodeFromString(
+            agentRequest(
+                "PUT",
+                "/api/agent-devices/${encodeUri(deviceId)}",
+                jsonParser.encodeToString(UpdateManagedResourceNameRequest(displayName)),
+            )
+        )
+
+    suspend fun cleanupRevokedAgentHistory(): AgentRevocationCleanupResponse = jsonParser.decodeFromString(
+        agentRequest("POST", "/api/agent-revocation-history/cleanup")
+    )
+
+    suspend fun getManagedAgents(): List<ManagedAgentDto> = jsonParser
+        .decodeFromString<ManagedAgentListResponse>(agentRequest("GET", "/api/agent-instances"))
+        .agents
+
+    suspend fun revokeManagedAgent(agentInstanceId: String): AgentManagementActionResponse = jsonParser.decodeFromString(
+        agentRequest("DELETE", "/api/agent-instances/${encodeUri(agentInstanceId)}")
+    )
+
+    suspend fun renameManagedAgent(agentInstanceId: String, displayName: String): AgentManagementActionResponse =
+        jsonParser.decodeFromString(
+            agentRequest(
+                "PUT",
+                "/api/agent-instances/${encodeUri(agentInstanceId)}",
+                jsonParser.encodeToString(UpdateManagedResourceNameRequest(displayName)),
+            )
+        )
+
+    suspend fun getManagedBindings(): List<ManagedBindingDto> = jsonParser
+        .decodeFromString<ManagedBindingListResponse>(agentRequest("GET", "/api/agent-bindings"))
+        .bindings
+
+    suspend fun createManagedBinding(request: CreateManagedBindingRequest): ManagedBindingDto =
+        jsonParser.decodeFromString(
+            agentRequest("POST", "/api/agent-bindings", jsonParser.encodeToString(request))
+        )
+
+    suspend fun updateManagedBinding(bindingId: String, request: CreateManagedBindingRequest): ManagedBindingDto =
+        jsonParser.decodeFromString(
+            agentRequest("PUT", "/api/agent-bindings/${encodeUri(bindingId)}", jsonParser.encodeToString(request))
+        )
+
+    suspend fun decideManagedBinding(bindingId: String, approve: Boolean): ManagedBindingDto =
+        jsonParser.decodeFromString(
+            agentRequest(
+                "POST",
+                "/api/agent-bindings/${encodeUri(bindingId)}/approval",
+                jsonParser.encodeToString(ManagedBindingApprovalRequest(approve)),
+            )
+        )
+
+    suspend fun revokeManagedBinding(bindingId: String): AgentManagementActionResponse = jsonParser.decodeFromString(
+        agentRequest("DELETE", "/api/agent-bindings/${encodeUri(bindingId)}")
+    )
+
     suspend fun getGitBinding(roomId: String): GitBindingSummary = try {
         val response = fetchWithRetry(
             "/api/rooms/${encodeUri(roomId)}/git/binding",
@@ -1097,47 +1171,6 @@ object ApiClient {
         }
     }
 
-    // ==================== Claude Code 设置相关 API ====================
-
-    /**
-     * 获取 CC 设置（token + bridge 状态）
-     */
-    suspend fun getCcSettings(userId: String): CcSettingsResponse {
-        return try {
-            val response = get("/users/$userId/cc-settings")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("获取CC设置失败:", e)
-            CcSettingsResponse(false, "网络错误")
-        }
-    }
-
-    /**
-     * 生成/重新生成 Bridge Token
-     */
-    suspend fun generateBridgeToken(userId: String): CcSettingsResponse {
-        return try {
-            val response = post("/users/$userId/cc-settings/generate-token", "{}")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("生成Bridge Token失败:", e)
-            CcSettingsResponse(false, "网络错误")
-        }
-    }
-
-    /**
-     * 查询 Bridge 在线状态
-     */
-    suspend fun getBridgeStatus(userId: String): CcSettingsResponse {
-        return try {
-            val response = get("/users/$userId/cc-settings/bridge-status")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("查询Bridge状态失败:", e)
-            CcSettingsResponse(false, "网络错误")
-        }
-    }
-
     /**
      * 查询 workspace 的当前 Agent 状态（含工作目录），用于工作流前端显示。
      */
@@ -1159,6 +1192,7 @@ object ApiClient {
         path: String? = null,
         showHidden: Boolean = false,
         workspaceId: String? = null,
+        agentInstanceId: String? = null,
     ): DirListingResponse {
         return try {
             val query = buildString {
@@ -1170,6 +1204,10 @@ object ApiClient {
                 if (!workspaceId.isNullOrBlank()) {
                     append("&workspaceId=")
                     append(encodeUri(workspaceId))
+                }
+                if (!agentInstanceId.isNullOrBlank()) {
+                    append("&agentInstanceId=")
+                    append(encodeUri(agentInstanceId))
                 }
             }
             val response = get("/users/$userId/cc-fs/list$query")
@@ -1205,6 +1243,7 @@ object ApiClient {
         userId: String,
         workspaceId: String,
         activeAgent: String? = null,
+        activeAgentInstanceId: String? = null,
         permissionMode: String? = null,
     ): CcStateResponse {
         return try {
@@ -1212,6 +1251,9 @@ object ApiClient {
                 put("workspaceId", kotlinx.serialization.json.JsonPrimitive(workspaceId))
                 if (!activeAgent.isNullOrBlank()) {
                     put("activeAgent", kotlinx.serialization.json.JsonPrimitive(activeAgent))
+                }
+                if (!activeAgentInstanceId.isNullOrBlank()) {
+                    put("activeAgentInstanceId", kotlinx.serialization.json.JsonPrimitive(activeAgentInstanceId))
                 }
                 if (!permissionMode.isNullOrBlank()) {
                     put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
@@ -1392,6 +1434,22 @@ object ApiClient {
         
         val response = fetchWithRetry(endpoint, init)
         return response.text().await()
+    }
+
+    private suspend fun agentRequest(method: String, endpoint: String, body: String? = null): String {
+        val response = fetchWithRetry(
+            endpoint,
+            RequestInit(method = method, headers = authHeaders(), body = body),
+        )
+        val responseBody = response.text().await()
+        if (!response.ok) {
+            val error = runCatching { jsonParser.decodeFromString<AgentApiErrorResponse>(responseBody) }
+                .getOrElse {
+                    AgentApiErrorResponse(message = "请求失败（HTTP ${response.status}）")
+                }
+            throw IllegalStateException(error.message)
+        }
+        return responseBody
     }
 
     /** URL-encode a string via JS's encodeURIComponent. */
@@ -1624,9 +1682,12 @@ object ApiClient {
         data class Error(val message: String) : TrustCheckResult()
     }
 
-    suspend fun checkTrustedDir(userId: String, path: String): TrustCheckResult {
+    suspend fun checkTrustedDir(userId: String, path: String, agentInstanceId: String? = null): TrustCheckResult {
         return try {
-            val query = "?path=${encodeUri(path)}"
+            val query = buildString {
+                append("?path=${encodeUri(path)}")
+                if (!agentInstanceId.isNullOrBlank()) append("&agentInstanceId=${encodeUri(agentInstanceId)}")
+            }
             val response = get("/users/$userId/trusted-dirs/check$query")
             val parsed = jsonParser.decodeFromString<TrustedDirCheckResponse>(response)
             when {
@@ -1643,11 +1704,11 @@ object ApiClient {
         }
     }
 
-    suspend fun addTrustedDir(userId: String, path: String): Boolean {
+    suspend fun addTrustedDir(userId: String, path: String, agentInstanceId: String? = null): Boolean {
         return try {
-            val body = kotlinx.serialization.json.buildJsonObject {
-                put("path", kotlinx.serialization.json.JsonPrimitive(path))
-            }.toString()
+            val body = jsonParser.encodeToString(
+                com.silk.shared.models.AddTrustRequest(path, agentInstanceId.orEmpty())
+            )
             val response = post("/users/$userId/trusted-dirs", body)
             val json = jsonParser.parseToJsonElement(response).jsonObject
             json["success"]?.jsonPrimitive?.booleanOrNull ?: false

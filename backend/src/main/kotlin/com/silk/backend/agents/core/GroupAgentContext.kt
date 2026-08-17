@@ -11,8 +11,8 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * per-(userId, workspaceId) 上下文。
  * - workingDir 被该 workspace 下所有 agent 共享
- * - currentAgentType 是 /use 指针；null = 普通 Silk AI
- * - sessions 索引该 workspace 下所有 agent 的 AgentSession
+ * - currentAgentType/currentAgentInstanceId 是 /use 或 Binding 指针；null = 普通 Silk AI
+ * - sessions 以 AgentInstance 优先索引，legacy workspace 仍可用 agentType
  */
 class GroupAgentContext(
     val userId: String,
@@ -21,6 +21,7 @@ class GroupAgentContext(
     @Volatile var roomId: String = "",
     @Volatile var workingDir: String = System.getProperty("user.dir") ?: "/",
     @Volatile var currentAgentType: String? = null,
+    @Volatile var currentAgentInstanceId: String? = null,
     val sessions: ConcurrentHashMap<String, AgentSession> = ConcurrentHashMap(),
 ) {
     /** Scope for background prompt coroutines; cancelled when this context is cleaned up. */
@@ -33,10 +34,16 @@ class GroupAgentContext(
         sessions.filterValues { it.running }.keys.toList()
     }
 
-    /** 获取或创建指定 agentType 的 session。 */
-    fun getOrCreateSession(agentType: String): AgentSession {
-        return sessions.getOrPut(agentType) {
-            AgentSession(userId = userId, groupId = workspaceId, agentType = agentType)
+    /** 获取或创建指定 AgentInstance 的 session；无实例时保留 legacy type key。 */
+    fun getOrCreateSession(agentType: String, agentInstanceId: String? = null): AgentSession {
+        val key = agentInstanceId?.takeIf(String::isNotBlank) ?: agentType
+        return sessions.getOrPut(key) {
+            AgentSession(
+                userId = userId,
+                groupId = workspaceId,
+                agentType = agentType,
+                agentInstanceId = agentInstanceId?.takeIf(String::isNotBlank),
+            )
         }
     }
 

@@ -31,15 +31,16 @@ object AcpUpdateMapper {
         descriptor: AgentDescriptor,
         agentType: String,
         accumulated: StringBuilder,
+        agentInstanceId: String? = null,
     ): Message? {
         val kind = update["sessionUpdate"]?.jsonPrimitive?.contentOrNull ?: return null
 
         return when (kind) {
-            "agent_message_chunk" -> mapAgentMessageChunk(update, descriptor, agentType, accumulated)
-            "agent_thought_chunk" -> mapAgentThoughtChunk(update, descriptor, agentType)
-            "tool_call" -> mapToolCall(update, descriptor)
-            "tool_call_update" -> mapToolCallUpdate(update, descriptor)
-            "plan" -> mapPlan(update, descriptor, agentType)
+            "agent_message_chunk" -> mapAgentMessageChunk(update, descriptor, agentType, agentInstanceId, accumulated)
+            "agent_thought_chunk" -> mapAgentThoughtChunk(update, descriptor, agentType, agentInstanceId)
+            "tool_call" -> mapToolCall(update, descriptor, agentInstanceId)
+            "tool_call_update" -> mapToolCallUpdate(update, descriptor, agentInstanceId)
+            "plan" -> mapPlan(update, descriptor, agentType, agentInstanceId)
             "ask_user_question" -> mapQuestionCard(update, descriptor)
             "available_commands_update" -> {
                 // adapter 可选消费，Plan C 暂静默
@@ -56,6 +57,7 @@ object AcpUpdateMapper {
         update: JsonObject,
         descriptor: AgentDescriptor,
         agentType: String,
+        agentInstanceId: String?,
         accumulated: StringBuilder,
     ): Message {
         val text = update.contentText()
@@ -65,6 +67,7 @@ object AcpUpdateMapper {
             agentUserId = descriptor.agentUserId,
             agentName = descriptor.displayName,
             agentType = agentType,
+            streamKey = agentInstanceId ?: agentType,
         )
     }
 
@@ -72,18 +75,20 @@ object AcpUpdateMapper {
         update: JsonObject,
         descriptor: AgentDescriptor,
         agentType: String,
+        agentInstanceId: String?,
     ): Message {
         return AgentMessages.status(
             content = update.contentText(),
             agentUserId = descriptor.agentUserId,
             agentName = descriptor.displayName,
-            stableId = "agent_thought_${agentType}",
+            stableId = "agent_thought_${agentInstanceId ?: agentType}",
         )
     }
 
     private fun mapToolCall(
         update: JsonObject,
         descriptor: AgentDescriptor,
+        agentInstanceId: String?,
     ): Message {
         val tool = update["tool"]?.jsonPrimitive?.contentOrNull ?: "tool"
         val title = update["title"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -92,20 +97,21 @@ object AcpUpdateMapper {
             content = "🔧 $tool: $title",
             agentUserId = descriptor.agentUserId,
             agentName = descriptor.displayName,
-            stableId = "agent_tool_${toolCallId}",
+            stableId = "agent_tool_${agentInstanceId ?: "legacy"}_$toolCallId",
         )
     }
 
     private fun mapToolCallUpdate(
         update: JsonObject,
         descriptor: AgentDescriptor,
+        agentInstanceId: String?,
     ): Message {
         val toolCallId = update["toolCallId"]?.jsonPrimitive?.contentOrNull ?: ""
         return AgentMessages.status(
             content = update.contentText(),
             agentUserId = descriptor.agentUserId,
             agentName = descriptor.displayName,
-            stableId = "agent_tool_${toolCallId}",
+            stableId = "agent_tool_${agentInstanceId ?: "legacy"}_$toolCallId",
         )
     }
 
@@ -113,13 +119,14 @@ object AcpUpdateMapper {
         update: JsonObject,
         descriptor: AgentDescriptor,
         agentType: String,
+        agentInstanceId: String?,
     ): Message {
         val planText = update["plan"]?.jsonPrimitive?.contentOrNull ?: ""
         return AgentMessages.status(
             content = "📋 计划: $planText",
             agentUserId = descriptor.agentUserId,
             agentName = descriptor.displayName,
-            stableId = "agent_plan_${agentType}",
+            stableId = "agent_plan_${agentInstanceId ?: agentType}",
         )
     }
 

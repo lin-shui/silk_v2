@@ -41,6 +41,58 @@ class WorkspaceManagerTest {
             """{"workspaces":[{"workspaceId":"legacy","roomId":"room1","ownerId":"user1","name":"old"}]}"""
         )
         assertNull(WorkspaceManager(tempDir.absolutePath).getWorkspace("legacy")!!.linkedGithubRef)
+        assertEquals("", WorkspaceManager(tempDir.absolutePath).getWorkspace("legacy")!!.activeAgentInstanceId)
+    }
+
+    @Test fun `active agent selection persists the exact instance`() {
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+        val workspace = mgr.createWorkspace("room1", "user1", "exact-agent")
+
+        assertTrue(mgr.updateActiveAgent(workspace.workspaceId, "claude-code", "agent-linux"))
+
+        val updated = mgr.getWorkspace(workspace.workspaceId)!!
+        assertEquals("claude-code", updated.activeAgent)
+        assertEquals("agent-linux", updated.activeAgentInstanceId)
+    }
+
+    @Test fun `workspace creation persists its selected agent instance`() {
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+
+        val workspace = mgr.createWorkspace(
+            roomId = "room1",
+            ownerId = "user1",
+            name = "windows-agent",
+            agentType = "claude-code",
+            activeAgentInstanceId = "agent-windows",
+        )
+
+        val persisted = mgr.getWorkspace(workspace.workspaceId)!!
+        assertEquals("claude-code", persisted.activeAgent)
+        assertEquals("agent-windows", persisted.activeAgentInstanceId)
+    }
+
+    @Test fun `same type agent sessions are isolated by instance`() {
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+        val workspace = mgr.createWorkspace("room1", "user1", "session-isolation")
+        mgr.updateWorkingDir(workspace.workspaceId, "/project")
+        mgr.updateActiveAgent(workspace.workspaceId, "claude-code", "agent-linux")
+        mgr.updateSessionState(
+            workspace.workspaceId,
+            "claude-code",
+            "session-linux",
+            true,
+            "agent-linux",
+        )
+        mgr.updateSessionState(
+            workspace.workspaceId,
+            "claude-code",
+            "session-windows",
+            true,
+            "agent-windows",
+        )
+
+        assertEquals("session-linux", mgr.loadSeed(workspace.workspaceId, "claude-code", "agent-linux")!!.second)
+        assertEquals("session-windows", mgr.loadSeed(workspace.workspaceId, "claude-code", "agent-windows")!!.second)
     }
 
     @Test fun `getOrCreateDefaultWorkspace is idempotent`() {
@@ -64,6 +116,47 @@ class WorkspaceManagerTest {
         val ws = mgr.createWorkspace("room1", "user1", "default")
         mgr.updateWorkingDir(ws.workspaceId, "/home/user/project")
         assertEquals("/home/user/project", mgr.getWorkspace(ws.workspaceId)!!.workingDir)
+    }
+
+    @Test fun `recent working directory is persisted per room user and agent instance`() {
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+        val linuxWorkspace = mgr.createWorkspace(
+            "room1",
+            "user1",
+            "linux",
+            activeAgentInstanceId = "agent-linux",
+        )
+        val windowsWorkspace = mgr.createWorkspace(
+            "room1",
+            "user1",
+            "windows",
+            activeAgentInstanceId = "agent-windows",
+        )
+
+        mgr.updateWorkingDir(linuxWorkspace.workspaceId, "/home/user/project-a")
+        mgr.updateWorkingDir(windowsWorkspace.workspaceId, "C:\\Users\\user\\project-b")
+
+        val reloaded = WorkspaceManager(tempDir.absolutePath)
+        assertEquals("/home/user/project-a", reloaded.recentWorkingDir("room1", "user1", "agent-linux"))
+        assertEquals("C:\\Users\\user\\project-b", reloaded.recentWorkingDir("room1", "user1", "agent-windows"))
+        assertNull(reloaded.recentWorkingDir("room1", "user1", "other-agent"))
+        assertNull(reloaded.recentWorkingDir("room2", "user1", "agent-linux"))
+
+        reloaded.deleteWorkspacesForRoom("room1")
+        assertNull(WorkspaceManager(tempDir.absolutePath).recentWorkingDir("room1", "user1", "agent-linux"))
+    }
+
+    @Test fun `recent working directory falls back to legacy workspace state`() {
+        File(tempDir, "workspace_store.json").writeText(
+            """{"workspaces":[{"workspaceId":"legacy","roomId":"room1","ownerId":"user1",
+              "name":"legacy","workingDir":"/legacy/project","activeAgentInstanceId":"agent-linux",
+              "updatedAt":1000}]}"""
+        )
+
+        assertEquals(
+            "/legacy/project",
+            WorkspaceManager(tempDir.absolutePath).recentWorkingDir("room1", "user1", "agent-linux"),
+        )
     }
 
     @Test fun `archive and restore persist lifecycle timestamps`() {

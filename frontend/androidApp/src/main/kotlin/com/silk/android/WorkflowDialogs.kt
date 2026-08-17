@@ -108,6 +108,11 @@ fun TrustConfirmDialog(
 internal fun buildBreadcrumbPath(segments: List<String>, upToIndex: Int, separator: String): String {
     if (segments.isEmpty() || upToIndex < 0) return separator
     val head = segments[0]
+    // Codex Adapter <= 0.4.10 omitted the Unix root marker from segments.
+    // Directory listing paths are absolute by contract, so restore it for compatibility.
+    if (separator == "/" && head != separator) {
+        return separator + segments.take(upToIndex + 1).joinToString(separator)
+    }
     if (upToIndex == 0) return head
     val tail = segments.subList(1, upToIndex + 1)
     val joined = tail.joinToString(separator)

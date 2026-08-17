@@ -4,6 +4,7 @@
 
 - Java 17
 - Python 3
+- Go 1.22+（构建/测试独立 companion `silk-agent/`）
 - Android SDK（改 Android 时）
 - DevEco / hvigor / hdc（改 Harmony 时）
 
@@ -30,7 +31,8 @@
 
 ## CI Script Smoke Notes
 
-- `start` smoke 使用真实 backend 启动、本地 Weaviate readiness mock 和预置 Web 静态 fixture，验证 `/health`、前端静态服务和 `stop` 清理。
+- `start` smoke 使用真实 backend 启动、本地 Weaviate readiness mock 和预置 Web 静态 fixture，验证 `/health`、Web `/`、Web `/device` SPA fallback 和 `stop` 清理。
+- `silk.sh start/deploy` 通过 `scripts/silk_static_server.py` 提供 Web 静态产物；除普通文件外，`/device` 会返回 SPA `index.html`，用于外部 Agent 配对确认直达。
 - `deploy` smoke 使用 Gradle/backend stub 和本地 Weaviate mock，验证端口清理、构建编排、产物复制和最终端口就绪。
 
 ## Default Local Commands
@@ -42,6 +44,8 @@
 - Web 快检：`./gradlew :frontend:webApp:nodeTest :frontend:webApp:compileProductionExecutableKotlinJs`
 - Android 快检：`./gradlew :frontend:androidApp:testDebugUnitTest :frontend:androidApp:compileDebugKotlin`
 - Desktop 快检：`./gradlew :frontend:desktopApp:test :frontend:desktopApp:compileKotlin`
+- silk-agent 快检：`cd silk-agent && go test ./... && go test -race ./... && go vet ./...`（交叉编译 Windows：`GOOS=windows GOARCH=amd64 go test -c`）；Host 会在随 binary 提供的 `adapters/silk-<agent-type>-adapter` 存在时纳管它，以单一设备 WSS 按 `agentInstanceId` 多路复用，已运行时可通过控制 IPC 热加载新批准的 Agent。`silk-agent/scripts/package-release.sh` 构建六平台 bundle、签名 manifest 并执行完整性复验；正式发布需要 Ed25519 私钥/公钥文件。
+- Direct Bridge 快检：`python3 -m pytest bridge_common/tests cc_bridge/tests codex_bridge/tests -q`；Adapter 只使用 Python 标准库，另需设备用户已安装并完成认证的 Claude/Codex CLI。Host IPC v2 只转发 ACP，不向 Adapter 传递旧 Token、设备签名接口或后端连接；升级 Host 时必须同步替换 Adapter bundle。
 
 ## Build Outputs
 
@@ -58,6 +62,8 @@
 - Web / Android / Desktop 的 build 脚本都会从 `.env` 注入后端地址
 - 未配置时端口默认并不完全一致：后端运行入口常回落到 `8003`，`silk.sh` 的 Web 前端静态服务器默认 `8005`，Web/Android `FRONTEND_PORT` 生成 fallback 仍是 `8004`；详见 `KNOWN_DRIFT.md`
 - 端口与公网/内网分离时，需要特别注意 `BACKEND_HTTP_PORT` 与 `BACKEND_INTERNAL_PORT`
+- 外部 Agent 新配对会预绑定 `silk-agent connect --account <loginName>` 指定的目标账号；其他登录账号即使拿到短码也只能得到与无效码相同的 404。签名中的 canonical `serverOrigin` 优先取 `BACKEND_BASE_URL`，未配置时取 Host 通过 `--server` 明确提交的连接 origin，不再回退到 Ktor 的内网监听地址；浏览器确认页优先取 `BACKEND_WEB_APP_BASE_URL`，其次取 Host `--web`，最后才与 `--server` 同源。Web/API 分端口时无法安全猜测端口，必须配置 Web origin 或传 `--web`。正式配对必须使用 HTTPS/WSS，直接 IP + HTTP 仅限受控开发环境。
+- 撤销设备/Agent 的业务历史默认保留 90 天，可通过 `SILK_AGENT_REVOKED_RETENTION_DAYS`（或 `-Dsilk.agentRevokedRetentionDays`，范围 7～3650 天）调整。后端每天自动清理到期的 Device/Agent/Binding 行，安全事件与 Binding 审计快照永久保留；设备公钥会写入 tombstone，防止旧撤销密钥重新注册。设备页也提供按当前账号手动清理到期历史的入口。
 - Backend SQLite 默认使用 `./silk_database.db`；测试或隔离运行可通过 JVM 参数 `-Dsilk.databasePath=...` 覆盖
 - Workflow / TrustedDir 默认写到 `~/.silk-data/workflows`；`silk.sh` 会通过 `SILK_WORKFLOW_DIR` / `-Dsilk.workflowDir=...` 注入同一目录
 - Workflow Room GitHub 集成使用同目录的 `git_integration_store.json`；开启前必须配置 Base64 32 字节 `SILK_ENCRYPTION_KEY`。`GITHUB_INGESTION_MODE` 默认 `AUTO`：只有显式配置可用的公开 HTTPS `GITHUB_WEBHOOK_BASE_URL` 时才注册 Webhook，否则随 Ktor 启动无需公网入口的 Polling；也可强制设为 `POLLING` 或 `WEBHOOK`。Polling 默认每 120 秒查询一次，可用 `GITHUB_POLL_INTERVAL_SECONDS` 调整（最小 60 秒），并根据 ETag、额度响应头和失败情况自动退避。同一 Workflow 存储目录由 `.git_polling.lock` 保证只有一个后端进程执行轮询。

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """ACP Bridge Adapter — ACP server that bridges Silk backend to Claude CLI.
 
-Connects to backend `/agent-bridge` via WebSocket, speaks ACP (Zed Agent Client
-Protocol) over JSON-RPC. Receives requests/notifications from the backend,
-delegates Claude CLI execution to :mod:`cc_bridge.executor`, and pushes
-``session/update`` notifications back during streaming.
+Receives ACP JSON-RPC objects over protected stdio IPC while ``silk-agent``
+owns the authenticated multiplexed backend WebSocket. Requests delegate Claude CLI execution to
+:mod:`cc_bridge.executor`, with ``session/update`` notifications streamed back.
 
 Permission interactions use --permission-prompt-tool stdio: when Claude CLI
 needs permission or asks a question, the executor receives a control_request
@@ -21,19 +20,21 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import signal
-import ssl
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-import websockets
-from websockets.exceptions import ConnectionClosed
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from bridge_common.host_ipc import HostIPC
+from bridge_common.execution_policy import ExecutionPolicy, resolve_prompt_working_directory
 
 from executor import Executor
 from fs_listing import list_directory
@@ -41,6 +42,21 @@ from git_ops import git_status, git_diff
 from cc_session_index import find_session_file, list_local_sessions
 
 logger = logging.getLogger("acp_bridge")
+
+
+def is_missing_resume_session_error(message: object) -> bool:
+    """Return whether Claude rejected a resume because the local session is gone."""
+
+    if not isinstance(message, str):
+        return False
+    normalized = " ".join(message.lower().split())
+    return any(
+        marker in normalized
+        for marker in (
+            "no conversation found with session id",
+            "conversation not found for session id",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -70,18 +86,12 @@ class AcpAgentServer:
 
     def __init__(
         self,
-        ws_url: str,
-        token: str,
         default_cwd: str,
         *,
-        tls_insecure: bool = False,
+        host_ipc: HostIPC,
     ) -> None:
-        self.ws_url = _build_ws_url(ws_url, token)
-        self.token = token
         self.default_cwd = self._resolve_default_cwd(default_cwd)
-        self.tls_insecure = tls_insecure
-
-        self.ws: websockets.WebSocketClientProtocol | None = None
+        self.host_ipc = host_ipc
         self.executor = Executor()
         self.sessions: dict[str, AcpSession] = {}
         self._cli_to_acp: dict[str, str] = {}
@@ -124,6 +134,7 @@ class AcpAgentServer:
         ctrl_request_id: str,
         tool_name: str,
         tool_input: dict[str, Any],
+        execution_policy: ExecutionPolicy | None = None,
     ) -> dict[str, Any]:
         """Handle a permission request from the executor.
 
@@ -146,6 +157,21 @@ class AcpAgentServer:
             return await self._handle_exit_plan_mode_ctrl(
                 acp_session_id, ctrl_request_id, tool_input,
             )
+
+        if execution_policy is not None:
+            session = self.sessions.get(acp_session_id)
+            reason = execution_policy.denied_tool_reason(
+                tool_name,
+                tool_input,
+                session.cwd if session is not None else self.default_cwd,
+            )
+            if reason is not None:
+                logger.warning(
+                    "[ACP] Denying tool outside Silk execution policy: tool=%s session=%s",
+                    tool_name,
+                    acp_session_id[:8],
+                )
+                return {"behavior": "deny", "message": reason}
 
         # Auto-allow safe read-only network tools without prompting.
         # Ported from the legacy permission_hook.sh whitelist (commit 016c93d):
@@ -280,52 +306,15 @@ class AcpAgentServer:
         return result
 
     # ------------------------------------------------------------------
-    # Connect loop with exponential backoff
+    # Host IPC loop
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
         self._loop = asyncio.get_event_loop()
 
-        connect_kw: dict[str, Any] = {
-            "ping_interval": 30,
-            "ping_timeout": 10,
-            "max_size": 10 * 1024 * 1024,
-        }
-        if self.ws_url.startswith("wss://") and self.tls_insecure:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            connect_kw["ssl"] = ctx
-            logger.warning(
-                "[ACP] TLS certificate verification disabled (self-signed/internal use only)"
-            )
-
-        delay = 1.0
-        max_delay = 60.0
-
+        logger.info("[ACP] Running behind silk-agent Host multiplexed WSS")
         while True:
-            try:
-                logger.info("[ACP] Connecting to %s", self.ws_url)
-                async with websockets.connect(self.ws_url, **connect_kw) as ws:
-                    self.ws = ws
-                    delay = 1.0
-                    logger.info("[ACP] Connected")
-                    await self._receive_loop()
-            except ConnectionClosed as exc:
-                logger.warning("[ACP] Connection closed: %s", exc)
-            except (ConnectionRefusedError, OSError) as exc:
-                logger.warning("[ACP] Connection failed: %s", exc)
-            except Exception as exc:
-                logger.error("[ACP] Unexpected error: %s", exc, exc_info=True)
-            finally:
-                self.ws = None
-
-            # Fail any pending permission futures on disconnect
-            self._fail_pending_permissions("Bridge disconnected")
-
-            logger.info("[ACP] Reconnecting in %.0fs", delay)
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, max_delay)
+            await self._dispatch_message(await self.host_ipc.receive_acp())
 
     def _fail_pending_permissions(self, reason: str) -> None:
         """Fail all pending permission futures (e.g. on disconnect)."""
@@ -336,64 +325,47 @@ class AcpAgentServer:
         self._pending_tool_inputs.clear()
 
     # ------------------------------------------------------------------
-    # Receive loop
+    # Receive dispatch
     # ------------------------------------------------------------------
 
-    async def _receive_loop(self) -> None:
-        assert self.ws is not None
-        async for raw in self.ws:
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8", errors="replace")
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                logger.warning("[ACP] Invalid JSON: %s", str(raw)[:200])
-                continue
+    async def _dispatch_message(self, msg: dict[str, Any]) -> None:
+        if not isinstance(msg, dict):
+            logger.warning("[ACP] Ignoring non-object message")
+            return
 
-            msg_id = msg.get("id")
-            method = msg.get("method")
+        msg_id = msg.get("id")
+        method = msg.get("method")
 
-            if msg_id is not None and method is not None:
-                task = asyncio.create_task(
-                    self._handle_request(msg_id, method, msg.get("params"))
-                )
-                task.add_done_callback(_log_task_exception)
-            elif method is not None:
-                task = asyncio.create_task(
-                    self._handle_notification(method, msg.get("params"))
-                )
-                task.add_done_callback(_log_task_exception)
+        if msg_id is not None and method is not None:
+            task = asyncio.create_task(
+                self._handle_request(msg_id, method, msg.get("params"))
+            )
+            task.add_done_callback(_log_task_exception)
+        elif method is not None:
+            task = asyncio.create_task(
+                self._handle_notification(method, msg.get("params"))
+            )
+            task.add_done_callback(_log_task_exception)
 
     # ------------------------------------------------------------------
     # Send helpers
     # ------------------------------------------------------------------
 
     async def _send_response(self, msg_id: Any, result: Any) -> None:
-        if self.ws is None:
-            return
-        await self.ws.send(
-            json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": result})
-        )
+        await self._send_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     async def _send_error(self, msg_id: Any, code: int, message: str) -> None:
-        if self.ws is None:
-            return
-        await self.ws.send(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": code, "message": message},
-                }
-            )
-        )
+        await self._send_message({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": code, "message": message},
+        })
 
     async def _send_notification(self, method: str, params: Any) -> None:
-        if self.ws is None:
-            return
-        await self.ws.send(
-            json.dumps({"jsonrpc": "2.0", "method": method, "params": params})
-        )
+        await self._send_message({"jsonrpc": "2.0", "method": method, "params": params})
+
+    async def _send_message(self, message: dict[str, Any]) -> None:
+        await self.host_ipc.forward_acp(message)
 
     # ------------------------------------------------------------------
     # Request routing
@@ -550,6 +522,27 @@ class AcpAgentServer:
             return
 
         prompt_blocks = (params or {}).get("prompt", []) or []
+        execution_policy = ExecutionPolicy.from_acp_prompt(
+            params,
+            managed_connection=self.host_ipc is not None,
+        )
+        try:
+            working_dir, used_default = resolve_prompt_working_directory(
+                sess.cwd,
+                self.default_cwd,
+                execution_policy,
+            )
+        except ValueError as exc:
+            await self._send_error(msg_id, -32602, str(exc))
+            return
+        if used_default:
+            logger.warning(
+                "[ACP] session cwd is unavailable on this device; using local default for message-only prompt"
+            )
+            sess.cwd = working_dir
+            # A CLI session belongs to its original device/path and must not be
+            # resumed after a cross-device fallback.
+            sess.cli_session_id = None
         prompt_text = "".join(
             b.get("text", "")
             for b in prompt_blocks
@@ -613,7 +606,14 @@ class AcpAgentServer:
                     working_dir=sess.cwd,
                     resume=resume_flag,
                     on_session_upsert=on_session_upsert,
-                    on_permission_request=lambda rid, tn, ti, _sid=sid: self._on_permission_request(_sid, rid, tn, ti),
+                    on_permission_request=lambda rid, tn, ti, _sid=sid, _policy=execution_policy: self._on_permission_request(
+                        _sid,
+                        rid,
+                        tn,
+                        ti,
+                        _policy,
+                    ),
+                    execution_policy=execution_policy,
                 )
             )
             executor_task.add_done_callback(_log_task_exception)
@@ -629,19 +629,28 @@ class AcpAgentServer:
 
         final_result = await run_executor_once(cli_session_id, resume)
 
-        # Retry once with fresh session if resume returned empty
-        if (
+        # A backend workflow can retain a CLI session ID after the device's
+        # local Claude history has been removed or after switching devices.
+        # Recover only from explicit missing-session or empty zero-turn resume
+        # results; authentication and other execution errors remain visible.
+        missing_resume_session = resume and is_missing_resume_session_error(
+            (final_result.get("error") or {}).get("message")
+        )
+        empty_resume = (
             resume
             and "error" not in final_result
             and final_result.get("stopReason") == "end_turn"
             and not (final_result.get("text") or "").strip()
             and int((final_result.get("meta") or {}).get("numTurns", 0)) == 0
-        ):
+        )
+        if missing_resume_session or empty_resume:
             fresh_cli_sid = str(uuid.uuid4())
             sess.cli_session_id = fresh_cli_sid
             logger.warning(
-                "[ACP] Empty zero-turn resume result sid=%s, retrying with fresh session",
+                "[ACP] Unavailable Claude resume sid=%s missing=%s empty=%s; retrying with fresh session",
                 sid,
+                missing_resume_session,
+                empty_resume,
             )
             final_result = await run_executor_once(fresh_cli_sid, False)
 
@@ -787,6 +796,9 @@ class AcpAgentServer:
             return
         if not cwd:
             await self._send_error(msg_id, -32602, "Missing cwd")
+            return
+        if not os.path.isdir(cwd):
+            await self._send_error(msg_id, -32602, f"Not a directory on this Agent device: {cwd}")
             return
         resolved = os.path.realpath(cwd)
         sess.cwd = resolved
@@ -1010,29 +1022,6 @@ class AcpAgentServer:
 # ---------------------------------------------------------------------------
 
 
-def _build_ws_url(server: str, token: str) -> str:
-    """Normalize server address to ws:// or wss:// URL."""
-    host = server.rstrip("/")
-    lower = host.lower()
-    if lower.startswith("wss://"):
-        ws_scheme, host = "wss", host[6:]
-    elif lower.startswith("https://"):
-        ws_scheme, host = "wss", host[8:]
-    elif lower.startswith("ws://"):
-        ws_scheme, host = "ws", host[5:]
-    elif lower.startswith("http://"):
-        ws_scheme, host = "ws", host[7:]
-    else:
-        ws_scheme = "ws"
-    return f"{ws_scheme}://{host}/agent-bridge?agentType=claude-code&token={token}"
-
-
-def _env_tls_insecure() -> bool:
-    return os.environ.get("BRIDGE_TLS_INSECURE", "").strip().lower() in (
-        "1", "true", "yes",
-    )
-
-
 def _log_task_exception(task: asyncio.Task) -> None:
     try:
         exc = task.exception()
@@ -1052,16 +1041,6 @@ def main() -> None:
         description="ACP Bridge Adapter: ACP server bridging Silk backend to Claude CLI",
     )
     parser.add_argument(
-        "--server",
-        required=True,
-        help="Silk backend, e.g. localhost:8006 or https://host:port (HTTPS uses WSS)",
-    )
-    parser.add_argument(
-        "--token",
-        required=True,
-        help="Authentication token for the bridge connection",
-    )
-    parser.add_argument(
         "--working-dir",
         default=os.getcwd(),
         help="Default working directory for claude CLI (default: cwd)",
@@ -1073,24 +1052,18 @@ def main() -> None:
         help="Log level (default: INFO)",
     )
     parser.add_argument(
-        "--tls-insecure",
+        "--silk-host-stdio",
         action="store_true",
-        help="WSS 时不校验服务端证书（自签证书场景）；也可用环境变量 BRIDGE_TLS_INSECURE=1",
+        help="Run as a silk-agent managed Adapter using Host IPC",
     )
     args = parser.parse_args()
-    tls_insecure = bool(args.tls_insecure) or _env_tls_insecure()
+    if not args.silk_host_stdio:
+        parser.error("direct Bridge mode is retired; launch this Adapter through silk-agent")
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    server = AcpAgentServer(
-        ws_url=args.server,
-        token=args.token,
-        default_cwd=args.working_dir,
-        tls_insecure=tls_insecure,
     )
 
     loop = asyncio.new_event_loop()
@@ -1109,22 +1082,41 @@ def main() -> None:
             pass
 
     async def _runner() -> None:
+        host_ipc = HostIPC()
+        await host_ipc.start("claude-code")
+        server = AcpAgentServer(
+            default_cwd=args.working_dir,
+            host_ipc=host_ipc,
+        )
         run_task = asyncio.create_task(server.run())
         shutdown_task = asyncio.create_task(shutdown_event.wait())
-        done, pending = await asyncio.wait(
-            {run_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for t in pending:
-            t.cancel()
-        for t in pending:
-            try:
-                await t
-            except asyncio.CancelledError:
-                pass
+        wait_tasks = {run_task, shutdown_task}
+        wait_tasks.add(asyncio.create_task(host_ipc.wait_shutdown()))
+        done, pending = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+        try:
+            for t in pending:
+                t.cancel()
+            for t in pending:
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+            for t in done:
+                t.result()
+        finally:
+            await host_ipc.close()
 
     try:
         loop.run_until_complete(_runner())
     finally:
+        # asyncio installs a wakeup fd for loop-managed Unix signal handlers.
+        # Remove the handlers before closing the loop so a late Host SIGTERM
+        # cannot write into an already-closed fd and emit a spurious traceback.
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(sig)
+            except NotImplementedError:
+                pass
         loop.close()
 
 

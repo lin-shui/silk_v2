@@ -26,6 +26,13 @@ import com.silk.backend.ai.AIConfig
 import com.silk.backend.ai.KnowledgeBaseWorkspaceEntry
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.agents.core.AgentRuntime
+import com.silk.backend.agents.auth.AgentAuthRepository
+import com.silk.backend.agents.auth.AgentPermission
+import com.silk.backend.agents.auth.AgentBindingTargetType
+import com.silk.backend.agents.auth.AgentBindingMessageScope
+import com.silk.backend.agents.auth.AgentBindingAuthorizationService
+import com.silk.backend.agents.auth.AgentCapability
+import com.silk.backend.agents.core.AgentBindingTriggerMatcher
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBasePromptContext
@@ -811,8 +818,41 @@ class ChatServer(
         if (!WorkspaceAccessPolicy.canControl(workspace, message.userId)) return true
 
         val agentType = workspace.activeAgent.ifBlank { workspace.agentType }
+        val authorization = AgentBindingAuthorizationService.authorize(
+            userId = workspace.ownerId,
+            agentType = agentType,
+            agentInstanceId = workspace.activeAgentInstanceId,
+            targetType = AgentBindingTargetType.WORKSPACE,
+            targetId = workspace.workspaceId,
+            messageScope = AgentBindingMessageScope.WORKSPACE,
+            requiredPermissions = workspaceAgentMessagePermissions(message.content),
+            requiredCapabilities = setOf(
+                AgentCapability.PROMPT,
+                AgentCapability.EXECUTION_POLICY_V1,
+            ),
+        )
+        if (!authorization.allowed) {
+            val descriptor = com.silk.backend.agents.core.AgentRegistry.getByType(agentType)
+            val detail = if (authorization.errorCode == "AGENT_NOT_CONNECTED") {
+                "Agent 当前未连接，请先启动 silk-agent。"
+            } else {
+                "Agent 无法在此 Workspace 执行操作（${authorization.errorCode}）。请在设备管理中检查使用范围和权限。"
+            }
+            val denied = com.silk.backend.agents.core.AgentMessages.system(
+                detail,
+                agentUserId = descriptor?.agentUserId ?: agentType,
+                agentName = descriptor?.displayName ?: agentType,
+            ).copy(scope = MessageScope.WORKSPACE, workspaceId = workspace.workspaceId)
+            broadcast(denied)
+            return true
+        }
         if (AgentRuntime.snapshotState(workspace.ownerId, workspace.workspaceId) == null) {
-            AgentRuntime.autoActivateForWorkspace(workspace.ownerId, workspace.workspaceId, agentType)
+            AgentRuntime.autoActivateForWorkspace(
+                workspace.ownerId,
+                workspace.workspaceId,
+                agentType,
+                authorization.agentInstanceId,
+            )
         }
         val ccBroadcastFn: suspend (Message) -> Unit = { response ->
             broadcast(
@@ -828,8 +868,75 @@ class ChatServer(
             workspaceId = workspace.workspaceId,
             text = ccText,
             userName = message.userName,
+            executionPolicy = authorization.executionPolicy,
+            agentInstanceId = authorization.agentInstanceId,
             broadcastFn = ccBroadcastFn,
         )
+    }
+
+    private fun workspaceAgentMessagePermissions(text: String): Set<AgentPermission> = buildSet {
+        add(AgentPermission.READ_MESSAGE)
+        add(AgentPermission.SEND_MESSAGE)
+        val normalized = text.trim().lowercase()
+        if (normalized == "/cd" || normalized.startsWith("/cd ")) {
+            add(AgentPermission.WRITE_WORKSPACE)
+        }
+        if (normalized == "/session" || normalized.startsWith("/session ") || normalized == "/compact") {
+            add(AgentPermission.READ_WORKSPACE)
+        }
+    }
+
+    private suspend fun handleBoundTeamAgentInterception(message: Message): Boolean {
+        if (!isEligibleBoundTeamMessage(message)) return false
+
+        val bindings = AgentAuthRepository.listActiveBindingsForTarget(
+            targetType = AgentBindingTargetType.ROOM,
+            targetId = roomId(),
+            messageScope = AgentBindingMessageScope.TEAM,
+        )
+        val authorizedPrompts = bindings.mapNotNull { binding ->
+            val prompt = AgentBindingTriggerMatcher.promptFor(binding, message.content)
+                ?: return@mapNotNull null
+            val authorization = AgentBindingAuthorizationService.authorize(
+                userId = binding.ownerId,
+                agentType = binding.agentType,
+                agentInstanceId = binding.agentInstanceId,
+                targetType = AgentBindingTargetType.ROOM,
+                targetId = roomId(),
+                messageScope = AgentBindingMessageScope.TEAM,
+                requiredPermissions = setOf(AgentPermission.READ_MESSAGE, AgentPermission.SEND_MESSAGE),
+                requiredCapabilities = setOf(
+                    AgentCapability.PROMPT,
+                    AgentCapability.EXECUTION_POLICY_V1,
+                ),
+            )
+            if (authorization.allowed) Triple(binding, prompt, authorization.executionPolicy) else null
+        }
+        for ((binding, prompt, executionPolicy) in authorizedPrompts) {
+            AgentRuntime.handleBoundTeamPrompt(
+                userId = binding.ownerId,
+                roomId = roomId(),
+                agentInstanceId = binding.agentInstanceId,
+                agentType = binding.agentType,
+                agentDisplayName = buildString {
+                    append(binding.agentDisplayName)
+                    binding.agentDeviceDisplayName.takeIf(String::isNotBlank)?.let { append(" · ").append(it) }
+                    binding.mentionAlias.takeIf(String::isNotBlank)?.let { append(" (@").append(it).append(')') }
+                },
+                text = prompt,
+                userName = message.userName,
+                executionPolicy = executionPolicy,
+            ) { response ->
+                broadcast(response.copy(scope = MessageScope.TEAM, workspaceId = null, observerVisible = false))
+            }
+        }
+        return authorizedPrompts.isNotEmpty()
+    }
+
+    private fun isEligibleBoundTeamMessage(message: Message): Boolean {
+        if (roomKind == RoomKind.SILK_PRIVATE) return false
+        if (message.type != MessageType.TEXT || message.isTransient) return false
+        return !AgentRuntime.isAgentMessage(message)
     }
 
     /**
@@ -1199,6 +1306,9 @@ class ChatServer(
         if (routedMessage.scope == MessageScope.TEAM && handleCcTextPrefixCommand(routedMessage)) return
         if (routedMessage.scope == MessageScope.TEAM && handleCcConnectRouting(routedMessage)) return
 
+        // ==================== 外部 Agent TEAM 绑定拦截 ====================
+        if (routedMessage.scope == MessageScope.TEAM && handleBoundTeamAgentInterception(routedMessage)) return
+
         // ==================== Claude Code 模式拦截 ====================
         if (handleClaudeCodeBroadcastInterception(routedMessage)) return
 
@@ -1408,7 +1518,15 @@ class ChatServer(
             return
         }
 
-        // Team Channel / 普通 Silk 会话：取消 DirectModelAgent 协程。
+        // Team Channel: cancel bound external Agents and the built-in Silk AI job.
+        val agentBroadcastFn: suspend (Message) -> Unit = { response ->
+            broadcast(response.copy(scope = MessageScope.TEAM, workspaceId = null, observerVisible = false))
+        }
+        val cancelledAgents = AgentRuntime.cancelBoundTeamAgents(roomId(), agentBroadcastFn)
+        if (cancelledAgents > 0) {
+            logger.info("🛑 已取消 {} 个 TEAM 外部 Agent 任务", cancelledAgents)
+        }
+
         val job = activeAiJob
         if (job != null && job.isActive) {
             job.cancel()

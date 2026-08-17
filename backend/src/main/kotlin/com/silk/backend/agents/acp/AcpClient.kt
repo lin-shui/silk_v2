@@ -107,10 +107,15 @@ class AcpClient(
     suspend fun sessionPrompt(
         sessionId: String,
         prompt: List<ContentBlock>,
+        executionPolicy: SilkExecutionPolicy? = null,
     ): SessionPromptResult {
         val params = json.encodeToJsonElement(
             SessionPromptParams.serializer(),
-            SessionPromptParams(sessionId = sessionId, prompt = prompt),
+            SessionPromptParams(
+                sessionId = sessionId,
+                prompt = prompt,
+                silk = executionPolicy?.let { SilkPromptContext(executionPolicy = it) },
+            ),
         )
         val resp = call("session/prompt", params, timeoutMs = PROMPT_TIMEOUT_MS)
         return decodeResultOrThrow(resp, SessionPromptResult.serializer())

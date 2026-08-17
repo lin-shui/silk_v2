@@ -7,8 +7,9 @@
 - Android / Desktop / Harmony：各自原生客户端
 - Weaviate（主线不再需要 — 已由 Claude 原生 web_search + 后端 grep 替代；遗留脚本仍可由 `silk.sh` 或 `search/` 管理）
 - Audio Duplex Worker：后端 `/ws/audio-duplex` 代理到 `AUDIO_DUPLEX_URL`（默认 `http://localhost:22700`）
-- Claude Code ACP Adapter：`cc_bridge/acp_adapter.py`（外部进程，连 backend `/agent-bridge` 端点）
-- Codex ACP Adapter：`codex_bridge/codex_adapter.py`（外部进程，连 backend `/agent-bridge` 端点）
+- silk-agent Host：`silk-agent/`（设备身份、配对、单一 `/agent-connect` WSS、Agent 多路复用、Adapter 监督）
+- Claude Code ACP Adapter：`cc_bridge/acp_adapter.py`（由 Host 通过 stdin/stdout Host IPC v2 管理，不持有 Silk 凭据）
+- Codex ACP Adapter：`codex_bridge/codex_adapter.py`（由 Host 通过 stdin/stdout Host IPC v2 管理，不持有 Silk 凭据）
 - Feishu 网关：`feishu_bot/main.py`
 
 ## Persistent Stores
@@ -31,7 +32,7 @@
 | KB store | `knowledge_base/kb_store.json` (JSON) or PostgreSQL (`SILK_KB_STORE=postgres` + `docker-compose-pg.yml`) | `KnowledgeBaseManager`（topic-level personal/team scope、ACL、旧 store 兼容读取；PG 后端通过 `PgKnowledgeBaseRepository` 实现） |
 | KB context preferences | `knowledge_base/context_preferences.json` (co-located with KB store) | `KnowledgeBaseContextPreferenceStore`（用户级 `excludedSpaceIds` 长期偏好，以及 `memoryEnabled` / `autoCaptureEnabled` / `ephemeralSessionEnabled` 开关；`GET/PUT /api/kb/context-preferences`） |
 | Web static / APK / HAP | `backend/static/` | 后端静态分发 |
-| Claude Code sessions | `~/.silk/cc_sessions.json` | `cc_bridge/session_manager.py` |
+| Claude Code sessions | 设备用户的 Claude 原生配置/历史目录；Silk 仅保存当前 ACP/CLI session 关联 | `cc_bridge/acp_adapter.py`, `cc_bridge/cc_session_index.py` |
 | Codex sessions | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `codex_bridge/codex_session_index.py` |
 | Feishu bindings | `feishu_bot/data/user_bindings.json` | 飞书账号绑定 |
 

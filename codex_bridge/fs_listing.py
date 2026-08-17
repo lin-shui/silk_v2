@@ -22,7 +22,7 @@ def list_directory(path: str, show_hidden: bool) -> dict[str, Any]:
           "success": bool,
           "path": str,                 # canonical absolute path
           "parent": str | None,         # parent path or None at root
-          "segments": list[str],        # path split by separator (no leading empty)
+          "segments": list[str],        # first item is "/" on Unix or "C:\\" on Windows
           "separator": str,
           "entries": list[{"name": str, "isDir": bool, "size": int}],
           "truncated": bool,
@@ -40,7 +40,15 @@ def list_directory(path: str, show_hidden: bool) -> dict[str, Any]:
         if parent == canonical:
             parent = None  # at filesystem root
 
-        segments = [s for s in canonical.split(sep) if s]
+        segments: list[str] = []
+        if os.name == "nt":
+            drive, rest = os.path.splitdrive(canonical)
+            if drive:
+                segments.append(drive + sep)
+            segments.extend(segment for segment in rest.split(sep) if segment)
+        else:
+            segments.append(sep)
+            segments.extend(segment for segment in canonical.split(sep) if segment)
 
         try:
             names = os.listdir(canonical)

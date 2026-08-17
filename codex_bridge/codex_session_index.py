@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,7 +33,7 @@ def list_local_sessions(
         return []
 
     cutoff = time.time() - max_age_days * 86400
-    out: list[dict[str, Any]] = []
+    sessions_with_mtime: list[tuple[float, dict[str, Any]]] = []
 
     for jsonl_file in root.rglob("rollout-*.jsonl"):
         try:
@@ -45,13 +44,20 @@ def list_local_sessions(
             if meta is None:
                 continue
             meta["lastActivity"] = _iso_from_epoch(mtime)
-            out.append(meta)
+            sessions_with_mtime.append((mtime, meta))
         except Exception as exc:
             logger.warning("skipping %s: %s", jsonl_file, exc)
             continue
 
-    out.sort(key=lambda s: s.get("lastActivity", ""), reverse=True)
-    return out
+    # Sort using the full filesystem timestamp. lastActivity intentionally has
+    # second precision for API compatibility, which is too coarse for ordering.
+    # Some filesystems also assign identical mtimes to adjacent writes, so use
+    # the rollout creation timestamp as a deterministic secondary key.
+    sessions_with_mtime.sort(
+        key=lambda item: (item[0], item[1].get("createdAt", "")),
+        reverse=True,
+    )
+    return [meta for _, meta in sessions_with_mtime]
 
 
 def _parse_rollout_head(file_path: Path) -> dict[str, Any] | None:

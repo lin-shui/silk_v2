@@ -1,5 +1,7 @@
 # Domain Storage And Features
 
+Workspace 普通创建与 Issue-to-Workspace 可携带所有者 ACTIVE `agentInstanceId`，连接检查、目录信任、`/cd` 和初始 ACTIVE Workspace Binding 使用同一精确实例；不带 ID 的旧请求保留 type-only 兼容路径。设备和 Agent 的显示名可由其所有者更新，身份与授权字段保持不变。
+
 ## Database-Backed Domains
 
 `database/` + `auth/` 主要承载：
@@ -8,7 +10,7 @@
 - Room/Group 与成员；`groups.room_kind` 显式区分 `CHAT / WORKFLOW / SILK_PRIVATE`，`updated_at` 记录通用元数据活动，`last_message_at` 独立记录最近一条持久化消息时间并由启动迁移从旧聊天历史回填
 - 联系人与好友请求
 - 未读计数
-- 用户设置（含 Claude Code bridge token、`app_auth_token` 用于前端 Bearer 鉴权）
+- 用户设置（含 `app_auth_token` 用于前端 Bearer 鉴权；读取/更新设置、资料更新、账号注销和 `/auth/validate/{userId}` 均要求当前用户 Bearer；遗留 Direct Bridge token 列仅为 schema 兼容并在启动迁移时清空）
 
 SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可用 `-Dsilk.databasePath=...` 覆盖。
 
@@ -29,7 +31,7 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
   - 保留 Workflow Room 入口元数据与旧记录；不再作为 Agent runtime 状态的权威存储
 - `workspace/WorkspaceManager.kt`:
   - 默认 `~/.silk-data/workflows/workspace_store.json`，覆盖方式同 Workflow
-  - 持久化 PersonalWorkspace 的 `workingDir` / `activeAgent` / `permissionMode` / `agentSessions` / `visibility` / `lastSharedName` / `copilots` / `lifecycleState` / `updatedAt`
+  - 持久化 PersonalWorkspace 的 `workingDir` / `activeAgent` / `activeAgentInstanceId` / `permissionMode` / `agentSessions` / `visibility` / `lastSharedName` / `copilots` / `lifecycleState` / `updatedAt`，以及按 `ownerId + roomId + agentInstanceId` 隔离的最近成功工作目录；旧记录缺少新增字段时按默认值兼容读取，并从同一范围内最近更新的已有 Workspace 回填首次默认值。精确实例的 CLI session seed 使用实例 ID 隔离；目录记忆也不会跨 Agent 实例复用，以避免不同设备上的路径串用
   - `AgentRuntime.WorkflowPersistence` 以 `workspaceId` 读写；首次启动从 `workflow_store.json` 迁移，但不删除旧文件
   - `WorkspaceAccessPolicy` 统一 Owner/Co-pilot/Observer 的控制与消息读取判定；PRIVATE 后端强制清空/拒绝 Co-pilot，历史使用发送时 `observerVisible` 快照
   - `PersonalWorkspace.linkedGithubRef` 为可选 GitHub Issue 来源引用，旧 `workspace_store.json` 缺少该字段时按 `null` 兼容读取；`routes/WorkspaceRoutes.kt` 提供 JWT + Room membership 保护的发现/CRUD，返回裁剪后的 Owner 展示名、`RUNNING/WAITING/IDLE/OFFLINE` 活动状态与生命周期；有历史的工作区只能归档，不能硬删除。Observer 合法保留的历史共享流以 `historyOnly` 元数据返回，只含 Owner 与最后共享名称，runtime 字段保持脱敏；旧记录缺少 `lastSharedName` 时会在首次历史发现时冻结当前可用名称，避免后续 PRIVATE 重命名继续外泄
@@ -118,7 +120,7 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
 - 移除 Workflow Room 成员会同步撤销其在该 Room 所有 Workspace 中的 Co-pilot 权限，关闭当前 WebSocket 连接，并拒绝旧连接继续发送消息
 - Trusted directory HTTP 在 `Routing.kt` 的 `/users/{userId}/trusted-dirs/*`
 - GitHub binding HTTP 在 `routes/GitRoutes.kt` 的 `/api/rooms/{roomId}/git/binding`；请求仍只包含仓库 URL 与 PAT，接收模式由后端配置决定，响应增加脱敏的 `ingestionMode/lastSuccessfulPollAt/syncError`。公开 Webhook 在 `/api/git/webhook/{roomId}`，仅依赖原始 body HMAC，不依赖 JWT
-- GitHub Issue → Workspace 在 `routes/GitRoutes.kt` 的 `/api/rooms/{roomId}/git/issue-to-workspace`，创建工作区后仅返回仓库、Issue 标题和链接摘要；Web 端以 `SYSTEM` 消息展示摘要，不触发 Workspace Agent
+- GitHub Issue → Workspace 在 `routes/GitRoutes.kt` 的 `/api/rooms/{roomId}/git/issue-to-workspace`，创建工作区后仅返回仓库、Issue 标题和链接摘要；Web 端以 `SYSTEM` 消息展示摘要，不触发 Workspace Agent。`GET /api/rooms/{roomId}/workspaces/recent-working-dir?agentInstanceId=...` 返回该用户在当前工作群组、该精确 Agent 实例上最近成功应用的目录，供新建 Workspace 预填
 - KB HTTP 在 `Routing.kt` 的 `/api/kb/*`（含 `PUT /api/kb/topics/{id}` 改主题/访问策略、`POST /api/kb/captures` 入库候选、`PUT /api/kb/entries/{entryId}` 支持移动条目到同 space 内其他 topic、`GET /api/kb/entries/search`（$ 快捷引用 KB 文档的搜索端点）、`POST /api/kb/copilot`（同步）和 `POST /api/kb/copilot/stream`（SSE 流式）在 KB 页面内生成/应用 AI 编辑草稿——支持条目级 `update_entry` 和主题级 `create_entry` 两种模式，`entryId` 可选填；流式端点通过 `thinking`/`text`/`draft`/`applied`/`error`/`done` 事件逐帧推送；草稿 `KnowledgeBaseCopilotDraft` 新增 `diffChunks: List<DiffChunk>` 字段（后端 LCS 行级 diff 算法生成），供前端 `DiffReviewPane` 逐块接受/拒绝；前端 `KnowledgeCopilotSidebar` 按 `CopilotSidebarState`（INPUT/PREVIEW/REVIEW）三状态渲染，每个状态一个主按钮，审阅控制在侧栏而非编辑区；`GET/POST/DELETE /api/kb/memory*` 管理显式长期记忆、`GET /api/kb/memory/{entryId}` 带访问追踪读取单条记忆、`POST /api/kb/memory/consolidate` 触发去重合并与 TTL 衰减、`GET/PUT /api/kb/context-preferences` 读写用户级空间与 memory 偏好；既有路由按调用方 userId 做读写/成员可见性鉴权）
 - ACP 外部 agent 的 KB 后处理在 `AgentRuntime.kt`：最终回复会先抽取 `silk_kb_action` 再广播，从而让 workflow 内的 Claude Code / Codex / Cursor 与内建 Silk AI 共享同一套 KB 落库路径
 

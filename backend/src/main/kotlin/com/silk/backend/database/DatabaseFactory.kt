@@ -1,8 +1,13 @@
 package com.silk.backend.database
 
+import com.silk.backend.agents.auth.defaultAgentMentionAlias
+import com.silk.backend.agents.auth.normalizeAgentMentionAlias
 import com.silk.backend.ai.AIConfig
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SchemaUtils
+import org.jetbrains.exposed.sql.SortOrder
+import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -13,13 +18,13 @@ import java.io.File
 object DatabaseFactory {
     private val logger = LoggerFactory.getLogger(DatabaseFactory::class.java)
 
-    /** 主 SQLite 数据库（用户、群组、设置等）。 */
+    /** Main application database. SQLite is the local default; clustered mode requires PostgreSQL. */
     private var mainDatabase: Database? = null
     /** KB PostgreSQL 数据库（仅在 storeBackend=postgres 时初始化）。 */
     private var kbPostgresDatabase: Database? = null
 
     fun init() {
-        initSqlite()
+        initMainDatabase()
         RoomKindMigration.run()
         RoomLastMessageMigration.run()
         initKbPostgresIfEnabled()
@@ -31,23 +36,35 @@ object DatabaseFactory {
      */
     fun getKbPostgresDatabase(): Database? = kbPostgresDatabase
 
-    /**
-     * 获取主 SQLite 数据库连接。
-     */
+    /** Get the main application database connection. */
     fun getMainDatabase(): Database? = mainDatabase
 
-    private fun initSqlite() {
+    private fun initMainDatabase() {
+        val configuredUrl = configuredValue("SILK_DATABASE_URL", "silk.databaseUrl")
         val databasePath = System.getProperty("silk.databasePath")
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: "./silk_database.db"
-        File(databasePath).parentFile?.mkdirs()
-
-        // 使用 SQLite 数据库
-        val database = Database.connect(
-            url = "jdbc:sqlite:$databasePath",
-            driver = "org.sqlite.JDBC"
-        )
+        val jdbcUrl = configuredUrl ?: "jdbc:sqlite:$databasePath"
+        val clustered = configuredValue("SILK_CLUSTERED", "silk.clustered")?.toBooleanStrictOrNull() ?: false
+        if (clustered && !jdbcUrl.startsWith("jdbc:postgresql:")) {
+            error("SILK_CLUSTERED=true requires a shared PostgreSQL SILK_DATABASE_URL")
+        }
+        val database = if (jdbcUrl.startsWith("jdbc:postgresql:")) {
+            Database.connect(
+                url = jdbcUrl,
+                driver = "org.postgresql.Driver",
+                user = configuredValue("SILK_DATABASE_USER", "silk.databaseUser").orEmpty(),
+                password = configuredValue("SILK_DATABASE_PASSWORD", "silk.databasePassword").orEmpty(),
+            )
+        } else {
+            require(jdbcUrl.startsWith("jdbc:sqlite:")) { "SILK_DATABASE_URL must use jdbc:sqlite or jdbc:postgresql" }
+            val sqliteLocation = jdbcUrl.removePrefix("jdbc:sqlite:")
+            if (sqliteLocation != ":memory:" && !sqliteLocation.startsWith("file:")) {
+                File(sqliteLocation).absoluteFile.parentFile?.mkdirs()
+            }
+            Database.connect(url = jdbcUrl, driver = "org.sqlite.JDBC")
+        }
         mainDatabase = database
         
         transaction(database) {
@@ -55,16 +72,132 @@ object DatabaseFactory {
             SchemaUtils.create(
                 Users, Groups, GroupMembers, Contacts, ContactRequests,
                 UserSettingsTable, CcConnectTokens, HuaweiAccounts, WechatAccounts,
-                RefreshTokensTable
+                RefreshTokensTable, AgentDevices, AgentDeviceRevocationTombstones, AgentInstances, AgentBindings,
+                AgentBindingAuditEvents,
+                AgentPairingRequests, AgentConnectionChallenges, AgentSecurityEvents,
             )
             SchemaUtils.createMissingTablesAndColumns(
                 Users, Groups, GroupMembers, Contacts, ContactRequests,
                 UserSettingsTable, CcConnectTokens, HuaweiAccounts, WechatAccounts,
-                RefreshTokensTable
+                RefreshTokensTable, AgentDevices, AgentDeviceRevocationTombstones, AgentInstances, AgentBindings,
+                AgentBindingAuditEvents,
+                AgentPairingRequests, AgentConnectionChallenges, AgentSecurityEvents,
             )
+            retireDirectBridgeTokens()
+            migrateAgentAuthenticationOrigins()
+            migrateAgentBindingApprovals()
+            migrateAgentBindingMentionAliases()
+            ensureAgentBindingMentionIndex()
         }
         
-        logger.info("✅ SQLite 数据库初始化完成: {}", databasePath)
+        logger.info(
+            "✅ Main database initialized: backend={}, clustered={}",
+            if (jdbcUrl.startsWith("jdbc:postgresql:")) "postgresql" else "sqlite",
+            clustered,
+        )
+    }
+
+    private fun configuredValue(environmentName: String, propertyName: String): String? =
+        System.getProperty(propertyName)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: System.getenv(environmentName)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: com.silk.backend.EnvLoader.get(environmentName)
+
+    /** Preserve the origin accepted during enrollment for pre-column device records. */
+    private fun org.jetbrains.exposed.sql.Transaction.migrateAgentAuthenticationOrigins() {
+        exec(
+            """
+            UPDATE agent_devices
+            SET authentication_origin = (
+                SELECT agent_pairing_requests.server_origin
+                FROM agent_pairing_requests
+                WHERE agent_pairing_requests.device_id = agent_devices.id
+                  AND agent_pairing_requests.state = 'CONSUMED'
+                  AND agent_pairing_requests.request_kind = 'DEVICE_ENROLLMENT'
+                ORDER BY agent_pairing_requests.consumed_at DESC
+                LIMIT 1
+            )
+            WHERE authentication_origin IS NULL
+            """.trimIndent()
+        )
+    }
+
+    /** Existing bindings were created only when one user controlled both approval sides. */
+    private fun org.jetbrains.exposed.sql.Transaction.migrateAgentBindingApprovals() {
+        exec(
+            """
+            UPDATE agent_bindings
+            SET owner_id = (
+                SELECT agent_instances.user_id
+                FROM agent_instances
+                WHERE agent_instances.id = agent_bindings.agent_instance_id
+            )
+            WHERE owner_id IS NULL
+            """.trimIndent()
+        )
+        exec(
+            """
+            UPDATE agent_bindings
+            SET agent_owner_approved_by = COALESCE(agent_owner_approved_by, owner_id),
+                agent_owner_approved_at = COALESCE(agent_owner_approved_at, created_at),
+                target_approved_by = COALESCE(target_approved_by, created_by),
+                target_approved_at = COALESCE(target_approved_at, created_at),
+                updated_at = COALESCE(updated_at, created_at)
+            WHERE status = 'ACTIVE'
+            """.trimIndent()
+        )
+    }
+
+    /** Give legacy Room bindings stable aliases before the live uniqueness index is installed. */
+    private fun org.jetbrains.exposed.sql.Transaction.migrateAgentBindingMentionAliases() {
+        val used = mutableSetOf<String>()
+        val rows = AgentBindings.innerJoin(AgentInstances)
+            .selectAll()
+            .orderBy(AgentBindings.createdAt to SortOrder.ASC, AgentBindings.id to SortOrder.ASC)
+            .toList()
+        rows.forEach { row ->
+            val targetType = row[AgentBindings.targetType]
+            val targetId = row[AgentBindings.targetId]
+            val scope = row[AgentBindings.messageScope]
+            val scopeKey = "$targetType|$targetId|$scope"
+            val existing = row[AgentBindings.mentionAlias].trim().lowercase()
+            val base = if (targetType == "ROOM") {
+                defaultAgentMentionAlias(row[AgentInstances.agentType])
+            } else {
+                "__workspace__${row[AgentBindings.id]}"
+            }
+            var alias = existing.takeIf { it.isNotBlank() } ?: base
+            if (targetType == "ROOM" && normalizeAgentMentionAlias(alias) == null) alias = base
+            if (targetType != "ROOM") alias = base
+            var suffix = 2
+            while ("$scopeKey|$alias" in used) {
+                val suffixText = suffix.toString()
+                alias = if (targetType == "ROOM") {
+                    "${base.take((32 - suffixText.length).coerceAtLeast(1))}$suffixText"
+                } else {
+                    "$base$suffixText"
+                }
+                suffix += 1
+            }
+            used += "$scopeKey|$alias"
+            if (row[AgentBindings.mentionAlias] != alias) {
+                AgentBindings.update({ AgentBindings.id eq row[AgentBindings.id] }) { updateRow ->
+                    updateRow[AgentBindings.mentionAlias] = alias
+                }
+            }
+        }
+    }
+
+    /** Revoked bindings rewrite their route so a new active binding can reuse the alias. */
+    private fun org.jetbrains.exposed.sql.Transaction.ensureAgentBindingMentionIndex() {
+        exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_binding_mention " +
+                "ON agent_bindings(target_type, target_id, message_scope, mention_alias)",
+        )
+    }
+
+    /** The column remains for schema compatibility, but retired bearer credentials are destroyed. */
+    private fun org.jetbrains.exposed.sql.Transaction.retireDirectBridgeTokens() {
+        exec("UPDATE user_settings SET cc_bridge_token = NULL WHERE cc_bridge_token IS NOT NULL")
     }
 
     /**

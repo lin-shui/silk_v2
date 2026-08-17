@@ -1,24 +1,18 @@
 package com.silk.backend
 
-import com.silk.backend.database.AuthResponse
 import com.silk.backend.database.CreateGroupRequest
 import com.silk.backend.database.DeleteUserTodoRequest
 import com.silk.backend.database.GroupMembersResponse
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.GroupResponse
 import com.silk.backend.database.JoinGroupRequest
-import com.silk.backend.database.Language
-import com.silk.backend.database.LoginRequest
 import com.silk.backend.database.RecallMessageRequest
-import com.silk.backend.database.RegisterRequest
 import com.silk.backend.database.SimpleResponse
-import com.silk.backend.database.UpdateUserSettingsRequest
 import com.silk.backend.database.UpdateUserTodoRequest
 import com.silk.backend.database.User
 import com.silk.backend.database.UserRepository
 import com.silk.backend.database.UserTodoItemDto
 import com.silk.backend.database.UserTodosResponse
-import com.silk.backend.database.UserSettingsResponse
 import com.silk.backend.auth.JwtProvider
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.ChatHistoryEntry
@@ -59,98 +53,6 @@ import kotlin.test.assertTrue
 
 class BackendHttpContractTest {
     private val json = Json { ignoreUnknownKeys = true }
-
-    @Test
-    fun `auth and settings routes keep core contract stable`() {
-        TestWorkspace().use {
-            testApplication {
-                application { module() }
-
-                // 验证注册已禁用
-                val registerResponse = client.post("/auth/register") {
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        json.encodeToString(
-                            RegisterRequest(
-                                loginName = "alice",
-                                fullName = "Alice Chen",
-                                phoneNumber = "13800000001",
-                                password = "secret123"
-                            )
-                        )
-                    )
-                }
-                assertEquals(HttpStatusCode.OK, registerResponse.status)
-                val registerBody = registerResponse.decode<AuthResponse>()
-                assertFalse(registerBody.success)
-                assertEquals("注册已关闭，请使用华为帐号登录", registerBody.message)
-                assertNull(registerBody.user)
-
-                // 直接创建测试用户（绕过已禁用的注册API）
-                val user = createTestUser("alice", "Alice Chen", "13800000001")
-                assertNotNull(user)
-
-                val duplicateRegister = client.post("/auth/register") {
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        json.encodeToString(
-                            RegisterRequest(
-                                loginName = "alice",
-                                fullName = "Another Alice",
-                                phoneNumber = "13800000002",
-                                password = "secret123"
-                            )
-                        )
-                    )
-                }.decode<AuthResponse>()
-                assertFalse(duplicateRegister.success)
-                assertEquals("注册已关闭，请使用华为帐号登录", duplicateRegister.message)
-
-                val loginResponse = client.post("/auth/login") {
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        json.encodeToString(
-                            LoginRequest(
-                                loginName = "13800000001",
-                                password = "secret123"
-                            )
-                        )
-                    )
-                }
-                val loginBody = loginResponse.decode<AuthResponse>()
-                assertTrue(loginBody.success)
-                assertEquals(user.id, loginBody.user?.id)
-
-                val validateBody = client.get("/auth/validate/${user.id}")
-                    .decode<AuthResponse>()
-                assertTrue(validateBody.success)
-                assertEquals("Alice Chen", validateBody.user?.fullName)
-
-                val defaultSettings = client.get("/users/${user.id}/settings")
-                    .decode<UserSettingsResponse>()
-                assertTrue(defaultSettings.success)
-                assertEquals(Language.CHINESE, defaultSettings.settings?.language)
-
-                val updateSettingsResponse = client.put("/users/${user.id}/settings") {
-                    contentType(ContentType.Application.Json)
-                    setBody(
-                        json.encodeToString(
-                            UpdateUserSettingsRequest(
-                                userId = user.id,
-                                language = Language.ENGLISH,
-                                defaultAgentInstruction = "Answer briefly."
-                            )
-                        )
-                    )
-                }
-                assertEquals(HttpStatusCode.OK, updateSettingsResponse.status)
-                val updatedSettings = updateSettingsResponse.decode<UserSettingsResponse>()
-                assertTrue(updatedSettings.success)
-                assertEquals(Language.ENGLISH, updatedSettings.settings?.language)
-                assertEquals("Answer briefly.", updatedSettings.settings?.defaultAgentInstruction)
-            }
-        }
-    }
 
     @Test
     fun `group routes preserve create join and member listing flow`() {

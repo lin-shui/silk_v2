@@ -10,10 +10,12 @@ import contextlib
 import json
 import logging
 import os
-import shlex
 import signal
 import time
 from typing import Any, AsyncGenerator
+
+from bridge_common.execution_policy import ExecutionPolicy
+from bridge_common.unicode_safety import sanitize_text
 
 logger = logging.getLogger("codex_bridge.executor")
 
@@ -307,11 +309,24 @@ class CodexExecutor:
     def __init__(self, *, auto_approve: bool = True) -> None:
         self.auto_approve = auto_approve
 
-    def _build_cmd(self, *, cwd: str, resume_thread_id: str | None) -> list[str]:
+    def _build_cmd(
+        self,
+        *,
+        cwd: str,
+        resume_thread_id: str | None,
+        execution_policy: ExecutionPolicy | None = None,
+    ) -> list[str]:
         # Use GLOBAL --cd (before `exec`) so the same shape works for both
         # fresh runs and `exec resume` (which does not accept --cd as a
         # subcommand flag).
         cmd: list[str] = ["codex", "--cd", cwd]
+        if execution_policy is not None:
+            cmd += [
+                "--sandbox", execution_policy.codex_sandbox,
+                "--ask-for-approval", "never",
+            ]
+            if not execution_policy.can_run_codex_shell:
+                cmd += ["--disable", "shell_tool", "--disable", "unified_exec"]
         if resume_thread_id:
             cmd += ["exec", "resume", resume_thread_id]
         else:
@@ -322,7 +337,7 @@ class CodexExecutor:
             "--skip-git-repo-check",
             "-c", "show_raw_agent_reasoning=true",
         ]
-        if self.auto_approve:
+        if execution_policy is None and self.auto_approve:
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
         cmd.append("-")
         return cmd
@@ -333,10 +348,13 @@ class CodexExecutor:
         prompt: str,
         cwd: str,
         resume_thread_id: str | None = None,
+        execution_policy: ExecutionPolicy | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        cmd = self._build_cmd(cwd=cwd, resume_thread_id=resume_thread_id)
-        logger.info("codex exec: %s", shlex.join(cmd))
-
+        cmd = self._build_cmd(
+            cwd=cwd,
+            resume_thread_id=resume_thread_id,
+            execution_policy=execution_policy,
+        )
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
@@ -353,7 +371,7 @@ class CodexExecutor:
             len(prompt),
         )
         assert proc.stdin is not None
-        proc.stdin.write(prompt.encode("utf-8"))
+        proc.stdin.write(sanitize_text(prompt).encode("utf-8"))
         await proc.stdin.drain()
         proc.stdin.close()
 
@@ -411,7 +429,7 @@ class CodexExecutor:
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.warning("codex emitted non-JSON line: %r", line)
+                    logger.warning("codex emitted non-JSON output (%d chars)", len(line))
                     continue
 
                 parsed = parse_jsonl_event(obj)
@@ -473,7 +491,7 @@ class CodexExecutor:
             if rc != 0:
                 stderr_text = stderr_bytes.decode("utf-8", errors="replace")
                 logger.warning(
-                    "codex process exited with code %d: %s", rc, stderr_text[:500],
+                    "codex process exited with code %d (stderr_chars=%d)", rc, len(stderr_text),
                 )
 
     @staticmethod

@@ -32,6 +32,12 @@ data class User(
     val createdAt: String = ""
 )
 
+@Serializable
+private data class DesktopSession(
+    val user: User,
+    val accessToken: String,
+)
+
 /**
  * 群组信息
  */
@@ -140,9 +146,11 @@ class AppState {
     /**
      * 登录成功后设置用户信息
      */
-    fun setUser(user: User) {
+    fun setUser(user: User, accessToken: String) {
+        require(accessToken.isNotBlank()) { "登录响应缺少 access token" }
         currentUser = user
-        saveUserToDisk(user)
+        ApiClient.accessToken = accessToken
+        saveUserToDisk(user, accessToken)
         navigateTo(Scene.GROUP_LIST)
     }
     
@@ -158,6 +166,7 @@ class AppState {
      * 登出
      */
     fun logout() {
+        ApiClient.accessToken = null
         currentUser = null
         selectedGroup = null
         sceneHistory.clear()
@@ -168,10 +177,14 @@ class AppState {
     /**
      * 保存用户信息到磁盘（用于自动登录）
      */
-    private fun saveUserToDisk(user: User) {
+    private fun saveUserToDisk(user: User, accessToken: String) {
         try {
             val userFile = File(System.getProperty("user.home"), ".silk_user.json")
-            val json = Json.encodeToString(user)
+            val json = Json.encodeToString(DesktopSession(user, accessToken))
+            if (!userFile.exists() && !userFile.createNewFile()) {
+                error("无法创建本地会话文件")
+            }
+            protectSessionFile(userFile)
             userFile.writeText(json)
             println("✅ 用户信息已保存")
         } catch (e: Exception) {
@@ -186,11 +199,18 @@ class AppState {
         try {
             val userFile = File(System.getProperty("user.home"), ".silk_user.json")
             if (userFile.exists()) {
+                protectSessionFile(userFile)
                 val json = userFile.readText()
-                val user = Json.decodeFromString<User>(json)
-                currentUser = user
-                currentScene = Scene.GROUP_LIST
-                println("✅ 自动登录: ${user.fullName}")
+                val session = runCatching { Json.decodeFromString<DesktopSession>(json) }.getOrNull()
+                if (session != null && session.accessToken.isNotBlank()) {
+                    ApiClient.accessToken = session.accessToken
+                    currentUser = session.user
+                    currentScene = Scene.GROUP_LIST
+                    println("✅ 自动登录: ${session.user.fullName}")
+                } else {
+                    // Legacy files contained only User and cannot authenticate after the route hardening.
+                    userFile.delete()
+                }
             }
         } catch (e: Exception) {
             println("❌ 加载用户信息失败: ${e.message}")
@@ -209,6 +229,14 @@ class AppState {
             }
         } catch (e: Exception) {
             println("❌ 删除用户信息失败: ${e.message}")
+        }
+    }
+
+    private fun protectSessionFile(file: File) {
+        val readProtected = file.setReadable(false, false) && file.setReadable(true, true)
+        val writeProtected = file.setWritable(false, false) && file.setWritable(true, true)
+        if (!readProtected || !writeProtected) {
+            error("无法将本地会话文件限制为当前用户访问")
         }
     }
 }

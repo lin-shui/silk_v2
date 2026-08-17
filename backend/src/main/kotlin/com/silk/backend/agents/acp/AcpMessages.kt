@@ -102,6 +102,20 @@ data class SessionLoadResult(
 data class SessionPromptParams(
     val sessionId: String,
     val prompt: List<ContentBlock>,
+    @SerialName("_silk") val silk: SilkPromptContext? = null,
+)
+
+@Serializable
+data class SilkPromptContext(
+    val protocolVersion: Int = 1,
+    val executionPolicy: SilkExecutionPolicy,
+)
+
+@Serializable
+data class SilkExecutionPolicy(
+    val readFile: Boolean = false,
+    val writeFile: Boolean = false,
+    val runCommand: Boolean = false,
 )
 
 @Serializable

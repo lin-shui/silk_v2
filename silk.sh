@@ -449,7 +449,7 @@ is_silk_managed_pid() {
     fi
 
     case "$cmdline" in
-        *"$SILK_DIR"*|*":backend:run"*|*"python3 -m http.server $FRONTEND_PORT"*|*"python -m http.server $FRONTEND_PORT"*)
+        *"$SILK_DIR"*|*":backend:run"*|*"scripts/silk_static_server.py $FRONTEND_PORT"*|*"python3 -m http.server $FRONTEND_PORT"*|*"python -m http.server $FRONTEND_PORT"*)
             return 0
             ;;
     esac
@@ -1547,8 +1547,8 @@ start_services_internal() {
     BUILD_TS=$(date +%Y%m%d%H%M%S)
     sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
 
-    cd "$STATIC_DIR"
-    nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
+    nohup python3 "$SILK_DIR/scripts/silk_static_server.py" "$FRONTEND_PORT" \
+        --bind 0.0.0.0 --directory "$STATIC_DIR" > /tmp/silk_frontend.log 2>&1 &
     echo -e "  ${GREEN}前端静态服务器已启动${NC}"
     echo -e "  日志: /tmp/silk_frontend.log"
     
@@ -1650,9 +1650,9 @@ start_services() {
         BUILD_TS=$(date +%Y%m%d%H%M%S)
         sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
         
-        # 使用Python静态服务器提供服务
-        cd "$STATIC_DIR"
-        nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
+        # 使用支持 /device SPA 路由的 Python 静态服务器提供服务
+        nohup python3 "$SILK_DIR/scripts/silk_static_server.py" "$FRONTEND_PORT" \
+            --bind 0.0.0.0 --directory "$STATIC_DIR" > /tmp/silk_frontend.log 2>&1 &
         echo -e "  ${GREEN}前端静态服务器已启动${NC}"
         echo -e "  日志: /tmp/silk_frontend.log"
     fi
@@ -1823,8 +1823,8 @@ quick_restart() {
         # 替换 index.html 中的构建时间戳占位符，确保浏览器缓存每次构建后失效
         BUILD_TS=$(date +%Y%m%d%H%M%S)
         sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
-        cd "$STATIC_DIR"
-        nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
+        nohup python3 "$SILK_DIR/scripts/silk_static_server.py" "$FRONTEND_PORT" \
+            --bind 0.0.0.0 --directory "$STATIC_DIR" > /tmp/silk_frontend.log 2>&1 &
         echo "  前端启动中 (静态服务器)..."
     else
         echo "  ${YELLOW}前端预编译文件不存在，请先运行: ./silk.sh build${NC}"

@@ -24,10 +24,12 @@ import com.silk.web.workspace.WorkspaceDto
 import com.silk.web.workspace.WorkspaceApiException
 import com.silk.web.workspace.createWorkspace as createRoomWorkspace
 import com.silk.web.workspace.deleteWorkspace as deleteRoomWorkspace
+import com.silk.web.workspace.fetchRecentWorkingDir
 import com.silk.web.workspace.fetchWorkspaces
 import com.silk.web.workspace.patchWorkspace as patchRoomWorkspace
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.web.attributes.InputType
 import org.jetbrains.compose.web.css.AlignItems
@@ -196,7 +198,6 @@ private fun WorkflowChatPanel(
     var trustConfirmPath by remember(groupId) { mutableStateOf("") }
     var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
     var showPermModeDropdown by remember(groupId) { mutableStateOf(false) }
-    var showAgentDropdown by remember(groupId) { mutableStateOf(false) }
     var switchError by remember(groupId) { mutableStateOf<String?>(null) }
     var sourcePanelOpen by remember(groupId) { mutableStateOf(false) }
     var diffRefreshSignal by remember(groupId) { mutableStateOf(0) }
@@ -221,6 +222,8 @@ private fun WorkflowChatPanel(
     var workspaceRefreshVersion by remember(groupId) { mutableStateOf(0) }
     var showWorkspaceCreate by remember(groupId) { mutableStateOf(false) }
     var workspaceManageTarget by remember(groupId) { mutableStateOf<WorkspaceDto?>(null) }
+    var showRoomAgentBindings by remember(groupId) { mutableStateOf(false) }
+    var workspaceAgentBindingsTarget by remember(groupId) { mutableStateOf<WorkspaceDto?>(null) }
     var groupMembers by remember(groupId) { mutableStateOf<List<GroupMember>>(emptyList()) }
     var showRoomMembers by remember(groupId) { mutableStateOf(false) }
     var roomMembers by remember(groupId) { mutableStateOf<List<WorkflowRoomMember>>(emptyList()) }
@@ -594,6 +597,7 @@ private fun WorkflowChatPanel(
                 membersLabel = strings.membersButton,
                 isExporting = isExportingMarkdown,
                 exportHint = exportMarkdownHint,
+                onAgents = { showRoomAgentBindings = true },
                 onOpenFiles = { showFolderExplorer = true },
                 onExport = {
                     scope.launch {
@@ -623,6 +627,14 @@ private fun WorkflowChatPanel(
                 onClick = { showGitIntegration = true },
             )
         } else {
+            if (activeWorkspace?.role == "OWNER") {
+                ConversationHeaderActionButton(
+                    label = "管理 Agent",
+                    icon = "🤖",
+                ) {
+                    workspaceAgentBindingsTarget = activeWorkspace
+                }
+            }
             // Owner 管理完整工作区；Co-pilot 只管理获授权目录。
             if (activeWorkspace?.role == "OWNER" || canControlActiveWorkspace) {
                 ConversationHeaderActionButton(
@@ -1019,7 +1031,6 @@ private fun WorkflowChatPanel(
                             }
                             onClick {
                                 showPermModeDropdown = !showPermModeDropdown
-                                showAgentDropdown = false
                             }
                         }) { Text(modeLabel) }
 
@@ -1096,68 +1107,12 @@ private fun WorkflowChatPanel(
                                 property("user-select", "none")
                             }
                             onClick {
-                                showAgentDropdown = !showAgentDropdown
                                 showPermModeDropdown = false
+                                if (activeWorkspace?.role == "OWNER") {
+                                    workspaceAgentBindingsTarget = activeWorkspace
+                                }
                             }
                         }) { Text(activeAgentDisplay) }
-
-                        if (showAgentDropdown) {
-                            Div({
-                                style {
-                                    property("position", "absolute")
-                                    bottom(28.px)
-                                    property("left", "0")
-                                    backgroundColor(Color.white)
-                                    border(1.px, LineStyle.Solid, Color("#E0E0E0"))
-                                    borderRadius(8.px)
-                                    property("box-shadow", "0 4px 12px rgba(0,0,0,0.12)")
-                                    property("z-index", "100")
-                                    property("min-width", "180px")
-                                    padding(4.px)
-                                }
-                            }) {
-                                availableAgents.forEach { agent ->
-                                    val isCurrent = activeAgentDisplay.contains(agent.displayName) ||
-                                        activeAgentDisplay.contains(agent.agentType)
-                                    Div({
-                                        style {
-                                            padding(8.px, 12.px)
-                                            borderRadius(4.px)
-                                            fontSize(14.px)
-                                            property("cursor", if (agent.connected) "pointer" else "default")
-                                            fontWeight(if (isCurrent) "600" else "normal")
-                                            color(when {
-                                                isCurrent -> Color("#6A1B9A")
-                                                !agent.connected -> Color("#BDBDBD")
-                                                else -> Color("#333333")
-                                            })
-                                            if (isCurrent) backgroundColor(Color("#F3E5F5"))
-                                            if (!agent.connected) property("opacity", "0.6")
-                                        }
-                                        onClick {
-                                            if (!isCurrent && agent.connected) {
-                                                showAgentDropdown = false
-                                                scope.launch {
-                                                    val resp = ApiClient.updateCcSettings(
-                                                        userId, activeWorkspaceId ?: return@launch,
-                                                        activeAgent = agent.agentType,
-                                                    )
-                                                    if (resp.success) {
-                                                        activeAgentDisplay = resp.agentDisplayName
-                                                        permissionMode = resp.permissionMode
-                                                    } else {
-                                                        switchError = resp.error ?: "切换失败"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }) {
-                                        val suffix = if (!agent.connected) "（未连接）" else ""
-                                        Text(if (isCurrent) "\u2713 ${agent.displayName}$suffix" else "  ${agent.displayName}$suffix")
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
 
@@ -1490,6 +1445,27 @@ private fun WorkflowChatPanel(
         )
     }
 
+    if (showRoomAgentBindings) {
+        AgentBindingManagementDialog(
+            targetType = BindingTargetType.ROOM,
+            targetId = groupId,
+            targetName = workflowName,
+            onDismiss = { showRoomAgentBindings = false },
+        )
+    }
+
+    workspaceAgentBindingsTarget?.let { workspace ->
+        AgentBindingManagementDialog(
+            targetType = BindingTargetType.WORKSPACE,
+            targetId = workspace.workspaceId,
+            targetName = workspace.name,
+            workspaceOwnerId = workspace.ownerId,
+            activeAgentInstanceId = workspace.activeAgentInstanceId,
+            onDismiss = { workspaceAgentBindingsTarget = null },
+            onChanged = { workspaceRefreshVersion += 1 },
+        )
+    }
+
     if (showTrustConfirm) {
         TrustConfirmDialog(
             path = trustConfirmPath,
@@ -1523,7 +1499,6 @@ private fun WorkflowChatPanel(
         WorkspaceCreateDialog(
             userId = userId,
             roomId = groupId,
-            agents = availableAgents,
             onDismiss = { showWorkspaceCreate = false },
             onCreated = { created ->
                 workspaces = (workspaces.filterNot { it.workspaceId == created.workspaceId } + created)
@@ -1716,15 +1691,16 @@ private fun WorkflowChatPanel(
         )
     }
     githubIssueNumber?.let { issueNumber ->
+        val sourceWorkspace = activeWorkspace?.takeIf { it.workingDir.isNotBlank() }
+            ?: currentWorkspaces.firstOrNull {
+                it.ownerId == userId && it.lifecycleState == "ACTIVE" && it.workingDir.isNotBlank()
+            }
         GithubIssueWorkspaceDialog(
             userId = userId,
             roomId = groupId,
             issueNumber = issueNumber,
-            agents = availableAgents,
-            initialWorkingDir = activeWorkspace?.workingDir.orEmpty().ifBlank {
-                currentWorkspaces.firstOrNull { it.ownerId == userId && it.lifecycleState == "ACTIVE" }
-                    ?.workingDir.orEmpty()
-            },
+            initialWorkingDir = sourceWorkspace?.workingDir.orEmpty(),
+            preferredAgentInstanceId = sourceWorkspace?.activeAgentInstanceId.orEmpty(),
             onDismiss = { githubIssueNumber = null },
             onCreated = { response ->
                 val created = response.workspace
@@ -1753,22 +1729,60 @@ private fun WorkflowChatPanel(
 private fun WorkspaceCreateDialog(
     userId: String,
     roomId: String,
-    agents: List<AgentInfo>,
     onDismiss: () -> Unit,
     onCreated: (WorkspaceDto) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
     var workingDir by remember { mutableStateOf("") }
-    var agentType by remember(agents) {
-        mutableStateOf(agents.firstOrNull { it.connected }?.agentType.orEmpty())
-    }
+    var devices by remember { mutableStateOf<List<ManagedDeviceDto>>(emptyList()) }
+    var agents by remember { mutableStateOf<List<ManagedAgentDto>>(emptyList()) }
+    var selectedAgentId by remember { mutableStateOf("") }
+    var loadingAgents by remember { mutableStateOf(true) }
     var visibility by remember { mutableStateOf("PRIVATE") }
     var saving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showFolderPicker by remember { mutableStateOf(false) }
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustBridgeId by remember { mutableStateOf<String?>(null) }
+    var rememberedDirAgentId by remember { mutableStateOf<String?>(null) }
+    val activeAgents = agents.filter { it.status == ManagedAgentStatus.ACTIVE }
+    val selectedAgent = activeAgents.firstOrNull { it.agentInstanceId == selectedAgentId }
+    val agentType = selectedAgent?.agentType.orEmpty()
+    val deviceNames = devices.associate { it.deviceId to it.displayName }
+
+    LaunchedEffect(Unit) {
+        loadingAgents = true
+        try {
+            devices = ApiClient.getManagedDevices()
+            agents = ApiClient.getManagedAgents()
+            selectedAgentId = agents.firstOrNull {
+                it.status == ManagedAgentStatus.ACTIVE && it.connected
+            }?.agentInstanceId.orEmpty()
+        } catch (error: Exception) {
+            errorMessage = error.message ?: "加载 Agent 失败"
+        } finally {
+            loadingAgents = false
+        }
+    }
+
+    LaunchedEffect(selectedAgentId) {
+        val agentInstanceId = selectedAgentId
+        rememberedDirAgentId = null
+        if (agentInstanceId.isBlank()) return@LaunchedEffect
+        val token = JwtManager.getAccessToken() ?: return@LaunchedEffect
+        val recentDir = try {
+            fetchRecentWorkingDir(roomId, token, agentInstanceId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            ""
+        }
+        if (selectedAgentId == agentInstanceId) {
+            workingDir = recentDir
+            rememberedDirAgentId = agentInstanceId.takeIf { recentDir.isNotBlank() }
+        }
+    }
 
     suspend fun create() {
         val token = JwtManager.getAccessToken()
@@ -1776,7 +1790,7 @@ private fun WorkspaceCreateDialog(
             errorMessage = "登录状态已失效"
             return
         }
-        if (name.isBlank() || workingDir.isBlank() || agentType.isBlank()) {
+        if (name.isBlank() || workingDir.isBlank() || selectedAgent == null) {
             errorMessage = "请填写名称、Agent 和工作目录"
             return
         }
@@ -1789,6 +1803,7 @@ private fun WorkspaceCreateDialog(
                 name = name.trim(),
                 workingDir = workingDir.trim(),
                 agentType = agentType,
+                agentInstanceId = selectedAgent.agentInstanceId,
                 visibility = visibility,
             )
             onCreated(created)
@@ -1811,7 +1826,7 @@ private fun WorkspaceCreateDialog(
             errorMessage = "请选择工作目录"
             return
         }
-        when (val trust = ApiClient.checkTrustedDir(userId, workingDir.trim())) {
+        when (val trust = ApiClient.checkTrustedDir(userId, workingDir.trim(), selectedAgentId)) {
             is ApiClient.TrustCheckResult.Trusted -> create()
             is ApiClient.TrustCheckResult.NotTrusted -> {
                 trustBridgeId = trust.bridgeId
@@ -1848,19 +1863,28 @@ private fun WorkspaceCreateDialog(
             WorkspaceFormLabel("Agent")
             Select({
                 style { workspaceFormInputStyle() }
-                onChange { agentType = it.value ?: "" }
-            }) {
-                if (agents.isEmpty()) {
-                    Option("") { Text("没有可用 Agent") }
+                onChange {
+                    selectedAgentId = it.value ?: ""
+                    workingDir = ""
+                    rememberedDirAgentId = null
+                    errorMessage = null
                 }
-                agents.forEach { agent ->
+            }) {
+                if (activeAgents.none { it.connected }) {
+                    Option("") { Text(if (loadingAgents) "正在加载 Agent…" else "没有已连接的 Agent") }
+                }
+                activeAgents.forEach { agent ->
                     Option(
-                        agent.agentType,
+                        agent.agentInstanceId,
                         attrs = {
                             if (!agent.connected) attr("disabled", "")
-                            if (agent.agentType == agentType) attr("selected", "")
+                            if (agent.agentInstanceId == selectedAgentId) attr("selected", "")
                         },
-                    ) { Text("${agent.displayName}${if (agent.connected) "" else "（离线）"}") }
+                    ) {
+                        val deviceName = deviceNames[agent.deviceId] ?: "未知设备"
+                        val state = if (agent.connected) "在线" else "离线"
+                        Text("${agent.displayName} · $deviceName · ${agent.agentType} · $state")
+                    }
                 }
             }
 
@@ -1868,22 +1892,32 @@ private fun WorkspaceCreateDialog(
             Div({ style { display(DisplayStyle.Flex); property("gap", "8px") } }) {
                 Input(InputType.Text) {
                     value(workingDir)
-                    onInput { workingDir = it.value }
+                    onInput {
+                        workingDir = it.value
+                        rememberedDirAgentId = null
+                    }
                     attr("placeholder", "工作目录路径")
                     style { workspaceFormInputStyle(flex = true) }
                 }
                 Button({
                     attr("title", "选择工作目录")
+                    if (selectedAgent == null) attr("disabled", "")
                     style {
                         width(40.px); height(40.px); padding(0.px)
                         borderRadius(6.px)
                         border(1.px, LineStyle.Solid, Color(SilkColors.border))
                         backgroundColor(Color.white)
                         color(Color(SilkColors.primary))
-                        property("cursor", "pointer")
+                        property("cursor", if (selectedAgent == null) "default" else "pointer")
+                        if (selectedAgent == null) property("opacity", "0.55")
                     }
-                    onClick { showFolderPicker = true }
+                    onClick { if (selectedAgent != null) showFolderPicker = true }
                 }) { Text("📂") }
+            }
+            if (rememberedDirAgentId == selectedAgentId && workingDir.isNotBlank()) {
+                Div({ style { marginTop(6.px); fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
+                    Text("已自动填入此工作群组在该 Agent 上最近使用的目录")
+                }
             }
 
             Div({
@@ -1935,6 +1969,7 @@ private fun WorkspaceCreateDialog(
     if (showFolderPicker) {
         FolderPickerDialog(
             userId = userId,
+            agentInstanceId = selectedAgentId,
             initialPath = workingDir.ifBlank { null },
             onDismiss = { showFolderPicker = false },
             onConfirm = {
@@ -1951,7 +1986,7 @@ private fun WorkspaceCreateDialog(
             onTrust = {
                 scope.launch {
                     saving = true
-                    val added = ApiClient.addTrustedDir(userId, workingDir)
+                    val added = ApiClient.addTrustedDir(userId, workingDir, selectedAgentId)
                     saving = false
                     if (added) {
                         showTrustConfirm = false
@@ -2754,6 +2789,7 @@ private fun WorkflowSettingsDialog(
 internal fun FolderPickerDialog(
     userId: String,
     workspaceId: String? = null,
+    agentInstanceId: String? = null,
     zIndex: Int = 2000,
     initialPath: String?,
     onDismiss: () -> Unit,
@@ -2773,7 +2809,12 @@ internal fun FolderPickerDialog(
         loadJob = scope.launch {
             loading = true
             errorMsg = null
-            val resp = ApiClient.listCcDir(userId, path, workspaceId = workspaceId)
+            val resp = ApiClient.listCcDir(
+                userId,
+                path,
+                workspaceId = workspaceId,
+                agentInstanceId = agentInstanceId,
+            )
             // 到这里说明本协程未被 cancel（否则 listCcDir 内部会重新抛 CancellationException）
             loading = false
             if (resp.success) {
@@ -3080,9 +3121,14 @@ internal fun ModalOverlay(
  * - Unix: segments[0] == "/"，separator == "/" → "/" + 中段以 "/" 拼
  * - Windows: segments[0] == "C:\\"（已带分隔符），separator == "\\" → head + 中段以 "\\" 拼
  */
-private fun buildBreadcrumbPath(segments: List<String>, upToIndex: Int, separator: String): String {
+internal fun buildBreadcrumbPath(segments: List<String>, upToIndex: Int, separator: String): String {
     if (segments.isEmpty() || upToIndex < 0) return separator
     val head = segments[0]
+    // Codex Adapter <= 0.4.10 omitted the Unix root marker from segments.
+    // Directory listing paths are absolute by contract, so restore it for compatibility.
+    if (separator == "/" && head != separator) {
+        return separator + segments.take(upToIndex + 1).joinToString(separator)
+    }
     if (upToIndex == 0) return head
     val tail = segments.subList(1, upToIndex + 1)
     // head 已包含或就是分隔符（Unix 的 "/", Windows 的 "C:\"）；

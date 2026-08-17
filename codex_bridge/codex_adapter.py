@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Codex Bridge Adapter — ACP server bridging Silk backend to Codex CLI.
 
-Connects to backend `/agent-bridge` via WebSocket, speaks ACP (JSON-RPC 2.0),
-delegates Codex CLI execution to :mod:`codex_executor`, and pushes
-``session/update`` notifications back during streaming.
+Receives ACP JSON-RPC objects over protected stdio IPC while ``silk-agent`` owns
+the authenticated multiplexed backend WebSocket. Requests delegate Codex CLI execution to
+:mod:`codex_executor`, with ``session/update`` notifications streamed back.
 
 Supports prompt streaming, cancellation, session resume, and Silk-specific
 directory/session helpers exposed via `_silk/*`.
@@ -14,18 +14,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 import time
-import json
 import logging
 import os
 import signal
-import ssl
 import sys
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-import websockets
-from websockets.exceptions import ConnectionClosed
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+from bridge_common.host_ipc import HostIPC
+from bridge_common.execution_policy import ExecutionPolicy, resolve_prompt_working_directory
 
 from codex_dispatcher import DispatcherState, dispatch_event
 from codex_executor import CodexExecutor, cancel_process
@@ -63,130 +65,66 @@ class AcpAgentServer:
 
     def __init__(
         self,
-        ws_url: str,
-        token: str,
         default_cwd: str,
         *,
-        tls_insecure: bool = False,
+        host_ipc: HostIPC,
     ) -> None:
-        self.ws_url = _build_ws_url(ws_url, token)
-        self.token = token
         self.default_cwd = os.path.realpath(default_cwd)
-        self.tls_insecure = tls_insecure
-
-        self.ws: websockets.WebSocketClientProtocol | None = None
+        self.host_ipc = host_ipc
         self.executor = CodexExecutor(auto_approve=os.environ.get("CODEX_AUTO_APPROVE", "1") not in ("0", "false", "False"))
         self.sessions: dict[str, AcpSession] = {}
 
     # ------------------------------------------------------------------
-    # Connect loop with exponential backoff
+    # Host IPC loop
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        connect_kw: dict[str, Any] = {
-            "ping_interval": 30,
-            "ping_timeout": 10,
-            "max_size": 10 * 1024 * 1024,
-        }
-        if self.ws_url.startswith("wss://") and self.tls_insecure:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            connect_kw["ssl"] = ctx
-            logger.warning(
-                "[ACP] TLS certificate verification disabled (self-signed/internal use only)"
-            )
-
-        delay = 1.0
-        max_delay = 60.0
-
+        logger.info("[ACP] Running behind silk-agent Host multiplexed WSS")
         while True:
-            try:
-                logger.info("[ACP] Connecting to %s", self.ws_url)
-                async with websockets.connect(self.ws_url, **connect_kw) as ws:
-                    self.ws = ws
-                    delay = 1.0
-                    logger.info("[ACP] Connected")
-                    await self._receive_loop()
-                logger.info("[ACP] WebSocket closed cleanly")
-            except ConnectionClosed as exc:
-                logger.warning("[ACP] Connection closed: %s", exc)
-            except (ConnectionRefusedError, OSError) as exc:
-                logger.warning("[ACP] Connection failed: %s", exc)
-            except Exception as exc:
-                logger.error("[ACP] Unexpected error: %s", exc, exc_info=True)
-            finally:
-                self.ws = None
-
-            logger.info("[ACP] Reconnecting in %.0fs", delay)
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, max_delay)
+            await self._dispatch_message(await self.host_ipc.receive_acp())
 
     # ------------------------------------------------------------------
-    # Receive loop — fire-and-forget dispatch so notifications never block
+    # Receive dispatch
     # ------------------------------------------------------------------
 
-    async def _receive_loop(self) -> None:
-        assert self.ws is not None
-        async for raw in self.ws:
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8", errors="replace")
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                logger.warning("[ACP] Invalid JSON: %s", str(raw)[:200])
-                continue
+    async def _dispatch_message(self, msg: dict[str, Any]) -> None:
+        if not isinstance(msg, dict):
+            logger.warning("[ACP] Ignoring non-object message")
+            return
 
-            msg_id = msg.get("id")
-            method = msg.get("method")
+        msg_id = msg.get("id")
+        method = msg.get("method")
 
-            if msg_id is not None and method is not None:
-                # Incoming request — dispatch in a task so we don't block reads
-                # (critical: a session/cancel notification must reach us while a
-                # session/prompt request is still being processed)
-                task = asyncio.create_task(
-                    self._handle_request(msg_id, method, msg.get("params"))
-                )
-                task.add_done_callback(_log_task_exception)
-            elif method is not None:
-                # Notification (no id, no response expected)
-                task = asyncio.create_task(
-                    self._handle_notification(method, msg.get("params"))
-                )
-                task.add_done_callback(_log_task_exception)
-            # Responses (id without method) cannot occur — the adapter never
-            # sends requests, so the backend never replies to us.
+        if msg_id is not None and method is not None:
+            task = asyncio.create_task(
+                self._handle_request(msg_id, method, msg.get("params"))
+            )
+            task.add_done_callback(_log_task_exception)
+        elif method is not None:
+            task = asyncio.create_task(
+                self._handle_notification(method, msg.get("params"))
+            )
+            task.add_done_callback(_log_task_exception)
 
     # ------------------------------------------------------------------
     # Send helpers
     # ------------------------------------------------------------------
 
     async def _send_response(self, msg_id: Any, result: Any) -> None:
-        if self.ws is None:
-            return
-        await self.ws.send(
-            json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": result})
-        )
+        await self._send_message({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
     async def _send_error(self, msg_id: Any, code: int, message: str) -> None:
-        if self.ws is None:
-            return
-        await self.ws.send(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": code, "message": message},
-                }
-            )
-        )
+        await self._send_message({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": code, "message": message},
+        })
 
     async def _send_notification(self, method: str, params: Any) -> None:
-        if self.ws is None:
-            return
-        await self.ws.send(
-            json.dumps({"jsonrpc": "2.0", "method": method, "params": params})
-        )
+        await self._send_message({"jsonrpc": "2.0", "method": method, "params": params})
+
+    async def _send_message(self, message: dict[str, Any]) -> None:
+        await self.host_ipc.forward_acp(message)
 
     # ------------------------------------------------------------------
     # Request routing
@@ -358,10 +296,31 @@ class AcpAgentServer:
         t0 = time.monotonic()
         acp_session_id = params.get("sessionId")
         prompt_blocks = params.get("prompt") or []
+        execution_policy = ExecutionPolicy.from_acp_prompt(
+            params,
+            managed_connection=self.host_ipc is not None,
+        )
         sess = self.sessions.get(acp_session_id)
         if sess is None:
             await self._send_error(msg_id, -32602, f"unknown sessionId: {acp_session_id}")
             return
+
+        try:
+            working_dir, used_default = resolve_prompt_working_directory(
+                sess.cwd,
+                self.default_cwd,
+                execution_policy,
+            )
+        except ValueError as exc:
+            await self._send_error(msg_id, -32602, str(exc))
+            return
+        if used_default:
+            logger.warning(
+                "[ACP] session cwd is unavailable on this device; using local default for message-only prompt"
+            )
+            sess.cwd = working_dir
+            # A resumed thread belongs to its original device/path.
+            sess.cli_session_id = None
 
         prompt_text = "\n".join(
             b.get("text", "") for b in prompt_blocks if b.get("type") == "text"
@@ -393,6 +352,7 @@ class AcpAgentServer:
                 prompt=prompt_text,
                 cwd=sess.cwd,
                 resume_thread_id=sess.cli_session_id,
+                execution_policy=execution_policy,
             ):
                 kind = ev.get("kind")
 
@@ -613,30 +573,6 @@ class AcpAgentServer:
 # ---------------------------------------------------------------------------
 
 
-def _build_ws_url(server: str, token: str) -> str:
-    """Normalize server address to ws:// or wss:// URL."""
-    host = server.rstrip("/")
-    lower = host.lower()
-    if lower.startswith("wss://"):
-        ws_scheme, host = "wss", host[6:]
-    elif lower.startswith("https://"):
-        ws_scheme, host = "wss", host[8:]
-    elif lower.startswith("ws://"):
-        ws_scheme, host = "ws", host[5:]
-    elif lower.startswith("http://"):
-        ws_scheme, host = "ws", host[7:]
-    else:
-        ws_scheme = "ws"
-    agent_type = os.environ.get("CODEX_AGENT_TYPE", "codex")
-    return f"{ws_scheme}://{host}/agent-bridge?agentType={agent_type}&token={token}"
-
-
-def _env_tls_insecure() -> bool:
-    return os.environ.get("BRIDGE_TLS_INSECURE", "").strip().lower() in (
-        "1", "true", "yes",
-    )
-
-
 def _log_task_exception(task: asyncio.Task) -> None:
     try:
         exc = task.exception()
@@ -654,16 +590,6 @@ def _log_task_exception(task: asyncio.Task) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Silk ACP bridge for Codex CLI")
     parser.add_argument(
-        "--server",
-        required=True,
-        help="Silk backend, e.g. localhost:8006 or https://host:port (HTTPS uses WSS)",
-    )
-    parser.add_argument(
-        "--token",
-        required=True,
-        help="Authentication token for the bridge connection",
-    )
-    parser.add_argument(
         "--working-dir",
         default=os.getcwd(),
         help="Default working directory for Codex CLI (default: cwd)",
@@ -675,24 +601,18 @@ def main() -> None:
         help="Log level (default: INFO)",
     )
     parser.add_argument(
-        "--tls-insecure",
+        "--silk-host-stdio",
         action="store_true",
-        help="WSS 时不校验服务端证书（自签证书场景）；也可用环境变量 BRIDGE_TLS_INSECURE=1",
+        help="Run as a silk-agent managed Adapter using Host IPC",
     )
     args = parser.parse_args()
-    tls_insecure = bool(args.tls_insecure) or _env_tls_insecure()
+    if not args.silk_host_stdio:
+        parser.error("direct Bridge mode is retired; launch this Adapter through silk-agent")
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    server = AcpAgentServer(
-        ws_url=args.server,
-        token=args.token,
-        default_cwd=args.working_dir,
-        tls_insecure=tls_insecure,
     )
 
     loop = asyncio.new_event_loop()
@@ -712,22 +632,41 @@ def main() -> None:
             pass
 
     async def _runner() -> None:
+        host_ipc = HostIPC()
+        await host_ipc.start("codex")
+        server = AcpAgentServer(
+            default_cwd=args.working_dir,
+            host_ipc=host_ipc,
+        )
         run_task = asyncio.create_task(server.run())
         shutdown_task = asyncio.create_task(shutdown_event.wait())
-        done, pending = await asyncio.wait(
-            {run_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for t in pending:
-            t.cancel()
-        for t in pending:
-            try:
-                await t
-            except asyncio.CancelledError:
-                pass
+        wait_tasks = {run_task, shutdown_task}
+        wait_tasks.add(asyncio.create_task(host_ipc.wait_shutdown()))
+        done, pending = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
+        try:
+            for t in pending:
+                t.cancel()
+            for t in pending:
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+            for t in done:
+                t.result()
+        finally:
+            await host_ipc.close()
 
     try:
         loop.run_until_complete(_runner())
     finally:
+        # asyncio installs a wakeup fd for loop-managed Unix signal handlers.
+        # Remove the handlers before closing the loop so a late Host SIGTERM
+        # cannot write into an already-closed fd and emit a spurious traceback.
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(sig)
+            except NotImplementedError:
+                pass
         loop.close()
 
 

@@ -85,6 +85,7 @@ import com.silk.backend.models.Workflow
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.agentChangesRoutes
+import com.silk.backend.routes.agentAuthRoutes
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.routes.obsidianRoutes
@@ -106,6 +107,18 @@ import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceLifecycleState
 import com.silk.backend.workspace.PersonalWorkspace
 import com.silk.backend.agents.acp.AcpRegistry
+import com.silk.backend.agents.auth.AgentBridgeConnectionRegistry
+import com.silk.backend.agents.auth.AgentAuthErrorResponse
+import com.silk.backend.agents.auth.AgentAuthRepository
+import com.silk.backend.agents.auth.AgentBindingAuthorizationService
+import com.silk.backend.agents.auth.AgentBindingMessageScope
+import com.silk.backend.agents.auth.AgentBindingTargetType
+import com.silk.backend.agents.auth.AgentCapability
+import com.silk.backend.agents.auth.AgentPermission
+import com.silk.backend.agents.auth.AgentRevocationWatcher
+import com.silk.backend.agents.auth.AgentRevocationCleanupScheduler
+import com.silk.backend.agents.auth.authenticateAgentSocket
+import com.silk.backend.routes.agentBridgeChallengeService
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.trust.TrustedDirManager
@@ -147,6 +160,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.webSocket
+import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
@@ -240,8 +254,12 @@ private fun sanitizeFileName(input: String): String =
  * 格式 "ip:<remoteIp>" 兼容已有 trust 记录。优先用 claude-code 的 IP（保留旧 trust 记录的兼容性），
  * 没有时退到任意一个已连接 agent 的 IP。无任何连接返回 null。
  */
-private fun resolveBridgeId(userId: String): String? {
-    val ip = getAnyBridgeIp(userId) ?: return null
+private fun resolveBridgeId(userId: String, agentInstanceId: String? = null): String? {
+    val ip = if (!agentInstanceId.isNullOrBlank()) {
+        AcpRegistry.getRemoteIpByInstance(agentInstanceId)
+    } else {
+        getAnyBridgeIp(userId)
+    } ?: return null
     return "ip:$ip"
 }
 
@@ -271,6 +289,35 @@ private fun resolveActiveAgentType(userId: String): String? {
     val connected = AcpRegistry.listConnected(userId)
     if (connected.isEmpty()) return null
     return connected.firstOrNull { it == "claude-code" } ?: connected.first()
+}
+
+private suspend fun ApplicationCall.requireAgentBindingPermission(
+    ownerId: String,
+    agentType: String,
+    agentInstanceId: String? = null,
+    targetId: String,
+    requiredPermissions: Set<AgentPermission>,
+    requiredCapabilities: Set<AgentCapability> = emptySet(),
+): com.silk.backend.agents.auth.AgentBindingAuthorization? {
+    val authorization = AgentBindingAuthorizationService.authorize(
+        userId = ownerId,
+        agentType = agentType,
+        agentInstanceId = agentInstanceId,
+        targetType = AgentBindingTargetType.WORKSPACE,
+        targetId = targetId,
+        messageScope = AgentBindingMessageScope.WORKSPACE,
+        requiredPermissions = requiredPermissions,
+        requiredCapabilities = requiredCapabilities,
+    )
+    if (authorization.allowed) return authorization
+    respond(
+        HttpStatusCode.Forbidden,
+        AgentAuthErrorResponse(
+            error = authorization.errorCode ?: "PERMISSION_DENIED",
+            message = authorization.message ?: "Agent is not authorized for this Workspace",
+        ),
+    )
+    return null
 }
 
 private suspend fun ApplicationCall.resolveControllableWorkspace(
@@ -407,9 +454,15 @@ fun Application.configureRouting() {
     }
     val gitPollingService = GitPollingService(gitStore, gitClient, onGitEvent)
     val gitPollingScheduler = GitPollingScheduler(gitStore, gitPollingService)
+    val agentRevocationWatcher = AgentRevocationWatcher()
+    val agentRevocationCleanupScheduler = AgentRevocationCleanupScheduler()
     environment.monitor.subscribe(ApplicationStarted) { gitPollingScheduler.start() }
+    environment.monitor.subscribe(ApplicationStarted) { agentRevocationWatcher.start(this) }
+    environment.monitor.subscribe(ApplicationStarted) { agentRevocationCleanupScheduler.start(this) }
     environment.monitor.subscribe(ApplicationStopped) {
         runBlocking { gitPollingScheduler.stop() }
+        runBlocking { agentRevocationWatcher.stop() }
+        runBlocking { agentRevocationCleanupScheduler.stop() }
         gitClient.close()
     }
 
@@ -425,8 +478,28 @@ fun Application.configureRouting() {
         override fun persistCliSession(rawWorkspaceId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
             workspaceManager.updateSessionState(rawWorkspaceId, agentType, cliSessionId, sessionStarted)
 
+        override fun persistCliSession(
+            rawWorkspaceId: String,
+            agentType: String,
+            agentInstanceId: String?,
+            cliSessionId: String,
+            sessionStarted: Boolean,
+        ): Boolean = workspaceManager.updateSessionState(
+            rawWorkspaceId,
+            agentType,
+            cliSessionId,
+            sessionStarted,
+            agentInstanceId,
+        )
+
         override fun persistActiveAgent(rawWorkspaceId: String, agentType: String): Boolean =
             workspaceManager.updateActiveAgent(rawWorkspaceId, agentType)
+
+        override fun persistActiveAgent(
+            rawWorkspaceId: String,
+            agentType: String,
+            agentInstanceId: String?,
+        ): Boolean = workspaceManager.updateActiveAgent(rawWorkspaceId, agentType, agentInstanceId)
 
         override fun persistPermissionMode(rawWorkspaceId: String, permissionMode: String): Boolean =
             workspaceManager.updatePermissionMode(rawWorkspaceId, permissionMode)
@@ -453,6 +526,21 @@ fun Application.configureRouting() {
             )
         }
 
+        override fun loadSeed(
+            rawWorkspaceId: String,
+            agentType: String,
+            agentInstanceId: String?,
+        ): AgentRuntime.WorkflowSeed? {
+            val triple = workspaceManager.loadSeed(rawWorkspaceId, agentType, agentInstanceId) ?: return null
+            val ws = workspaceManager.getWorkspace(rawWorkspaceId) ?: return null
+            return AgentRuntime.WorkflowSeed(
+                workingDir = triple.first,
+                cliSessionId = triple.second,
+                sessionStarted = triple.third,
+                permissionMode = ws.permissionMode,
+            )
+        }
+
         override fun resolveWorkflowId(rawWorkspaceId: String): String? =
             workspaceManager.getWorkspace(rawWorkspaceId)?.workspaceId
 
@@ -462,6 +550,7 @@ fun Application.configureRouting() {
 
     routing {
         coreRoutes()
+        agentAuthRoutes()
         agentChangesRoutes(workspaceManager)
         authRoutes()
         groupContactRoutes()
@@ -868,6 +957,7 @@ private fun Route.coreRoutes() {
                 )
                 return@get
             }
+            if (call.resolveOwnPathUser(userId) == null) return@get
             
             try {
                 val settings = UserSettingsRepository.getUserSettings(userId)
@@ -898,6 +988,7 @@ private fun Route.coreRoutes() {
                 )
                 return@put
             }
+            if (call.resolveOwnPathUser(userId) == null) return@put
             
             try {
                 val request = call.receive<UpdateUserSettingsRequest>()
@@ -929,37 +1020,27 @@ private fun Route.coreRoutes() {
 
         // ==================== CC 设置 API ====================
 
-        // 获取 CC 设置（token + bridge 状态）
+        // Legacy direct Bridge token is no longer exposed. This endpoint only reports status
+        // while older frontends migrate to device management.
         get("/users/{userId}/cc-settings") {
             val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@get
             try {
-                val token = UserSettingsRepository.getBridgeToken(userId)
                 val connected = isAnyBridgeConnected(userId)
                 val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
-                call.respond(CcSettingsResponse(true, "ok", token, connected, bridgeIp))
+                call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 获取CC设置失败: {}", e.message)
                 call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "获取失败: ${e.message}"))
             }
         }
 
-        // 生成/重新生成 Bridge Token
+        // Kept as an explicit migration response so stale clients do not silently retry.
         post("/users/{userId}/cc-settings/generate-token") {
-            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@post
-            try {
-                val token = UserSettingsRepository.generateBridgeToken(userId)
-                // 踢掉用旧 token 认证的 ACP 连接
-                val acpClosed = AcpRegistry.disconnect(userId)
-                if (acpClosed > 0) {
-                    logger.info("🔌 Token 重生：关闭 {} 个 ACP 连接", acpClosed)
-                }
-                val connected = isAnyBridgeConnected(userId)
-                val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
-                call.respond(CcSettingsResponse(true, "Token 已生成", token, connected, bridgeIp))
-            } catch (e: Exception) {
-                logger.error("❌ 生成Bridge Token失败: {}", e.message)
-                call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "生成失败: ${e.message}"))
-            }
+            call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@post
+            call.respond(
+                HttpStatusCode.Gone,
+                CcSettingsResponse(false, "Direct Bridge Token 已下线，请使用 silk-agent 设备配对"),
+            )
         }
 
         // 查询 Bridge 在线状态
@@ -980,6 +1061,14 @@ private fun Route.coreRoutes() {
             val bridgeConnected = isAnyBridgeConnected(ownerId)
             if (agentSnap != null) {
                 val descriptor = agentSnap.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
+                val binding = agentSnap.agentInstanceId?.let { instanceId ->
+                    AgentAuthRepository.findActiveBinding(
+                        instanceId,
+                        AgentBindingTargetType.WORKSPACE,
+                        workspaceId,
+                        AgentBindingMessageScope.WORKSPACE,
+                    )
+                }
                 call.respond(
                     CcStateResponse(
                         success = true,
@@ -990,7 +1079,11 @@ private fun Route.coreRoutes() {
                         sessionStarted = agentSnap.active,
                         bridgeConnected = bridgeConnected,
                         agentType = agentSnap.agentType ?: "",
-                        agentDisplayName = descriptor?.displayName ?: "",
+                        agentInstanceId = agentSnap.agentInstanceId.orEmpty(),
+                        agentDisplayName = listOfNotNull(
+                            binding?.agentDisplayName?.takeIf(String::isNotBlank) ?: descriptor?.displayName,
+                            binding?.agentDeviceDisplayName?.takeIf(String::isNotBlank),
+                        ).joinToString(" · "),
                         permissionMode = agentSnap.permissionMode,
                     )
                 )
@@ -1004,6 +1097,7 @@ private fun Route.coreRoutes() {
         get("/users/{userId}/cc-fs/list") {
             val pathUserId = call.parameters["userId"].orEmpty()
             val workspaceId = call.request.queryParameters["workspaceId"].orEmpty()
+            val requestedAgentInstanceId = call.request.queryParameters["agentInstanceId"].orEmpty()
             val path = call.request.queryParameters["path"]
             val showHidden = call.request.queryParameters["showHidden"]?.toBoolean() ?: false
             val workspace = workspaceId.takeIf { it.isNotBlank() }?.let {
@@ -1012,14 +1106,42 @@ private fun Route.coreRoutes() {
             val ownerId = workspace?.ownerId
                 ?: call.resolveOwnPathUser(pathUserId)
                 ?: return@get
-            if (!isAnyBridgeConnected(ownerId)) {
+            val requestedIdentity = requestedAgentInstanceId.takeIf(String::isNotBlank)?.let {
+                AcpRegistry.connectionIdentity(it)
+            }
+            if (requestedAgentInstanceId.isNotBlank() && requestedIdentity?.userId != ownerId) {
+                call.respond(HttpStatusCode.NotFound, DirListingResponse(success = false, error = "Agent 不存在或未连接"))
+                return@get
+            }
+            val exactAgentInstanceId = workspace?.activeAgentInstanceId?.takeIf(String::isNotBlank)
+                ?: requestedAgentInstanceId.takeIf(String::isNotBlank)
+            val bridgeConnected = exactAgentInstanceId?.let(AcpRegistry::isConnectedInstance)
+                ?: isAnyBridgeConnected(ownerId)
+            if (!bridgeConnected) {
                 call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
                 return@get
             }
             val agentType = workspace?.activeAgent?.takeIf { it.isNotBlank() }
+                ?: requestedIdentity?.agentType
                 ?: resolveActiveAgentType(ownerId)
                 ?: "claude-code"
-            val raw = AgentRuntime.listDirectory(ownerId, path, showHidden, agentType = agentType)
+            val authorization = if (workspace != null) {
+                call.requireAgentBindingPermission(
+                    ownerId = ownerId,
+                    agentType = agentType,
+                    agentInstanceId = workspace.activeAgentInstanceId,
+                    targetId = workspace.workspaceId,
+                    requiredPermissions = setOf(AgentPermission.READ_FILE),
+                    requiredCapabilities = setOf(AgentCapability.READ_FILE),
+                ) ?: return@get
+            } else null
+            val raw = AgentRuntime.listDirectory(
+                ownerId,
+                path,
+                showHidden,
+                agentType = agentType,
+                agentInstanceId = authorization?.agentInstanceId ?: exactAgentInstanceId,
+            )
             if (raw == null) {
                 call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
                 return@get
@@ -1076,8 +1198,17 @@ private fun Route.coreRoutes() {
             }
             val workspace = call.resolveControllableWorkspace(pathUserId, workspaceId) ?: return@post
             val ownerId = workspace.ownerId
+            val agentType = workspace.activeAgent.ifBlank { resolveActiveAgentType(ownerId) ?: "claude-code" }
+            val authorization = call.requireAgentBindingPermission(
+                    ownerId = ownerId,
+                    agentType = agentType,
+                    agentInstanceId = workspace.activeAgentInstanceId,
+                    targetId = workspace.workspaceId,
+                    requiredPermissions = setOf(AgentPermission.WRITE_WORKSPACE),
+                    requiredCapabilities = setOf(AgentCapability.WRITE_WORKSPACE),
+                ) ?: return@post
             // 信任目录检查（bridgeId 格式 "ip:<ip>" 兼容已有 trust 记录）
-            val bridgeId = resolveBridgeId(ownerId) ?: "unknown"
+            val bridgeId = resolveBridgeId(ownerId, authorization.agentInstanceId) ?: "unknown"
             if (!trustedDirManager.isTrusted(ownerId, bridgeId, rawPath)) {
                 call.respond(
                     HttpStatusCode.BadRequest,
@@ -1088,8 +1219,13 @@ private fun Route.coreRoutes() {
                 )
                 return@post
             }
-            val agentType = workspace.activeAgent.ifBlank { resolveActiveAgentType(ownerId) ?: "claude-code" }
-            when (val result = AgentRuntime.cdSync(ownerId, workspaceId, rawPath, agentType = agentType)) {
+            when (val result = AgentRuntime.cdSync(
+                ownerId,
+                workspaceId,
+                rawPath,
+                agentType = agentType,
+                agentInstanceId = authorization.agentInstanceId,
+            )) {
                 is AgentRuntime.CdResult.Err -> {
                     call.respond(
                         HttpStatusCode.Conflict,
@@ -1097,6 +1233,9 @@ private fun Route.coreRoutes() {
                     )
                 }
                 is AgentRuntime.CdResult.Ok -> {
+                    // cdSync 的 runtime 持久化是异步的；这里同步落盘，保证随后新建 Workspace
+                    // 立刻能够读取到这个 Room + Agent 实例最近使用的目录。
+                    workspaceManager.updateWorkingDir(workspaceId, result.resolvedPath)
                     val snap = AgentRuntime.snapshotState(ownerId, workspaceId)
                     val bridgeConnected = isAnyBridgeConnected(ownerId)
                     // 切目录会重置 sessionId（等价于 /new），在聊天里广播一条提示让用户感知
@@ -1153,6 +1292,7 @@ private fun Route.coreRoutes() {
             val workspace = call.resolveControllableWorkspace(pathUserId, workspaceId) ?: return@post
             val ownerId = workspace.ownerId
             val newAgent = reqJson["activeAgent"]?.jsonPrimitive?.contentOrNull
+            val newAgentInstanceId = reqJson["activeAgentInstanceId"]?.jsonPrimitive?.contentOrNull
             val newPermMode = reqJson["permissionMode"]?.jsonPrimitive?.contentOrNull
 
             // 切换 agent
@@ -1160,7 +1300,30 @@ private fun Route.coreRoutes() {
             if (!newAgent.isNullOrBlank()) {
                 // 前端传 underscore form（claude_code），runtime 用 dash form（claude-code）
                 val dashType = newAgent.replace('_', '-')
-                val descriptor = AgentRuntime.switchAgent(ownerId, workspaceId, dashType)
+                val normalizedInstanceId = newAgentInstanceId?.takeIf(String::isNotBlank)
+                if (normalizedInstanceId != null) {
+                    val instance = AgentAuthRepository.listAgents(ownerId)
+                        .firstOrNull { it.agentInstanceId == normalizedInstanceId && it.agentType == dashType }
+                    val binding = AgentAuthRepository.findActiveBinding(
+                        normalizedInstanceId,
+                        AgentBindingTargetType.WORKSPACE,
+                        workspaceId,
+                        AgentBindingMessageScope.WORKSPACE,
+                    )
+                    if (instance == null || binding == null) {
+                        call.respond(
+                            HttpStatusCode.BadRequest,
+                            CcStateResponse(success = false, error = "所选 Agent 未绑定到此 Workspace"),
+                        )
+                        return@post
+                    }
+                }
+                val descriptor = AgentRuntime.switchAgent(
+                    ownerId,
+                    workspaceId,
+                    dashType,
+                    normalizedInstanceId,
+                )
                 if (descriptor == null) {
                     call.respond(
                         HttpStatusCode.BadRequest,
@@ -1168,6 +1331,7 @@ private fun Route.coreRoutes() {
                     )
                     return@post
                 }
+                workspaceManager.updateActiveAgent(workspaceId, dashType, normalizedInstanceId)
                 agentSwitchMsg = "已切换到 ${descriptor.displayName}。"
             }
 
@@ -1204,6 +1368,14 @@ private fun Route.coreRoutes() {
             val snap = AgentRuntime.snapshotState(ownerId, workspaceId)
             val bridgeConnected = isAnyBridgeConnected(ownerId)
             val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
+            val binding = snap?.agentInstanceId?.let { instanceId ->
+                AgentAuthRepository.findActiveBinding(
+                    instanceId,
+                    AgentBindingTargetType.WORKSPACE,
+                    workspaceId,
+                    AgentBindingMessageScope.WORKSPACE,
+                )
+            }
             call.respond(
                 CcStateResponse(
                     success = true,
@@ -1212,7 +1384,11 @@ private fun Route.coreRoutes() {
                     workingDir = snap?.workingDir ?: "",
                     bridgeConnected = bridgeConnected,
                     agentType = snap?.agentType ?: "",
-                    agentDisplayName = descriptor?.displayName ?: "",
+                    agentInstanceId = snap?.agentInstanceId.orEmpty(),
+                    agentDisplayName = listOfNotNull(
+                        binding?.agentDisplayName?.takeIf(String::isNotBlank) ?: descriptor?.displayName,
+                        binding?.agentDeviceDisplayName?.takeIf(String::isNotBlank),
+                    ).joinToString(" · "),
                     permissionMode = snap?.permissionMode ?: "",
                 )
             )
@@ -1223,8 +1399,14 @@ private fun Route.coreRoutes() {
         get("/users/{userId}/trusted-dirs/check") {
             val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@get
             val path = call.request.queryParameters["path"] ?: ""
-            val bridgeConnected = isAnyBridgeConnected(userId)
-            val bridgeId = if (bridgeConnected) resolveBridgeId(userId) else null
+            val agentInstanceId = call.request.queryParameters["agentInstanceId"].orEmpty()
+            val exactIdentity = agentInstanceId.takeIf(String::isNotBlank)?.let(AcpRegistry::connectionIdentity)
+            val bridgeConnected = if (agentInstanceId.isBlank()) {
+                isAnyBridgeConnected(userId)
+            } else {
+                exactIdentity?.userId == userId && AcpRegistry.isConnectedInstance(agentInstanceId)
+            }
+            val bridgeId = if (bridgeConnected) resolveBridgeId(userId, agentInstanceId) else null
             val trusted = if (bridgeConnected && path.isNotBlank() && bridgeId != null) {
                 trustedDirManager.isTrusted(userId, bridgeId, path)
             } else false
@@ -1257,7 +1439,17 @@ private fun Route.coreRoutes() {
                 )
                 return@post
             }
-            val bridgeId = resolveBridgeId(userId) ?: "unknown"
+            val agentInstanceId = req.agentInstanceId.takeIf(String::isNotBlank)
+            val exactIdentity = agentInstanceId?.let(AcpRegistry::connectionIdentity)
+            if (agentInstanceId != null && exactIdentity?.userId != userId) {
+                call.respondText(
+                    """{"success":false,"message":"Agent 不存在或未连接"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.NotFound,
+                )
+                return@post
+            }
+            val bridgeId = resolveBridgeId(userId, agentInstanceId) ?: "unknown"
             val added = trustedDirManager.addTrust(userId, bridgeId, req.path)
             call.respondText(
                 """{"success":true,"added":$added}""",
@@ -1286,7 +1478,17 @@ private fun Route.coreRoutes() {
                 )
                 return@delete
             }
-            val bridgeId = resolveBridgeId(userId) ?: "unknown"
+            val agentInstanceId = req.agentInstanceId.takeIf(String::isNotBlank)
+            val exactIdentity = agentInstanceId?.let(AcpRegistry::connectionIdentity)
+            if (agentInstanceId != null && exactIdentity?.userId != userId) {
+                call.respondText(
+                    """{"success":false,"message":"Agent 不存在或未连接"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.NotFound,
+                )
+                return@delete
+            }
+            val bridgeId = resolveBridgeId(userId, agentInstanceId) ?: "unknown"
             val removed = trustedDirManager.removeTrust(userId, bridgeId, req.path)
             call.respondText(
                 """{"success":$removed}""",
@@ -1435,6 +1637,11 @@ private fun Route.authRoutes() {
         // 验证用户（用于重新认证）
         get("/auth/validate/{userId}") {
             val userId = call.parameters["userId"] ?: ""
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "用户ID不能为空"))
+                return@get
+            }
+            if (call.resolveOwnPathUser(userId) == null) return@get
             val user = UserRepository.findUserById(userId)
 
             if (user != null) {
@@ -1572,6 +1779,7 @@ private fun Route.authRoutes() {
                     call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少用户ID"))
                     return@put
                 }
+                if (call.resolveOwnPathUser(userId) == null) return@put
 
                 val body = call.receive<Map<String, String>>()
                 val newFullName = body["fullName"]?.trim() ?: ""
@@ -1607,6 +1815,7 @@ private fun Route.authRoutes() {
                     call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少用户ID"))
                     return@delete
                 }
+                if (call.resolveOwnPathUser(userId) == null) return@delete
 
                 val user = UserRepository.findUserById(userId)
                 if (user == null) {
@@ -2741,20 +2950,9 @@ private fun Route.pollMessagesRoute() {
 }
 
 // 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
-@Suppress("TooGenericExceptionCaught", "SwallowedException")
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
 private fun Route.agentBridgeRoute() {
         webSocket("/agent-bridge") {
-            val token = call.request.queryParameters["token"]
-            if (token.isNullOrBlank()) {
-                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing token"))
-                return@webSocket
-            }
-            val userId = UserSettingsRepository.findUserIdByBridgeToken(token)
-            if (userId == null) {
-                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid token"))
-                return@webSocket
-            }
-
             val agentType = call.request.queryParameters["agentType"]
             if (agentType.isNullOrBlank()) {
                 close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing agentType"))
@@ -2765,19 +2963,28 @@ private fun Route.agentBridgeRoute() {
                 return@webSocket
             }
 
-            // Bridge 是 user + agentType 级资源；workspace 只在具体 prompt/session 时选择。
+            val principal = authenticateAgentBridge(agentType) ?: return@webSocket
+            val userId = principal.userId
+            val directBridgeIdentity = principal.directIdentity
+
+            // Authenticated direct Bridge is an AgentInstance resource; workspace
+            // selection happens later through an explicit Binding.
             // 旧客户端可继续携带 workspaceId，但这里只校验，不创建占位工作区。
-            val requestedWorkspaceId = call.request.queryParameters["workspaceId"]
-            if (!requestedWorkspaceId.isNullOrBlank()) {
-                val workspace = workspaceManager.getWorkspace(requestedWorkspaceId)
-                if (workspace == null || workspace.ownerId != userId) {
-                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid workspaceId"))
-                    return@webSocket
-                }
+            if (!requestedAgentBridgeWorkspaceAllowed(userId)) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid workspaceId"))
+                return@webSocket
             }
 
             logger.info("🔌 Agent Bridge 连接: userId={}, agentType={}", userId, agentType)
             val remoteIp = call.request.local.remoteAddress
+
+            val directBridgeConnectionKey = directBridgeIdentity?.let {
+                "${it.deviceId}::${it.agentInstanceId}"
+            }
+            if (directBridgeConnectionKey != null) {
+                val replaced = AgentBridgeConnectionRegistry.registerAndReturnPrevious(directBridgeConnectionKey, this)
+                runCatching { replaced?.close(CloseReason(CloseReason.Codes.NORMAL, "replaced by newer connection")) }
+            }
 
             val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
             val client = try {
@@ -2787,6 +2994,9 @@ private fun Route.agentBridgeRoute() {
                     session = this,
                     remoteIp = remoteIp,
                     scope = scope,
+                    authenticationMode = principal.authenticationMode,
+                    agentInstanceId = directBridgeIdentity?.agentInstanceId,
+                    capabilities = directBridgeIdentity?.capabilities.orEmpty(),
                 )
             } catch (e: Exception) {
                 logger.error("❌ Agent Bridge acceptConnection 失败: {}", e.message)
@@ -2813,7 +3023,11 @@ private fun Route.agentBridgeRoute() {
                 logger.info("[Agent Bridge] initialize 成功: agentCapabilities={}", result.agentCapabilities)
             } catch (e: Exception) {
                 logger.error("[Agent Bridge] initialize 失败: {}", e.message)
-                AcpRegistry.unregister(userId, agentType)
+                if (directBridgeIdentity != null) {
+                    AcpRegistry.unregister(directBridgeIdentity.agentInstanceId, client)
+                } else {
+                    AcpRegistry.unregister(userId, agentType, client)
+                }
                 close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "initialize failed"))
                 return@webSocket
             }
@@ -2831,13 +3045,60 @@ private fun Route.agentBridgeRoute() {
             } finally {
                 logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
                 scope.cancel()
-                AcpRegistry.unregister(userId, agentType)
-                AgentRuntime.handleAgentDisconnect(userId, agentType)
+                if (directBridgeIdentity != null) {
+                    AcpRegistry.unregister(directBridgeIdentity.agentInstanceId, client)
+                } else {
+                    AcpRegistry.unregister(userId, agentType, client)
+                }
+                if (directBridgeConnectionKey != null) {
+                    AgentBridgeConnectionRegistry.unregister(directBridgeConnectionKey, this)
+                }
+                if (directBridgeIdentity != null) {
+                    if (!AcpRegistry.isConnectedInstance(directBridgeIdentity.agentInstanceId)) {
+                        AgentRuntime.handleAgentDisconnect(userId, agentType, directBridgeIdentity.agentInstanceId)
+                    }
+                } else if (!AcpRegistry.isConnected(userId, agentType)) {
+                    AgentRuntime.handleAgentDisconnect(userId, agentType)
+                }
             }
         }
 
         // ==================== cc-connect Bridge WebSocket ====================
 
+}
+
+private fun DefaultWebSocketServerSession.requestedAgentBridgeWorkspaceAllowed(userId: String): Boolean {
+    val requestedWorkspaceId = call.request.queryParameters["workspaceId"]
+    if (requestedWorkspaceId.isNullOrBlank()) return true
+    return workspaceManager.getWorkspace(requestedWorkspaceId)?.ownerId == userId
+}
+
+private data class AgentBridgePrincipal(
+    val userId: String,
+    val directIdentity: com.silk.backend.agents.auth.ActiveAgentIdentity?,
+    val authenticationMode: AcpRegistry.AuthenticationMode,
+)
+
+private suspend fun DefaultWebSocketServerSession.authenticateAgentBridge(
+    agentType: String,
+): AgentBridgePrincipal? {
+    if (!call.request.queryParameters["token"].isNullOrBlank()) {
+        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "legacy Direct Bridge token authentication is retired"))
+        return null
+    }
+    val authenticated = authenticateAgentSocket(
+        challengeService = agentBridgeChallengeService,
+    ) ?: return null
+    val identity = authenticated.identity
+    if (identity.agentType != agentType) {
+        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Agent type does not match device enrollment"))
+        return null
+    }
+    return AgentBridgePrincipal(
+        userId = identity.userId,
+        directIdentity = identity,
+        authenticationMode = AcpRegistry.AuthenticationMode.DEVICE_SIGNATURE,
+    )
 }
 
 // cc-connect 适配器 WebSocket：单 handler 内驱动完整流式协议（hello/reply/stream/status/done），
@@ -4025,7 +4286,12 @@ private fun Route.chatWebSocketRoute() {
                 .map { workspace -> workspace to workspace.activeAgent.ifBlank { workspace.agentType } }
                 .filterNot { (_, agent) -> agent == "silk-chat" || agent == "silk_chat" }
                 .forEach { (workspace, resolvedAgent) ->
-                    AgentRuntime.autoActivateForWorkspace(userId, workspace.workspaceId, resolvedAgent)
+                    AgentRuntime.autoActivateForWorkspace(
+                        userId,
+                        workspace.workspaceId,
+                        resolvedAgent,
+                        workspace.activeAgentInstanceId,
+                    )
 
                     // Re-broadcast pending question if agent is waiting for user answer
                     AgentRuntime.snapshotPendingQuestion(userId, workspace.workspaceId)?.let { pendingSnapshot ->

@@ -41,6 +41,7 @@ class WorkspaceManager(
         ownerId: String,
         name: String,
         agentType: String = "claude-code",
+        activeAgentInstanceId: String = "",
         workingDir: String = "",
         visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
         linkedGithubRef: String? = null,
@@ -53,6 +54,7 @@ class WorkspaceManager(
             name = name,
             agentType = agentType,
             activeAgent = agentType,
+            activeAgentInstanceId = activeAgentInstanceId,
             workingDir = workingDir,
             visibility = visibility,
             linkedGithubRef = linkedGithubRef,
@@ -96,39 +98,128 @@ class WorkspaceManager(
         val store = load()
         val idx = store.workspaces.indexOfFirst { it.workspaceId == workspaceId }
         if (idx < 0) return false
-        if (store.workspaces[idx].workingDir == workingDir) return false
-        store.workspaces[idx] = store.workspaces[idx].copy(
-            workingDir = workingDir, updatedAt = System.currentTimeMillis())
-        save(store); return true
+        val current = store.workspaces[idx]
+        val dirChanged = current.workingDir != workingDir
+        if (dirChanged) {
+            store.workspaces[idx] = current.copy(
+                workingDir = workingDir,
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+        val recentChanged = rememberWorkingDir(store, current, workingDir)
+        if (!dirChanged && !recentChanged) return false
+        save(store)
+        return true
+    }
+
+    /**
+     * Returns the last successfully applied directory for one user's exact Agent instance in a Room.
+     * Paths are deliberately not shared between Agent instances because they may run on different hosts.
+     */
+    @Synchronized fun recentWorkingDir(
+        roomId: String,
+        ownerId: String,
+        agentInstanceId: String,
+    ): String? {
+        val normalizedInstanceId = agentInstanceId.trim()
+        if (normalizedInstanceId.isBlank()) return null
+        val store = load()
+        val remembered = store.recentWorkingDirectories
+            .asSequence()
+            .filter {
+                it.roomId == roomId &&
+                    it.ownerId == ownerId &&
+                    it.agentInstanceId == normalizedInstanceId &&
+                    it.workingDir.isNotBlank()
+            }
+            .maxByOrNull { it.updatedAt }
+            ?.workingDir
+        if (!remembered.isNullOrBlank()) return remembered
+
+        // Stores written before directory memory existed can still provide a useful first default.
+        return store.workspaces
+            .asSequence()
+            .filter {
+                it.roomId == roomId &&
+                    it.ownerId == ownerId &&
+                    it.activeAgentInstanceId == normalizedInstanceId &&
+                    it.workingDir.isNotBlank()
+            }
+            .maxByOrNull { it.updatedAt }
+            ?.workingDir
+    }
+
+    private fun rememberWorkingDir(
+        store: WorkspaceStore,
+        workspace: PersonalWorkspace,
+        workingDir: String,
+    ): Boolean {
+        val normalizedPath = workingDir.trim()
+        val agentInstanceId = workspace.activeAgentInstanceId.trim()
+        if (normalizedPath.isBlank() || agentInstanceId.isBlank()) return false
+        val index = store.recentWorkingDirectories.indexOfFirst {
+            it.roomId == workspace.roomId &&
+                it.ownerId == workspace.ownerId &&
+                it.agentInstanceId == agentInstanceId
+        }
+        val current = store.recentWorkingDirectories.getOrNull(index)
+        if (current?.workingDir == normalizedPath) return false
+        val updated = RecentWorkingDirectory(
+            roomId = workspace.roomId,
+            ownerId = workspace.ownerId,
+            agentInstanceId = agentInstanceId,
+            workingDir = normalizedPath,
+        )
+        if (index >= 0) store.recentWorkingDirectories[index] = updated
+        else store.recentWorkingDirectories.add(updated)
+        return true
     }
 
     @Synchronized fun updateSessionState(
-        workspaceId: String, agentType: String, sessionId: String, sessionStarted: Boolean
+        workspaceId: String,
+        agentType: String,
+        sessionId: String,
+        sessionStarted: Boolean,
+        agentInstanceId: String? = null,
     ): Boolean {
         val store = load()
         val idx = store.workspaces.indexOfFirst { it.workspaceId == workspaceId }
         if (idx < 0) return false
         val old = store.workspaces[idx]
+        val sessionKey = agentInstanceId?.takeIf(String::isNotBlank) ?: agentType
         val newSessions = old.agentSessions.toMutableMap().also {
-            it[agentType] = AgentSessionState(sessionId, sessionStarted)
+            it[sessionKey] = AgentSessionState(sessionId, sessionStarted)
         }
         val activeType = old.activeAgent.ifBlank { old.agentType }
+        val isActiveSession = agentType == activeType && (
+            old.activeAgentInstanceId.isBlank() || old.activeAgentInstanceId == agentInstanceId
+        )
         store.workspaces[idx] = old.copy(
             agentSessions = newSessions,
-            cliSessionId = if (agentType == activeType) sessionId else old.cliSessionId,
-            sessionStarted = if (agentType == activeType) sessionStarted else old.sessionStarted,
+            cliSessionId = if (isActiveSession) sessionId else old.cliSessionId,
+            sessionStarted = if (isActiveSession) sessionStarted else old.sessionStarted,
             updatedAt = System.currentTimeMillis()
         )
         save(store); return true
     }
 
-    @Synchronized fun updateActiveAgent(workspaceId: String, activeAgent: String): Boolean {
+    @Synchronized fun updateActiveAgent(
+        workspaceId: String,
+        activeAgent: String,
+        activeAgentInstanceId: String? = null,
+    ): Boolean {
         val store = load()
         val idx = store.workspaces.indexOfFirst { it.workspaceId == workspaceId }
         if (idx < 0) return false
-        if (store.workspaces[idx].activeAgent == activeAgent) return false
+        val normalizedInstanceId = activeAgentInstanceId?.takeIf(String::isNotBlank).orEmpty()
+        if (store.workspaces[idx].activeAgent == activeAgent &&
+            store.workspaces[idx].activeAgentInstanceId == normalizedInstanceId
+        ) return false
         store.workspaces[idx] = store.workspaces[idx].copy(
-            activeAgent = activeAgent, updatedAt = System.currentTimeMillis())
+            activeAgent = activeAgent,
+            activeAgentInstanceId = normalizedInstanceId,
+            updatedAt = System.currentTimeMillis(),
+        )
         save(store); return true
     }
 
@@ -143,13 +234,21 @@ class WorkspaceManager(
     }
 
     /** Returns (workingDir, cliSessionId, sessionStarted); null if no useful seed. */
-    fun loadSeed(workspaceId: String, agentType: String): Triple<String, String?, Boolean>? {
+    fun loadSeed(
+        workspaceId: String,
+        agentType: String,
+        agentInstanceId: String? = null,
+    ): Triple<String, String?, Boolean>? {
         val ws = getWorkspace(workspaceId) ?: return null
         val activeType = ws.activeAgent.ifBlank { ws.agentType }
-        val perAgent = ws.agentSessions[agentType]
+        val sessionKey = agentInstanceId?.takeIf(String::isNotBlank) ?: agentType
+        val perAgent = ws.agentSessions[sessionKey]
         val cliSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
-            ?: ws.cliSessionId?.takeIf { it.isNotBlank() && agentType == activeType }
-        val started = perAgent?.sessionStarted ?: (ws.sessionStarted && agentType == activeType)
+            ?: ws.cliSessionId?.takeIf {
+                agentInstanceId.isNullOrBlank() && it.isNotBlank() && agentType == activeType
+            }
+        val started = perAgent?.sessionStarted
+            ?: (agentInstanceId.isNullOrBlank() && ws.sessionStarted && agentType == activeType)
         if (ws.workingDir.isBlank() && cliSid.isNullOrBlank()) return null
         return Triple(ws.workingDir, cliSid, started)
     }
@@ -297,9 +396,12 @@ class WorkspaceManager(
     @Synchronized fun deleteWorkspacesForRoom(roomId: String): Int {
         val store = load()
         val before = store.workspaces.size
+        val recentBefore = store.recentWorkingDirectories.size
         store.workspaces.removeAll { it.roomId == roomId }
+        store.recentWorkingDirectories.removeAll { it.roomId == roomId }
         val removed = before - store.workspaces.size
-        if (removed > 0) {
+        val recentRemoved = recentBefore - store.recentWorkingDirectories.size
+        if (removed > 0 || recentRemoved > 0) {
             save(store)
             logger.info("Deleted {} workspace(s) for room {}", removed, roomId)
         }

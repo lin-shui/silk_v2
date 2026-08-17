@@ -86,6 +86,10 @@ weaviate-linux
 
 # Database
 *.db
+backend/silk_database.db.*
+
+# Locally served acceptance bundles (release artifacts are published by CI)
+backend/static/downloads/silk-agent_*
 
 # Weaviate runtime data (vector database indexes)
 search/weaviate_data/

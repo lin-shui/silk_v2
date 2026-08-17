@@ -27,6 +27,7 @@ data class WorkspaceDto(
     val name: String,
     val workingDir: String = "",
     val agentType: String = "claude-code",
+    val activeAgentInstanceId: String = "",
     val visibility: String = "PRIVATE",
     val copilots: List<String> = emptyList(),
     val role: String = "OBSERVER",
@@ -45,10 +46,16 @@ data class IssueToWorkspaceResponse(
 )
 
 @Serializable
+private data class RecentWorkingDirResponse(
+    val workingDir: String = "",
+)
+
+@Serializable
 private data class CreateWorkspaceRequest(
     val name: String,
     val workingDir: String,
     val agentType: String,
+    val agentInstanceId: String,
     val visibility: String,
 )
 
@@ -58,6 +65,7 @@ private data class IssueToWorkspaceRequest(
     val name: String? = null,
     val workingDir: String,
     val agentType: String,
+    val agentInstanceId: String,
     val visibility: String,
 )
 
@@ -120,12 +128,26 @@ suspend fun fetchWorkspaces(roomId: String, authToken: String): List<WorkspaceDt
     return workspaceJson.decodeFromString(response.text().await())
 }
 
+suspend fun fetchRecentWorkingDir(
+    roomId: String,
+    authToken: String,
+    agentInstanceId: String,
+): String {
+    if (agentInstanceId.isBlank()) return ""
+    val response = window.fetch(
+        "${backendHttpOrigin()}/api/rooms/$roomId/workspaces/recent-working-dir?agentInstanceId=$agentInstanceId",
+        RequestInit(method = "GET", headers = authHeaders(authToken)),
+    ).await().requireSuccess()
+    return workspaceJson.decodeFromString<RecentWorkingDirResponse>(response.text().await()).workingDir
+}
+
 suspend fun createWorkspace(
     roomId: String,
     authToken: String,
     name: String,
     workingDir: String,
     agentType: String,
+    agentInstanceId: String,
     visibility: String,
 ): WorkspaceDto {
     val response = window.fetch(
@@ -134,7 +156,7 @@ suspend fun createWorkspace(
             method = "POST",
             headers = authHeaders(authToken, jsonBody = true),
             body = workspaceJson.encodeToString(
-                CreateWorkspaceRequest(name, workingDir, agentType, visibility)
+                CreateWorkspaceRequest(name, workingDir, agentType, agentInstanceId, visibility)
             ),
         ),
     ).await().requireSuccess()
@@ -147,6 +169,7 @@ suspend fun createWorkspaceFromGithubIssue(
     issueNumber: Int,
     workingDir: String,
     agentType: String = "claude-code",
+    agentInstanceId: String,
     visibility: String = "PRIVATE",
     name: String? = null,
 ): IssueToWorkspaceResponse {
@@ -156,7 +179,7 @@ suspend fun createWorkspaceFromGithubIssue(
             method = "POST",
             headers = authHeaders(authToken, jsonBody = true),
             body = workspaceJson.encodeToString(
-                IssueToWorkspaceRequest(issueNumber, name, workingDir, agentType, visibility)
+                IssueToWorkspaceRequest(issueNumber, name, workingDir, agentType, agentInstanceId, visibility)
             ),
         ),
     ).await().requireSuccess()

@@ -213,7 +213,7 @@ fun NicknameSetupScene(appState: WebAppState) {
                             // 同步更新 localStorage 中存储的用户信息（刷新页面后生效）
                             val updatedUser = appState.currentUser?.copy(fullName = trimmed)
                             if (updatedUser != null) JwtManager.setStoredUser(updatedUser)
-                            appState.navigateTo(Scene.GROUP_LIST)
+                            appState.finishNicknameSetup()
                         } else {
                             errorMessage = result.message.ifBlank { "保存失败，请重试" }
                             isLoading = false
@@ -234,7 +234,7 @@ fun NicknameSetupScene(appState: WebAppState) {
                     property("text-decoration", "underline")
                 }
                 onClick {
-                    appState.navigateTo(Scene.GROUP_LIST)
+                    appState.finishNicknameSetup()
                 }
             }) {
                 Text("稍后设置")

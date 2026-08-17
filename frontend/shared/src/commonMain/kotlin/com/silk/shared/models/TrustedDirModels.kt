@@ -24,4 +24,5 @@ data class TrustedDirListResponse(
 @Serializable
 data class AddTrustRequest(
     val path: String,
+    val agentInstanceId: String = "",
 )

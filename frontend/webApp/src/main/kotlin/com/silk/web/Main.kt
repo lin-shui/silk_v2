@@ -462,6 +462,14 @@ fun main() {
 fun SilkApp() {
     val appState = remember { WebAppState() }
 
+    DisposableEffect(appState) {
+        val pairingHashHandler: (org.w3c.dom.events.Event) -> Unit = {
+            appState.consumeCurrentPairingFragment()
+        }
+        window.addEventListener("hashchange", pairingHashHandler)
+        onDispose { window.removeEventListener("hashchange", pairingHashHandler) }
+    }
+
     // 处理华为 OAuth 回调
     LaunchedEffect(Unit) {
         val handled = handleOAuthCallback(appState)
@@ -490,12 +498,17 @@ fun SilkApp() {
                     property("flex", "1")
                     minWidth(0.px)
                     height(100.percent)
-                    property("overflow", if (appState.currentScene == Scene.SETTINGS) "auto" else "hidden")
+                    property(
+                        "overflow",
+                        if (appState.currentScene == Scene.SETTINGS || appState.currentScene == Scene.DEVICES) "auto" else "hidden",
+                    )
                     position(Position.Relative)
                 }
             }) {
                 if (appState.currentScene == Scene.SETTINGS) {
                     SettingsScene(appState)
+                } else if (appState.currentScene == Scene.DEVICES) {
+                    DeviceManagementScene(appState)
                 } else {
                     key(appState.currentTab) {
                         when (appState.currentTab) {
@@ -565,6 +578,13 @@ fun SilkNavRail(appState: WebAppState) {
         Div({ style { property("flex", "1") } })
 
         NavRailUtilityButton(
+            title = "设备与 Agent",
+            icon = "\uD83D\uDD10",
+            isActive = appState.currentScene == Scene.DEVICES,
+        ) {
+            appState.openDeviceManagement()
+        }
+        NavRailUtilityButton(
             title = "联系人",
             icon = "\uD83D\uDC64",
             isActive = appState.currentScene == Scene.CONTACTS,
@@ -576,7 +596,7 @@ fun SilkNavRail(appState: WebAppState) {
             icon = "\u2699\uFE0F",
             isActive = appState.currentScene == Scene.SETTINGS,
         ) {
-            appState.navigateTo(Scene.SETTINGS)
+            appState.openSettings()
         }
     }
 }
@@ -1133,6 +1153,7 @@ fun ChatAppWithGroup(
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
+    var showAgentBindings by remember(group.id) { mutableStateOf(false) }
     var isLoadingFiles by remember { mutableStateOf(false) }
 
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
@@ -1422,6 +1443,11 @@ fun ChatAppWithGroup(
                     isExporting = isExportingMarkdown,
                     exportHint = exportMarkdownHint,
                     showMembershipActions = group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE,
+                    onAgents = if (group.roomKind != com.silk.shared.models.RoomKind.SILK_PRIVATE) {
+                        { showAgentBindings = true }
+                    } else {
+                        null
+                    },
                     onOpenFiles = {
                         showFolderExplorer = true
                         isLoadingFiles = true
@@ -2782,6 +2808,15 @@ fun ChatAppWithGroup(
             group = group,
             strings = strings,
             onDismiss = { showInvitationDialog = false }
+        )
+    }
+
+    if (showAgentBindings) {
+        AgentBindingManagementDialog(
+            targetType = BindingTargetType.ROOM,
+            targetId = group.id,
+            targetName = group.name,
+            onDismiss = { showAgentBindings = false },
         )
     }
     

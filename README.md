@@ -38,6 +38,7 @@ All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the *
 | `backend/` | Kotlin backend (Ktor), static files, chat history. |
 | `backend/.../agents/` | Agent framework: AgentRuntime, ACP protocol layer, Claude Code adapter descriptor. |
 | `cc_bridge/` | ACP Bridge Adapter: external Python process running Claude CLI; connects to backend `/agent-bridge` via ACP. |
+| `silk-agent/` | Go companion Host: device pairing, one multiplexed `/agent-connect` WSS, and managed Claude/Codex Adapter processes. |
 | `frontend/webApp/` | Kotlin/JS web frontend. |
 | `frontend/androidApp/` | Android app; APK output can be copied to `backend/static`. |
 | `frontend/desktopApp/` | Desktop client (optional). |
@@ -191,7 +192,7 @@ Before creating a workflow or changing its working directory, the selected direc
 
 ### Prerequisites
 
-Workflows require a running **ACP Bridge Adapter** — see [CC Bridge](#cc-bridge-external-claude-cli) below.
+Workflows require a running **silk-agent Host and managed ACP Adapter** — see [External Agent Host](#external-agent-host) below.
 
 ---
 
@@ -199,16 +200,16 @@ Workflows require a running **ACP Bridge Adapter** — see [CC Bridge](#cc-bridg
 
 Silk supports a **Claude Code (CC) mode** that lets users interact with a Claude Code CLI from any chat session. This turns Silk into a programming assistant interface — users can ask Claude to read, write, and edit code on the filesystem.
 
-CC mode uses an **ACP (Agent Client Protocol) Bridge** architecture: the Silk backend does not run the Claude CLI itself. Instead, a separate Python process (`cc_bridge/acp_adapter.py`) connects to the backend via WebSocket using the ACP JSON-RPC protocol, receives commands, and executes the Claude CLI locally. This decouples the backend deployment from the Claude execution environment.
+CC mode uses an **ACP (Agent Client Protocol) Host** architecture: the Silk backend does not run the Claude CLI itself. The standalone `silk-agent` Host authenticates a user-owned device, maintains one multiplexed WebSocket, and supervises the packaged Python Adapter that executes Claude Code locally. This decouples the backend deployment from the Claude execution environment without giving the Adapter a Silk credential or device-signing API.
 
 ### Prerequisites
 
-- **ACP Bridge Adapter** running and connected to the Silk backend (see [CC Bridge](#cc-bridge-external-claude-cli) below)
-- **Claude CLI** installed on the machine running the adapter (`npm install -g @anthropic-ai/claude-code` or equivalent)
+- **`silk-agent` Host** paired and running on the execution device (see [External Agent Host](#external-agent-host) below)
+- **Claude CLI** and Python installed on that device (`npm install -g @anthropic-ai/claude-code` or equivalent)
 
 ### Configuration
 
-The following environment variables are used by the **ACP Bridge Adapter** (set on the machine running `acp_adapter.py`, not the Silk backend):
+The following environment variables are inherited by the managed Claude Adapter from the environment that starts **`silk-agent`** (set on the execution device, not the Silk backend):
 
 ```bash
 # Claude CLI binary path (default: auto-detected from PATH)
@@ -260,8 +261,8 @@ In any Silk chat (group or private), send `/cc` to enter Claude Code mode:
 - **Per-user isolation**: each user has their own CC state per group; one user entering CC mode does not affect others
 - **CC responses are private**: only the user who activated CC sees the responses; other group members see the user's messages but not CC output
 - **Message queue**: if a task is running, new messages are queued (max 10) and auto-executed when the current task finishes
-- **Session persistence**: CC sessions are managed by the Bridge Agent (`~/.silk/cc_sessions.json`); sessions expire after 7 days of inactivity
-- **Permission mode**: currently uses `bypassPermissions` (all tool operations are allowed without confirmation)
+- **Session persistence**: CLI session IDs are retained in Silk Agent state and may be reset with `/new`; vendor CLI history remains in the device user's native configuration directory
+- **Permission mode**: Host-managed Agents enforce Binding-derived file/command policy; malformed or missing managed policy envelopes fail closed
 
 ### Architecture
 
@@ -272,14 +273,14 @@ CC mode is implemented in `backend/src/main/kotlin/com/silk/backend/agents/`:
 | `agents/core/AgentRuntime.kt` | Command routing, per-user state, message queue, workflow persistence |
 | `agents/core/CommandRouter.kt` | Parse `/cc`, `/new`, `/status`, `@agent` etc. |
 | `agents/acp/AcpClient.kt` | ACP JSON-RPC client (talks to adapter) |
-| `agents/acp/AcpRegistry.kt` | Manage ACP WebSocket connections per (userId, agentType) |
+| `agents/acp/AcpRegistry.kt` | Manage logical ACP connections per (userId, agentType), including Host-multiplexed streams |
 | `agents/core/AcpExtensions.kt` | `_silk/*` extension calls (set_cwd, list_dir, compact, list_local_sessions) |
 
 The integration point is `AgentRuntime.handleIfActive()` called from `ChatServer.broadcast()` (in `WebSocketConfig.kt`).
 
-### CC Bridge (external Claude CLI)
+### External Agent Host
 
-The Claude CLI runs on a separate machine (or the same machine in a different process) via the **ACP Bridge Adapter**, which connects to Silk via WebSocket using ACP (JSON-RPC 2.0). This is useful when:
+The Claude CLI runs on a separate machine (or the same machine in a different process) via the **ACP Bridge Adapter** managed by `silk-agent`: the Host owns one device-authenticated `/agent-connect` WSS and carries each Adapter's ACP objects in `agentInstanceId` envelopes. The Adapter receives no Silk credential or signing API. The old user-level `/agent-bridge` Token path is retired; cc-connect keeps its separate group Token until Phase 8. This is useful when:
 
 - The backend runs in a container or VM without Claude CLI installed
 - You want to run Claude CLI on a machine with direct access to your codebase
@@ -288,73 +289,47 @@ The Claude CLI runs on a separate machine (or the same machine in a different pr
 #### How it works
 
 ```
-User (browser) ──→ Silk backend ──ACP/WebSocket──→ ACP Adapter (acp_adapter.py) ──→ Claude CLI
+User (browser) → Silk backend ← one WSS → silk-agent Host ← stdio ACP → Adapter → Claude CLI
 ```
 
-The ACP Adapter (`cc_bridge/acp_adapter.py`) connects to the Silk backend's `/agent-bridge` WebSocket endpoint, authenticates with a token, and handles ACP requests (`session/new`, `session/prompt`, `_silk/*` extensions) by executing Claude CLI commands locally and streaming results back as `session/update` notifications.
+`silk-agent` authenticates the device once and opens a logical stream for each approved Agent; `cc_bridge/acp_adapter.py --silk-host-stdio` handles ACP requests (`session/new`, `session/prompt`, `_silk/*` extensions) over Host IPC v2.
 
-#### Setup
+#### Device Setup
 
-1. **Generate a Bridge Token** in the Silk web UI:
-   - Go to **Settings** → **Claude Code** section
-   - Click **Generate Token** (or **Regenerate Token** if one already exists)
-   - Copy the token
+1. Install the signed `silk-agent` bundle for the target platform and ensure Python, the Adapter requirements, and the desired Claude/Codex CLI are available.
 
-2. **Install dependencies** on the machine where you want to run Claude CLI:
+2. Pair the first Agent and approve the displayed code on `/device`:
 
    ```bash
-   cd cc_bridge
-   pip install -r requirements.txt   # websockets>=12.0
+   silk-agent connect claude-code --server https://<silk-host> --account <silk-login-name>
+   # or
+   silk-agent connect codex --server https://<silk-host> --account <silk-login-name>
    ```
 
-3. **Ensure Claude CLI is available** on that machine:
+   If Web and Backend use different origins and the backend has no
+   `BACKEND_WEB_APP_BASE_URL`, also pass `--web https://<silk-web-host>`.
 
-   ```bash
-   claude --version   # should print the Claude CLI version
-   ```
+3. Use `silk-agent status`, `start`, `stop`, or `logs` to manage the Host. Adding the other Agent type repeats `connect` and requires another Web approval; the running Host hot-loads it. `service install` is available for advanced deployments, but service managers do not inherit an interactive shell's provider credentials or custom environment; configure those explicitly before relying on service mode.
 
-4. **Configure** — create `cc_bridge/.env`:
+4. Create a Room or Workspace Binding on `/device`. A cross-owner Binding remains pending until both the Agent owner and target manager approve it.
 
-   ```bash
-   BRIDGE_SERVER=<silk-backend-host>:8006
-   BRIDGE_TOKEN=<your-token>
-   # BRIDGE_WORKING_DIR=/path/to/workdir  # optional
-   # BRIDGE_LOG_LEVEL=INFO                # optional
-   ```
+Identity recovery and release verification are available through:
 
-5. **Start the ACP Bridge Adapter**:
-
-   ```bash
-   cd cc_bridge
-   ./bridge.sh start        # background (recommended)
-   # or: python acp_adapter.py --server <host>:8006 --token <token>   # foreground
-   ```
-
-6. **Verify connection** in the Silk web UI:
-   - Settings page should show a green status dot with **Connected**
-   - **Bridge IP** displays the IP address of the machine running the adapter
-   - Click **Refresh Status** to update the connection status
-
-#### Management (bridge.sh)
-
-| Command | Description |
-|---------|-------------|
-| `./bridge.sh start` | Start adapter in background |
-| `./bridge.sh stop` | Stop adapter (graceful shutdown) |
-| `./bridge.sh restart` | Restart adapter |
-| `./bridge.sh status` | Check running status |
-| `./bridge.sh logs` | Tail the log file |
+```bash
+silk-agent identity backup|restore|rotate|migrate-keychain
+silk-agent release verify --manifest manifest.json --signature manifest.sig --artifacts <dir>
+```
 
 #### Files
 
 | File | Responsibility |
 |------|---------------|
-| `cc_bridge/bridge.sh` | Management script: start/stop/restart/status/logs |
-| `cc_bridge/acp_adapter.py` | ACP server: handles session/prompt, streams updates, _silk/* extensions |
+| `silk-agent/` | Device identity, pairing, Host lifecycle, multiplexed WSS, Adapter supervision and signed releases |
+| `cc_bridge/acp_adapter.py` | Managed ACP Adapter: handles session/prompt, streams updates and `_silk/*` extensions over Host IPC |
 | `cc_bridge/executor.py` | Claude CLI subprocess management |
-| `cc_bridge/session_manager.py` | Session persistence and lifecycle |
+| `cc_bridge/cc_session_index.py` | Claude native session discovery and resume-file lookup |
 | `cc_bridge/fs_listing.py` | Directory listing helper (used by _silk/list_dir) |
-| `cc_bridge/requirements.txt` | Python dependencies (`websockets>=12.0`) |
+| `bridge_common/` | Shared Host IPC v2, policy parsing and Unicode boundary helpers |
 
 ---
 

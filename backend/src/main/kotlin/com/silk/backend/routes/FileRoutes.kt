@@ -633,17 +633,18 @@ private suspend fun broadcastUploadUserMessageAndVision(
         chatSvr.broadcastUserMessage(userId, userName, previewContent)
         logger.info("📸 已广播用户合并消息: {} + {}", fileName, userText.take(50))
 
-        // 在后端协程中处理 vision（不走 WebSocket）
-        applicationScope.launch(Dispatchers.IO) {
-            processUploadedImageVision(
-                chatSvr = chatSvr,
-                finalSessionId = sessionId,
-                finalUserId = userId,
-                finalUserName = userName,
-                finalUserText = userText,
-                targetFile = targetFile,
-                isImageFile = isImageFile,
-            )
+        // 仅图片需要 Vision；普通文件由后续预处理链负责。
+        if (isImageFile) {
+            applicationScope.launch(Dispatchers.IO) {
+                processUploadedImageVision(
+                    chatSvr = chatSvr,
+                    finalSessionId = sessionId,
+                    finalUserId = userId,
+                    finalUserName = userName,
+                    finalUserText = userText,
+                    targetFile = targetFile,
+                )
+            }
         }
     } catch (e: Exception) {
         logger.error("❌ 广播用户消息失败: {}", e.message, e)
@@ -761,7 +762,6 @@ private suspend fun processUploadedImageVision(
     finalUserName: String,
     finalUserText: String,
     targetFile: File,
-    isImageFile: Boolean,
 ) {
     try {
         // === cc-connect image routing ===
@@ -776,7 +776,7 @@ private suspend fun processUploadedImageVision(
         val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
         val isSoloMode = memberCount <= 1L
 
-        val forwardToCcConnect = isCcConnected && isImageFile && (isSoloMode || matchedPrefix != null)
+        val forwardToCcConnect = isCcConnected && (isSoloMode || matchedPrefix != null)
         if (forwardToCcConnect) {
             val strippedText = stripCcConnectPrefix(finalUserText, matchedPrefix)
             chatSvr.forwardImageToCcConnect(

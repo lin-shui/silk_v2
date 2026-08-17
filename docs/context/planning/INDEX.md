@@ -6,6 +6,7 @@
 
 ## Active Execution Plans
 
+- [外部 Agent 统一接入与设备密钥认证方案](exec-plans/2026-08-10-unified-external-agent-auth.md)（Phase 0–7 已实现并完成仓库级自动化验证；Phase 8 cc-connect 延后）
 - [Unified Room Navigation 与显式 RoomKind](exec-plans/active/2026-08-04-unified-room-navigation.md)（代码与自动化验证完成，待发布环境手工验收）
 - [Workflow Room 重新设计](exec-plans/active/2026-07-24-workflow-room-redesign.md)（Phase 1、1.5、2 已完成；Phase 2.5 待手工验收）
 - [Phase 3：Workflow Room GitHub 集成 MVP](exec-plans/active/2026-08-06-phase3-github-integration-mvp.md)（实施中；Webhook + Polling 核心已实现，真实 GitHub 验收待完成；默认关闭，Owner 主动绑定后启用）
@@ -14,6 +15,7 @@
 
 ## Completed Execution Plans
 
+- [外部 Agent 统一认证 Phase 0–7 手工验收记录](exec-plans/completed/2026-08-11-unified-external-agent-auth-manual-acceptance.md)（49 项通过；2 项按决定跳过；2 项因当前环境无 TLS 入口阻塞）
 - [KB AI Operations](exec-plans/completed/2026-07-06-kb-ai-operations.md)
 - [KB Context And Sharing](exec-plans/completed/kb-context-sharing-plan.md)
 - [KB Copilot: Streaming + Inline Diff Edit + UX Polish](exec-plans/completed/2026-07-10-kb-copilot-streaming-inline-edit.md)

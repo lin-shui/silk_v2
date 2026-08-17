@@ -4,8 +4,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import pytest
-
 from codex_bridge.fs_listing import list_directory
 
 
@@ -68,7 +66,13 @@ def test_list_directory_segments_match_path(tmp_path: Path):
     sub.mkdir(parents=True)
     result = list_directory(str(sub), show_hidden=False)
     sep = result["separator"]
-    rebuilt = sep + sep.join(result["segments"])
+    segments = result["segments"]
+    if os.name == "nt":
+        assert segments[0].endswith(sep)
+        rebuilt = segments[0] + sep.join(segments[1:])
+    else:
+        assert segments[0] == sep
+        rebuilt = sep + sep.join(segments[1:])
     assert os.path.realpath(rebuilt) == os.path.realpath(str(sub))
 
 

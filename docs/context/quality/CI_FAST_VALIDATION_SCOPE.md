@@ -52,7 +52,7 @@ backend 真实快检：
 - [x] WebSocket URL 下载异常分支（读超时 / 连接拒绝 / 损坏 PDF）状态回显与“不落盘”约束
 - [x] WebSocket URL 下载产物文件消息广播与历史回放
 - [x] 未读计数与 `mark-read` 链路
-- [x] 旧 SQLite 初始化不丢登录、用户设置、Bridge token、群组与成员关系
+- [x] 旧 SQLite 初始化不丢登录、用户设置、群组与成员关系；初始化时销毁遗留 Direct Bridge token 列值
 - [x] 聊天历史重启恢复元数据、追加消息不覆盖旧记录、坏历史文件拒绝覆盖并保留备份
 - [x] AI 工具暴露面过滤（禁用工具不暴露给模型）
 - [x] AI 工具会话作用域拒绝（空作用域 / 非当前会话）
@@ -64,6 +64,7 @@ backend 真实快检：
 - [x] Todo 生命周期：done 重开、cancelled 重开门槛、逻辑去重、月度模板实例化
 - [x] Claude Code Bridge 元信息格式化单测
 - [x] TrustedDir 精确匹配、子目录继承、bridge/user 隔离、幂等与持久化 round-trip
+- [x] 外部 Agent 设备配对、签名新增 Agent、双 Agent 连接隔离与分级撤销合同
 
 frontend 轻量快检：
 
@@ -73,6 +74,7 @@ frontend 轻量快检：
 - [x] Desktop 文件卡片 payload 解析与下载文件名提取单测
 - [x] Web 文件列表 JSON 解析与 `downloadUrl` 透传单测
 - [x] Web `FILE` 消息 payload 解析（JSON / 旧 `|` 格式）单测
+- [x] Web 新设备/新增 Agent 审批类型映射单测
 
 ### 本次补齐的点
 

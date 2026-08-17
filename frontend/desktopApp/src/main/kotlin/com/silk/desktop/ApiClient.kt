@@ -89,6 +89,10 @@ data class GroupResponse(
 object ApiClient {
     private val BASE_URL = BuildConfig.BACKEND_BASE_URL
     private val json = Json { ignoreUnknownKeys = true }
+
+    /** Current user's JWT, kept in memory and attached to authenticated requests. */
+    @Volatile
+    var accessToken: String? = null
     
     /**
      * 用户注册
@@ -102,7 +106,7 @@ object ApiClient {
         return try {
             val request = RegisterRequest(loginName, fullName, phoneNumber, password)
             val response = post("/auth/register", json.encodeToString(RegisterRequest.serializer(), request))
-            json.decodeFromString(AuthResponse.serializer(), response)
+            decodeAuthResponse(response)
         } catch (e: Exception) {
             println("❌ 注册失败: ${e.message}")
             AuthResponse(false, "网络错误: ${e.message}")
@@ -116,7 +120,7 @@ object ApiClient {
         return try {
             val request = LoginRequest(loginName, password)
             val response = post("/auth/login", json.encodeToString(LoginRequest.serializer(), request))
-            json.decodeFromString(AuthResponse.serializer(), response)
+            decodeAuthResponse(response)
         } catch (e: Exception) {
             println("❌ 登录失败: ${e.message}")
             AuthResponse(false, "网络错误: ${e.message}")
@@ -129,7 +133,7 @@ object ApiClient {
     fun validateUser(userId: String): AuthResponse {
         return try {
             val response = get("/auth/validate/$userId")
-            json.decodeFromString(AuthResponse.serializer(), response)
+            decodeAuthResponse(response)
         } catch (e: Exception) {
             println("❌ 验证用户失败: ${e.message}")
             AuthResponse(false, "验证失败: ${e.message}")
@@ -245,6 +249,7 @@ object ApiClient {
         return try {
             connection.requestMethod = "POST"
             connection.setRequestProperty("Content-Type", "application/json")
+            applyAuthHeader(connection)
             connection.doOutput = true
             
             connection.outputStream.use { os ->
@@ -273,6 +278,7 @@ object ApiClient {
         return try {
             connection.requestMethod = "PUT"
             connection.setRequestProperty("Content-Type", "application/json")
+            applyAuthHeader(connection)
             connection.doOutput = true
             
             connection.outputStream.use { os ->
@@ -301,6 +307,7 @@ object ApiClient {
         return try {
             connection.requestMethod = "DELETE"
             connection.setRequestProperty("Content-Type", "application/json")
+            applyAuthHeader(connection)
             connection.doOutput = true
 
             connection.outputStream.use { os ->
@@ -329,6 +336,7 @@ object ApiClient {
         return try {
             connection.requestMethod = "GET"
             connection.setRequestProperty("Accept", "application/json")
+            applyAuthHeader(connection)
             
             val responseCode = connection.responseCode
             if (responseCode == HttpURLConnection.HTTP_OK) {
@@ -339,6 +347,20 @@ object ApiClient {
             }
         } finally {
             connection.disconnect()
+        }
+    }
+
+    private fun decodeAuthResponse(response: String): AuthResponse {
+        val decoded = json.decodeFromString(AuthResponse.serializer(), response)
+        if (decoded.success && !decoded.accessToken.isNullOrBlank()) {
+            accessToken = decoded.accessToken
+        }
+        return decoded
+    }
+
+    private fun applyAuthHeader(connection: HttpURLConnection) {
+        accessToken?.takeIf { it.isNotBlank() }?.let {
+            connection.setRequestProperty("Authorization", "Bearer $it")
         }
     }
 }
