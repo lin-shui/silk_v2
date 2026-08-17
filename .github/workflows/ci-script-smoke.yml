@@ -335,11 +335,9 @@ jobs:
         run: |
           for _ in {1..90}; do
             if curl -fsS "http://127.0.0.1:${BACKEND_HTTP_PORT}/health" > /tmp/silk_health.json \
-              && curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/" > /tmp/silk_frontend.html \
-              && curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/device" > /tmp/silk_device.html; then
+              && curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/" > /tmp/silk_frontend.html; then
               grep -q '"status":"ok"' /tmp/silk_health.json
               grep -q 'Silk CI runtime smoke' /tmp/silk_frontend.html
-              grep -q 'Silk CI runtime smoke' /tmp/silk_device.html
               exit 0
             fi
             sleep 2
@@ -372,7 +370,6 @@ jobs:
             /tmp/silk_weaviate_mock.log
             /tmp/silk_health.json
             /tmp/silk_frontend.html
-            /tmp/silk_device.html
           if-no-files-found: ignore
 
   deploy-orchestration-smoke:

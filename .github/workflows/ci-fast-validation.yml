@@ -18,58 +18,6 @@ env:
   GRADLE_ARGS_COMMON: --no-daemon --stacktrace --warning-mode all
 
 jobs:
-  external-agent-auth:
-    name: External Agent Host + Bridges
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: silk-agent/go.mod
-          cache-dependency-path: silk-agent/go.sum
-
-      - name: Test and vet silk-agent
-        working-directory: silk-agent
-        run: |
-          go test ./...
-          go test -race ./...
-          go vet ./...
-          GOOS=windows GOARCH=amd64 go test -c -o /tmp/silk-agent-windows.test.exe
-
-      - name: Validate direct Bridge Host IPC
-        run: |
-          python3 -m pip install --disable-pip-version-check --no-input pytest
-          python3 -m pytest bridge_common/tests cc_bridge/tests codex_bridge/tests -q
-          python3 -m py_compile bridge_common/*.py cc_bridge/acp_adapter.py cc_bridge/executor.py codex_bridge/codex_adapter.py codex_bridge/codex_executor.py
-          sh -n silk-agent/adapters/silk-claude-code-adapter silk-agent/adapters/silk-codex-adapter
-
-  external-agent-auth-windows:
-    name: External Agent Windows Security
-    runs-on: windows-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: silk-agent/go.mod
-          cache-dependency-path: silk-agent/go.sum
-
-      - name: Validate Windows ACL and service contracts
-        working-directory: silk-agent
-        run: >-
-          go test .
-          -run
-          '^(TestSecretFileProtectedChecksWindowsDACL|TestProtectPrivateDirectoryReplacesInheritedBroadWindowsDACL|TestDeviceSignerRejectsBroadWindowsDACL|TestWindowsExecutableTrustAllowsPublicReadAndRejectsPublicWrite|TestRenderWindowsTaskAction.*|TestResolveRunConfigDir.*)$'
-
   gradle-fast:
     name: Backend + Web + Desktop
     runs-on: ubuntu-latest

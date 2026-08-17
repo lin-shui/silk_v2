@@ -56,9 +56,8 @@
   - `agents/core/AgentBindingTriggerMatcherTest` — Room TEAM 的 ALL/MENTION/EVENT 触发隔离、跨 Agent mention 过滤及定向 `/new` 提取
 - Host command: `cd silk-agent && go test ./...`
 - Host coverage: DeviceSigner 系统凭据优先级与 secure-file fallback、加密 backup/restore/rotate、canonical protocol（含签名新增 Agent）、HTTPS/WSS TLS、连接/认证 origin 分离、pairing/add-Agent HTTP credential boundary 与 redirect credential 防泄漏、受保护控制 socket/Windows pipe 与新 Agent 热加载、PID/config handling、日志增量 follow/截断恢复、单一 WSS `agentInstanceId` envelope/双 Agent 路由隔离、全启用身份撤销后的终止行为、Adapter stdin/stdout JSON-RPC v2 nonce binding/双向 ACP、Unix wrapper/随包 Python 模块 ownership/parent trust、Windows Adapter source owner/DACL 与 `CREATE_NO_WINDOW` 启动标志、credential/raw-I/O 环境过滤和 Python bytecode 抑制、health/shutdown lifecycle、当前用户级 systemd/LaunchAgent/Scheduled Task 模板与含空格 profile 路径持久化、Windows profile 目录 DACL 收紧/子文件继承、Windows 私密文件 owner/DACL、签名 release manifest/hash/版本/未签名文件与宽泛输出权限拒绝；竞态检查使用 `go test -race ./...`，六平台交叉编译使用 `CGO_ENABLED=0 GOOS=<linux|darwin|windows> GOARCH=<amd64|arm64> go test -c`
-- Release smoke: `silk-agent/scripts/package-release.sh <version> <empty-output-dir> <0600-private-key-file> <public-key-file>` 构建并复验六个平台签名 bundle；GitHub tag/手动发布使用 `.github/workflows/release-silk-agent.yml`。
+- Release smoke: `silk-agent/scripts/package-release.sh <version> <empty-output-dir> <0600-private-key-file> <public-key-file>` 构建并复验六个平台签名 bundle。
 - Direct Bridge command: `python3 -m pytest bridge_common/tests cc_bridge/tests codex_bridge/tests -q`（先安装开发依赖 `python3 -m pip install pytest`）；`python3 -m py_compile bridge_common/*.py cc_bridge/acp_adapter.py cc_bridge/executor.py codex_bridge/codex_adapter.py codex_bridge/codex_executor.py`；覆盖 Host IPC v2 初始化、health/shutdown、双向 ACP 转发、权限信封 fail-closed 解析、跨设备无效 cwd 的纯消息回退与 Workspace fail-closed、Claude/Codex 继承设备原生认证/配置而仍由 CLI 参数限制本地文件/命令工具及 sandbox、Claude 丢失 resume session 后仅对明确 missing-session 错误自动新建、JSON/UTF-8 边界对合法 Unicode 与孤立 surrogate 的处理及两个 Adapter/Executor 的语法检查。
-- CI: `.github/workflows/ci-fast-validation.yml` 的 `external-agent-auth` job 固定运行 Host test/race/vet/Windows compile 与 Direct Bridge IPC/syntax 检查；`external-agent-auth-windows` 在 Windows runner 实际执行私密文件 DACL、Scheduled Task action 和 profile 路径合同。
 
 ## Knowledge Base
 
@@ -148,7 +147,6 @@
 - Coverage:
   - detekt checks Kotlin source across `backend` and Gradle frontends
 - `silkScriptLint` checks `silk.sh` with `bash -n`
-- `.github/workflows/ci-script-smoke.yml` 的 runtime start smoke 同时检查 Web `/` 与 `/device` 返回静态 SPA
 - Use:
   - before commit / push / PR when Kotlin, Gradle, or `silk.sh` changed
   - before blaming CI for fast-validation lint failures, because the same `silkLint` entrypoint runs in CI
