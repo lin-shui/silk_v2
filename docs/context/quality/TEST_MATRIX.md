@@ -41,12 +41,12 @@
 
 - Command: `./gradlew :backend:test`
 - Primary tests:
-  - `AgentAuthRouteContractTest` — 目标 loginName 预绑定、fragment 配对链接、跨账号短码 not-found、JWT 配对审批、设备 proof、已登记设备签名新增 Agent、requestId/账号隔离、未绑定初始状态、设备/Agent 所有者重命名与输入校验、单设备 WSS 双 Agent ACP 初始化/Host 替换、兼容 Bridge 连接、Agent/设备分级撤销
-  - `DeviceManagementModelsTest` — 配对短码格式化、`#code=` fragment 解析与无效 fragment 拒绝，以及 Binding 展示/权限纯逻辑
+  - `AgentAuthRouteContractTest` — 目标 loginName 预绑定、fragment 配对链接、跨账号短码 not-found、JWT 配对审批、设备 proof、已登记设备签名新增 Agent、requestId/账号隔离、未绑定初始状态、设备/Agent 所有者重命名与输入校验、Agent owner-only runtime permission mode、单设备 WSS 双 Agent ACP 初始化/Host 替换、兼容 Bridge 连接、Agent/设备分级撤销
+  - `DeviceManagementModelsTest` — 配对短码格式化、`#code=` fragment 解析与无效 fragment 拒绝，以及 Room `CHAT_ONLY` / Workspace 三档访问模式纯逻辑
   - `AgentPairingOriginTest` — 未配置时使用 Host `--server` 而不是监听地址、canonical 配置覆盖连接别名、Web 分端口显式 origin 与非法 origin 拒绝
   - `AgentBindingApprovalRouteContractTest` — 跨所有者 Binding 双向发起、双方审批、更新后重新审批、目标管理者撤销、拒绝后重新申请
   - `AgentBindingTeamRoutingContractTest` — Room TEAM ACTIVE Binding 从聊天广播到精确设备签名 Agent 的 ACP prompt 主链、TEAM `session/new` 不携带 Backend/其他设备 cwd，以及定向 `/new` 不进入 ACP vendor prompt
-  - `agents/auth/AgentBindingAuthorizationTest` — 设备签名连接精确绑定 `agentInstanceId`、Binding 权限和声明能力交集
+  - `agents/auth/AgentBindingAuthorizationTest` / `AgentAccessModeTest` — 设备签名连接精确绑定 `agentInstanceId`、Workspace 与 Agent runtime mode 求交、访问模式内部权限投影、legacy 保守迁移和声明能力交集
   - `agents/auth/AgentAuthProtocolTest` — raw Ed25519、公钥指纹、设备/新增 Agent canonical payload、origin 绑定、过期与一次性 challenge
   - `agents/auth/AgentAuthRateLimiterTest` / `AgentPairingRetentionTest` — 限速窗口、攻击者 key 清理、桶硬上限，以及过期配对 7 天保留边界
   - `agents/auth/AgentRevocationCleanupTest` — 撤销历史保留期、设备/Agent/Binding 级联清理、审计保留和旧设备公钥 tombstone
@@ -57,7 +57,7 @@
 - Host command: `cd silk-agent && go test ./...`
 - Host coverage: DeviceSigner 系统凭据优先级与 secure-file fallback、加密 backup/restore/rotate、canonical protocol（含签名新增 Agent）、HTTPS/WSS TLS、连接/认证 origin 分离、pairing/add-Agent HTTP credential boundary 与 redirect credential 防泄漏、受保护控制 socket/Windows pipe 与新 Agent 热加载、PID/config handling、日志增量 follow/截断恢复、单一 WSS `agentInstanceId` envelope/双 Agent 路由隔离、全启用身份撤销后的终止行为、Adapter stdin/stdout JSON-RPC v2 nonce binding/双向 ACP、Unix wrapper/随包 Python 模块 ownership/parent trust、Windows Adapter source owner/DACL 与 `CREATE_NO_WINDOW` 启动标志、credential/raw-I/O 环境过滤和 Python bytecode 抑制、health/shutdown lifecycle、当前用户级 systemd/LaunchAgent/Scheduled Task 模板与含空格 profile 路径持久化、Windows profile 目录 DACL 收紧/子文件继承、Windows 私密文件 owner/DACL、签名 release manifest/hash/版本/未签名文件与宽泛输出权限拒绝；竞态检查使用 `go test -race ./...`，六平台交叉编译使用 `CGO_ENABLED=0 GOOS=<linux|darwin|windows> GOARCH=<amd64|arm64> go test -c`
 - Release smoke: `silk-agent/scripts/package-release.sh <version> <empty-output-dir> <0600-private-key-file> <public-key-file>` 构建并复验六个平台签名 bundle。
-- Direct Bridge command: `python3 -m pytest bridge_common/tests cc_bridge/tests codex_bridge/tests -q`（先安装开发依赖 `python3 -m pip install pytest`）；`python3 -m py_compile bridge_common/*.py cc_bridge/acp_adapter.py cc_bridge/executor.py codex_bridge/codex_adapter.py codex_bridge/codex_executor.py`；覆盖 Host IPC v2 初始化、health/shutdown、双向 ACP 转发、权限信封 fail-closed 解析、跨设备无效 cwd 的纯消息回退与 Workspace fail-closed、Claude/Codex 继承设备原生认证/配置而仍由 CLI 参数限制本地文件/命令工具及 sandbox、Claude 丢失 resume session 后仅对明确 missing-session 错误自动新建、JSON/UTF-8 边界对合法 Unicode 与孤立 surrogate 的处理及两个 Adapter/Executor 的语法检查。
+  - Direct Bridge command: `python3 -m pytest bridge_common/tests cc_bridge/tests codex_bridge/tests -q`（先安装开发依赖 `python3 -m pip install pytest`）；`python3 -m py_compile bridge_common/*.py cc_bridge/acp_adapter.py cc_bridge/executor.py codex_bridge/codex_adapter.py codex_bridge/codex_executor.py codex_bridge/codex_app_server.py`；覆盖 Host IPC v2 初始化、health/shutdown、双向 ACP 转发、V1/V2 权限信封 fail-closed 解析、Agent runtime + Workspace 求交、Claude `manual` / `bypassPermissions` 与 Codex app-server `on-request` / `approvalPolicy=never` 的审批映射、Codex command/file/permissions approval 事件到统一权限卡片的协议映射、非审批模式保留 Agent 原生配置、跨设备无效 cwd 的纯消息回退与 Workspace fail-closed、核心文件/命令工具 deny/sandbox、Claude 丢失 resume session 后仅对明确 missing-session 错误自动新建、JSON/UTF-8 边界及两个 Adapter/Executor 的语法检查。
 
 ## Knowledge Base
 
@@ -105,7 +105,7 @@
   - `./gradlew :frontend:webApp:compileProductionExecutableKotlinJs`
 - Primary test:
   - `frontend/webApp/src/test/kotlin/com/silk/web/FileContractsTest.kt`
-  - `frontend/webApp/src/test/kotlin/com/silk/web/DeviceManagementModelsTest.kt` — 配对码规范化、Binding target/scope/权限映射与待审批状态文案
+  - `frontend/webApp/src/test/kotlin/com/silk/web/DeviceManagementModelsTest.kt` — 配对码规范化、Binding target/scope/访问模式映射与待审批状态文案
 - `/device` 静态入口 smoke：生产构建后运行 `python3 scripts/silk_static_server.py 8015 --bind 127.0.0.1 --directory frontend/webApp/build/dist/js/productionExecutable`，确认 `GET /device` 返回 `200 text/html`
 
 ## Shared Room Contract

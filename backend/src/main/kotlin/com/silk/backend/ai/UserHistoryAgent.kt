@@ -31,7 +31,7 @@ class UserHistoryAgent(
         val workspace = workspaceManager.ensureWorkspace(userId)
 
         // feat 版 ClaudeProcessClient 通过 Landlock 沙箱 + strict-settings 控制权限，
-        // 不接受 chore 的 permissionMode 参数；recall 为只读历史查询，沿用默认权限即可。
+        // recall 是后端只读历史查询，不参与 Workspace Agent 访问模式。
         val historyClient = ClaudeProcessClient(
             groupId = "history_$userId",
             workspaceDir = workspace.toString(),

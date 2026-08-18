@@ -281,7 +281,7 @@ private fun CreateWorkflowDialog(
     var newInitialDir by remember { mutableStateOf("") }
     var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
     var selectedAgentType by remember { mutableStateOf("") }
-    var selectedPermMode by remember { mutableStateOf("") }
+    var selectedAccessMode by remember { mutableStateOf("APPROVAL_REQUIRED") }
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var permDropdownExpanded by remember { mutableStateOf(false) }
     var bridgeConnected by remember { mutableStateOf(true) }
@@ -319,14 +319,6 @@ private fun CreateWorkflowDialog(
 
     val canCreate = !submitting && bridgeConnected &&
                     newName.isNotBlank() && newInitialDir.isNotBlank()
-
-    val permModeLabel = { mode: String ->
-        when (mode) {
-            "ACCEPT_EDITS" -> "Accept Edits"
-            "BYPASS" -> "Bypass"
-            else -> "Interactive"
-        }
-    }
 
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
@@ -379,12 +371,12 @@ private fun CreateWorkflowDialog(
                 }
                 Spacer(Modifier.height(12.dp))
 
-                // 权限模式
-                Text("权限模式", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
+                // Workspace 访问模式
+                Text("Workspace 访问", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
                 Spacer(Modifier.height(4.dp))
                 Box {
                     OutlinedTextField(
-                        value = permModeLabel(selectedPermMode),
+                        value = workspaceAccessModeLabel(selectedAccessMode),
                         onValueChange = {},
                         readOnly = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -399,11 +391,15 @@ private fun CreateWorkflowDialog(
                         expanded = permDropdownExpanded,
                         onDismissRequest = { permDropdownExpanded = false },
                     ) {
-                        listOf("" to "Interactive", "ACCEPT_EDITS" to "Accept Edits", "BYPASS" to "Bypass").forEach { (value, label) ->
+                        listOf(
+                            "READ_ONLY" to "只读",
+                            "APPROVAL_REQUIRED" to "需审批",
+                            "AUTONOMOUS" to "放行",
+                        ).forEach { (value, label) ->
                             DropdownMenuItem(
                                 text = { Text(label) },
                                 onClick = {
-                                    selectedPermMode = value
+                                    selectedAccessMode = value
                                     permDropdownExpanded = false
                                 },
                             )
@@ -464,7 +460,7 @@ private fun CreateWorkflowDialog(
                     val initDir = newInitialDir.trim()
                     val name = newName.trim()
                     val agentType = selectedAgentType.ifBlank { "claude_code" }
-                    val permMode = selectedPermMode
+                    val accessMode = selectedAccessMode
                     submitting = true
                     scope.launch {
                         try {
@@ -486,7 +482,7 @@ private fun CreateWorkflowDialog(
                                 is TrustCheckResult.Trusted -> {} // 继续
                             }
                             // 2. 已信任：直接创建
-                            performCreate(userId, name, initDir, agentType, permMode, onCreated) { msg ->
+                            performCreate(userId, name, initDir, agentType, accessMode, onCreated) { msg ->
                                 errorMessage = msg
                             }
                         } finally {
@@ -532,7 +528,7 @@ private fun CreateWorkflowDialog(
                         if (added) {
                             performCreate(
                                 userId, newName.trim(), newInitialDir.trim(),
-                                selectedAgentType.ifBlank { "claude_code" }, selectedPermMode,
+                                selectedAgentType.ifBlank { "claude_code" }, selectedAccessMode,
                                 onCreated,
                             ) { msg -> errorMessage = msg }
                         } else {
@@ -556,11 +552,11 @@ private suspend fun performCreate(
     name: String,
     initialDir: String,
     agentType: String,
-    permissionMode: String,
+    workspaceAccessMode: String,
     onCreated: (WorkflowItem) -> Unit,
     onError: (String) -> Unit,
 ) {
-    when (val r = ApiClient.createWorkflow(name, "", userId, initialDir, agentType, permissionMode)) {
+    when (val r = ApiClient.createWorkflow(name, "", userId, initialDir, agentType, workspaceAccessMode)) {
         is CreateWorkflowResult.Ok -> onCreated(r.workflow)
         is CreateWorkflowResult.Err -> onError("创建工作流失败：${r.message}")
     }

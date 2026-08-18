@@ -7,18 +7,6 @@ import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentLinkedDeque
 
 /**
- * 工具权限模式。
- * - INTERACTIVE: 只自动放行读操作（Read/Glob/Grep 等），写和执行需用户确认
- * - ACCEPT_EDITS: 允许工作目录内的写操作（Write/Edit/NotebookEdit），执行仍需确认
- * - BYPASS: 全部放行
- */
-enum class PermissionMode {
-    INTERACTIVE,
-    ACCEPT_EDITS,
-    BYPASS,
-}
-
-/**
  * per-(userId, groupId, agentInstanceId) 状态机。
  * 不含 workingDir —— cwd 在 GroupAgentContext 共享。
  */
@@ -38,8 +26,6 @@ class AgentSession(
     @Volatile var pendingQuestion: PendingQuestion? = null,
     /** The background coroutine running the current prompt + queue drain. */
     @Volatile var promptJob: Job? = null,
-    /** 工具权限模式，默认 INTERACTIVE（读操作放行，写/执行需确认） */
-    @Volatile var permissionMode: PermissionMode = PermissionMode.INTERACTIVE,
 ) {
     /** 守护 acpSessionId 懒创建：避免代码审查 git 查询与并发查询重复 sessionNew。 */
     val acpSessionLock: Mutex = Mutex()

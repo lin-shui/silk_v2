@@ -8,8 +8,8 @@ import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.auth.AgentAuthRepository
 import com.silk.backend.agents.auth.AgentBindingMessageScope
 import com.silk.backend.agents.auth.AgentBindingTargetType
+import com.silk.backend.agents.auth.AgentAccessMode
 import com.silk.backend.agents.auth.AgentInstanceStatus
-import com.silk.backend.agents.auth.AgentPermission
 import com.silk.backend.agents.auth.AgentTriggerPolicy
 import com.silk.backend.agents.auth.CreateAgentBindingRequest
 import com.silk.backend.agents.core.AgentRuntime
@@ -62,6 +62,7 @@ data class IssueToWorkspaceRequest(
     val workingDir: String,
     val agentType: String = "claude-code",
     val agentInstanceId: String = "",
+    val accessMode: AgentAccessMode = AgentAccessMode.APPROVAL_REQUIRED,
     val visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
 )
 
@@ -316,6 +317,12 @@ private fun Route.routeBindingRoutes(
         if (request.issueNumber <= 0 || request.workingDir.trim().isBlank()) {
             return@post call.respond(HttpStatusCode.BadRequest, GitErrorResponse("INVALID_REQUEST", "Issue 编号和工作目录必填"))
         }
+        if (request.accessMode == AgentAccessMode.CHAT_ONLY) {
+            return@post call.respond(
+                HttpStatusCode.BadRequest,
+                GitErrorResponse("INVALID_ACCESS_MODE", "Workspace 不支持 CHAT_ONLY 模式"),
+            )
+        }
         val requestedAgentInstanceId = request.agentInstanceId.trim()
         val selectedAgent = requestedAgentInstanceId.takeIf(String::isNotBlank)?.let { instanceId ->
             AgentAuthRepository.listAgents(caller).firstOrNull {
@@ -401,10 +408,7 @@ private fun Route.routeBindingRoutes(
                                 targetId = workspace.workspaceId,
                                 messageScope = AgentBindingMessageScope.WORKSPACE,
                                 triggerPolicy = AgentTriggerPolicy.ALL,
-                                permissions = setOf(
-                                    AgentPermission.READ_MESSAGE,
-                                    AgentPermission.SEND_MESSAGE,
-                                ),
+                                accessMode = request.accessMode,
                             ),
                             approveAsAgentOwner = true,
                             approveAsTargetManager = true,

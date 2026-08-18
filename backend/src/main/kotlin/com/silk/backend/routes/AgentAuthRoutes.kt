@@ -45,6 +45,7 @@ import com.silk.backend.agents.auth.CreateAgentPairingRequest
 import com.silk.backend.agents.auth.CreateAgentPairingResponse
 import com.silk.backend.agents.auth.CreateTrustedDeviceAgentRequest
 import com.silk.backend.agents.auth.UpdateAgentBindingRequest
+import com.silk.backend.agents.auth.UpdateAgentRuntimePermissionModeRequest
 import com.silk.backend.agents.auth.UpdateAgentResourceNameRequest
 import com.silk.backend.agents.auth.DeviceEnrollmentStatus
 import com.silk.backend.agents.auth.AgentInstanceStatus
@@ -581,6 +582,34 @@ fun Route.agentAuthRoutes() {
             call.respond(AgentManagementActionResponse(true, "Agent renamed"))
         }
 
+        put("/api/agent-instances/{agentInstanceId}/permission-mode") {
+            val userId = call.principal<UserIdPrincipal>()?.name
+                ?: return@put call.respondAgentError(
+                    io.ktor.http.HttpStatusCode.Unauthorized,
+                    "UNAUTHENTICATED",
+                    "Login required",
+                )
+            val agentInstanceId = call.parameters["agentInstanceId"].orEmpty()
+            val request = runCatching { call.receive<UpdateAgentRuntimePermissionModeRequest>() }.getOrElse {
+                call.respondAgentError(
+                    io.ktor.http.HttpStatusCode.BadRequest,
+                    "INVALID_REQUEST",
+                    "Invalid Agent permission mode",
+                )
+                return@put
+            }
+            if (!AgentAuthRepository.updateAgentRuntimePermissionMode(userId, agentInstanceId, request.mode)) {
+                // Keep existence and ownership indistinguishable to non-owners.
+                call.respondAgentError(
+                    io.ktor.http.HttpStatusCode.NotFound,
+                    "AGENT_NOT_FOUND",
+                    "Active Agent not found",
+                )
+                return@put
+            }
+            call.respond(AgentManagementActionResponse(true, "Agent permission mode updated"))
+        }
+
         get("/api/agent-security-events") {
             val userId = call.principal<UserIdPrincipal>()?.name
                 ?: return@get call.respondAgentError(io.ktor.http.HttpStatusCode.Unauthorized, "UNAUTHENTICATED", "Login required")
@@ -641,6 +670,10 @@ fun Route.agentAuthRoutes() {
                 call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_MESSAGE_SCOPE", "Binding messageScope does not match targetType")
                 return@post
             }
+            if (!request.hasCompatibleAccessMode()) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_ACCESS_MODE", "Binding accessMode does not match targetType")
+                return@post
+            }
             val ownerId = AgentAuthRepository.findActiveAgentOwner(request.agentInstanceId)
             if (ownerId == null) {
                 call.respondAgentError(io.ktor.http.HttpStatusCode.NotFound, "AGENT_NOT_FOUND", "Agent is not active")
@@ -668,7 +701,7 @@ fun Route.agentAuthRoutes() {
                     }
                     val status = when (authError.errorCode) {
                         "AGENT_NOT_FOUND" -> io.ktor.http.HttpStatusCode.NotFound
-                        "INVALID_MENTION_ALIAS" -> io.ktor.http.HttpStatusCode.BadRequest
+                        "INVALID_MENTION_ALIAS", "INVALID_ACCESS_MODE" -> io.ktor.http.HttpStatusCode.BadRequest
                         else -> io.ktor.http.HttpStatusCode.Conflict
                     }
                     call.respondAgentError(status, authError.errorCode, authError.message)
@@ -691,6 +724,10 @@ fun Route.agentAuthRoutes() {
             }
             if (!request.hasCompatibleMessageScope()) {
                 call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_MESSAGE_SCOPE", "Binding messageScope does not match targetType")
+                return@put
+            }
+            if (!request.hasCompatibleAccessMode()) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_ACCESS_MODE", "Binding accessMode does not match targetType")
                 return@put
             }
             val current = AgentAuthRepository.findBinding(bindingId)
@@ -725,7 +762,7 @@ fun Route.agentAuthRoutes() {
                 }
                 val status = when (authError.errorCode) {
                     "AGENT_NOT_FOUND", "BINDING_NOT_FOUND" -> io.ktor.http.HttpStatusCode.NotFound
-                    "INVALID_MENTION_ALIAS" -> io.ktor.http.HttpStatusCode.BadRequest
+                    "INVALID_MENTION_ALIAS", "INVALID_ACCESS_MODE" -> io.ktor.http.HttpStatusCode.BadRequest
                     else -> io.ktor.http.HttpStatusCode.Conflict
                 }
                 call.respondAgentError(status, authError.errorCode, authError.message)
@@ -1288,4 +1325,18 @@ private fun CreateAgentBindingRequest.hasCompatibleMessageScope(): Boolean = whe
 private fun UpdateAgentBindingRequest.hasCompatibleMessageScope(): Boolean = when (targetType) {
     AgentBindingTargetType.ROOM -> messageScope == AgentBindingMessageScope.TEAM
     AgentBindingTargetType.WORKSPACE -> messageScope == AgentBindingMessageScope.WORKSPACE
+}
+
+private fun CreateAgentBindingRequest.hasCompatibleAccessMode(): Boolean = when (targetType) {
+    AgentBindingTargetType.ROOM ->
+        accessMode in setOf(null, com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY) &&
+            permissions.all { it in setOf(com.silk.backend.agents.auth.AgentPermission.READ_MESSAGE, com.silk.backend.agents.auth.AgentPermission.SEND_MESSAGE) }
+    AgentBindingTargetType.WORKSPACE -> accessMode != com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY
+}
+
+private fun UpdateAgentBindingRequest.hasCompatibleAccessMode(): Boolean = when (targetType) {
+    AgentBindingTargetType.ROOM ->
+        accessMode in setOf(null, com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY) &&
+            permissions.all { it in setOf(com.silk.backend.agents.auth.AgentPermission.READ_MESSAGE, com.silk.backend.agents.auth.AgentPermission.SEND_MESSAGE) }
+    AgentBindingTargetType.WORKSPACE -> accessMode != com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY
 }

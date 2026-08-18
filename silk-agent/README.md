@@ -121,11 +121,12 @@ both packaged Adapter wrappers as one bundle. Older Hosts can continue using
 the compatibility device-signature `/agent-bridge` path during migration, but
 query Token authentication and standalone Adapter startup are retired.
 
-Managed Claude Code and Codex registrations advertise `EXECUTION_POLICY_V1`.
-The backend requires that capability for device-signed prompts so an older
-Adapter cannot silently ignore the per-prompt execution policy. Agents enrolled
-before this capability was introduced must be removed and enrolled again after
-upgrading `silk-agent`.
+Managed Claude Code and Codex registrations advertise `EXECUTION_POLICY_V1` and
+`EXECUTION_POLICY_V2`. The backend requires `EXECUTION_POLICY_V2` for new
+device-signed Workspace prompts so an older Agent cannot silently ignore the
+two-layer per-prompt execution policy. Agents enrolled before V2 was introduced
+must be removed and enrolled again after upgrading `silk-agent`; reconnecting
+the old enrollment does not rewrite its persisted capability snapshot.
 
 The child receives a filtered environment: `SILK_AGENT_HOME`, Silk/Bridge token
 variables, and reserved `SILK_AGENT_SECRET_*` variables are removed. The

@@ -6,8 +6,8 @@ import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.auth.AgentAuthRepository
 import com.silk.backend.agents.auth.AgentBindingMessageScope
 import com.silk.backend.agents.auth.AgentBindingTargetType
+import com.silk.backend.agents.auth.AgentAccessMode
 import com.silk.backend.agents.auth.AgentInstanceStatus
-import com.silk.backend.agents.auth.AgentPermission
 import com.silk.backend.agents.auth.AgentTriggerPolicy
 import com.silk.backend.agents.auth.CreateAgentBindingRequest
 import com.silk.backend.agents.core.AgentRuntime
@@ -37,6 +37,7 @@ data class CreateWorkspaceRequest(
     val workingDir: String = "",
     val agentType: String = "claude-code",
     val agentInstanceId: String = "",
+    val accessMode: AgentAccessMode = AgentAccessMode.APPROVAL_REQUIRED,
     val visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
 )
 
@@ -67,6 +68,7 @@ data class WorkspaceDto(
     val workingDir: String = "",
     val agentType: String = "claude-code",
     val activeAgentInstanceId: String = "",
+    val accessMode: AgentAccessMode? = null,
     val visibility: WorkspaceVisibility,
     val copilots: List<String> = emptyList(),
     val role: String,
@@ -113,6 +115,14 @@ private fun PersonalWorkspace.ownerDisplayName(callerId: String): String =
 
 internal fun PersonalWorkspace.toDto(callerId: String): WorkspaceDto {
     val canInspectRuntime = ownerId == callerId || callerId in copilots
+    val bindingAccessMode = activeAgentInstanceId.takeIf(String::isNotBlank)?.let { instanceId ->
+        AgentAuthRepository.findActiveBinding(
+            instanceId,
+            AgentBindingTargetType.WORKSPACE,
+            workspaceId,
+            AgentBindingMessageScope.WORKSPACE,
+        )?.accessMode
+    }
     return WorkspaceDto(
         workspaceId = workspaceId,
         roomId = roomId,
@@ -122,6 +132,7 @@ internal fun PersonalWorkspace.toDto(callerId: String): WorkspaceDto {
         workingDir = workingDir.takeIf { canInspectRuntime }.orEmpty(),
         agentType = activeAgent.ifBlank { agentType },
         activeAgentInstanceId = activeAgentInstanceId.takeIf { canInspectRuntime }.orEmpty(),
+        accessMode = bindingAccessMode.takeIf { canInspectRuntime },
         visibility = visibility,
         copilots = copilots.takeIf { ownerId == callerId }.orEmpty(),
         role = when {
@@ -147,6 +158,7 @@ private fun PersonalWorkspace.toHistoricalDto(callerId: String): WorkspaceDto =
         workingDir = "",
         agentType = "",
         activeAgentInstanceId = "",
+        accessMode = null,
         visibility = WorkspaceVisibility.PRIVATE,
         copilots = emptyList(),
         role = "OBSERVER",
@@ -215,6 +227,12 @@ fun Route.workspaceRoutes(
                 return@post call.respond(HttpStatusCode.NotFound)
             }
             val req = call.receive<CreateWorkspaceRequest>()
+            if (req.accessMode == AgentAccessMode.CHAT_ONLY) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    WorkspaceErrorResponse("INVALID_ACCESS_MODE", "Workspace 不支持 CHAT_ONLY 模式"),
+                )
+            }
             val name = req.name.trim()
             val workingDir = req.workingDir.trim()
             val requestedAgentInstanceId = req.agentInstanceId.trim()
@@ -313,10 +331,7 @@ fun Route.workspaceRoutes(
                                     targetId = workspace.workspaceId,
                                     messageScope = AgentBindingMessageScope.WORKSPACE,
                                     triggerPolicy = AgentTriggerPolicy.ALL,
-                                    permissions = setOf(
-                                        AgentPermission.READ_MESSAGE,
-                                        AgentPermission.SEND_MESSAGE,
-                                    ),
+                                    accessMode = req.accessMode,
                                 ),
                                 approveAsAgentOwner = true,
                                 approveAsTargetManager = true,

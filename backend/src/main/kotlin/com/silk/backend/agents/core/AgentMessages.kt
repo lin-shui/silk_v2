@@ -212,7 +212,7 @@ object AgentMessages {
 
     /**
      * 构建工具权限确认卡片。
-     * 展示工具名和操作详情，提供 允许/拒绝 按钮和模式升级按钮。
+     * 展示工具名和操作详情，提供一次性的允许/拒绝按钮。
      */
     fun permissionCard(
         requestId: String,
@@ -230,8 +230,6 @@ object AgentMessages {
         builder.addDivider()
         builder.addButton("允许", "perm_allow_$requestId", type = ButtonType.PRIMARY)
         builder.addButton("拒绝", "perm_deny_$requestId", type = ButtonType.DANGER)
-        builder.addButton("允许所有编辑", "perm_accept_edits_$requestId", type = ButtonType.DEFAULT)
-        builder.addButton("允许所有操作", "perm_bypass_$requestId", type = ButtonType.DEFAULT)
 
         return Message(
             id = "agent_perm_$requestId",

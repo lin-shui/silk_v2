@@ -12,7 +12,7 @@ silk-agent connect claude-code --server https://<silk-host>
 
 The Host starts `acp_adapter.py --silk-host-stdio` automatically. Set `BRIDGE_PYTHON` only when the packaged Adapter should use a specific Python interpreter. `--working-dir` and `--log-level` remain Adapter options used by managed launches.
 
-Managed prompts carry a Binding-derived execution-policy envelope. Claude tools use an explicit allowlist; Bash is available only with read, write, and command permissions and requires the native sandbox.
+Managed prompts carry an execution-policy envelope derived from the Agent owner's runtime mode and the Workspace Binding. `NATIVE_DEFAULT` leaves Claude's native approval policy unchanged; explicit approval/read-only/automatic modes are applied per prompt without rewriting local settings. Claude tools use an explicit allowlist; Bash is available only with read, write, and command permissions and requires the native sandbox even in automatic mode.
 
 ## Components
 

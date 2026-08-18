@@ -1,7 +1,9 @@
-"""Codex CLI executor — wraps `codex exec --json` and parses its JSONL stream.
+"""Codex CLI executor — parses Codex JSONL and app-server event streams.
 
 Normalizes agent messages, reasoning, command/file edits, function calls,
 built-in tool events, and terminal turn status for the ACP bridge layer.
+Managed Silk prompts are delegated to ``codex app-server`` by this module so
+native pre-execution approval requests remain interactive.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import logging
 import os
 import signal
 import time
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Awaitable, Callable
 
 from bridge_common.execution_policy import ExecutionPolicy
 from bridge_common.unicode_safety import sanitize_text
@@ -323,8 +325,11 @@ class CodexExecutor:
         if execution_policy is not None:
             cmd += [
                 "--sandbox", execution_policy.codex_sandbox,
-                "--ask-for-approval", "never",
             ]
+            if execution_policy.requires_approval:
+                cmd += ["--ask-for-approval", "on-request"]
+            elif execution_policy.automatic_execution:
+                cmd += ["--ask-for-approval", "never"]
             if not execution_policy.can_run_codex_shell:
                 cmd += ["--disable", "shell_tool", "--disable", "unified_exec"]
         if resume_thread_id:
@@ -349,7 +354,33 @@ class CodexExecutor:
         cwd: str,
         resume_thread_id: str | None = None,
         execution_policy: ExecutionPolicy | None = None,
+        approval_handler: Callable[
+            [str, dict[str, Any], dict[str, Any] | None], Awaitable[bool]
+        ] | None = None,
+        question_handler: Callable[
+            [dict[str, Any]], Awaitable[dict[str, Any]]
+        ] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
+        # Managed prompts use app-server so Codex can pause before a command,
+        # file change, or permission expansion. Legacy/unmanaged execution
+        # keeps the stable `exec --json` path for callers outside Silk.
+        if execution_policy is not None:
+            try:
+                from codex_app_server import CodexAppServerExecutor
+            except ModuleNotFoundError:
+                from codex_bridge.codex_app_server import CodexAppServerExecutor
+
+            async for event in CodexAppServerExecutor().run(
+                prompt=prompt,
+                cwd=cwd,
+                resume_thread_id=resume_thread_id,
+                execution_policy=execution_policy,
+                approval_handler=approval_handler,
+                question_handler=question_handler,
+            ):
+                yield event
+            return
+
         cmd = self._build_cmd(
             cwd=cwd,
             resume_thread_id=resume_thread_id,

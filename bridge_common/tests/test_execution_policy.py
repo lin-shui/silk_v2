@@ -5,7 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bridge_common.execution_policy import ExecutionPolicy, resolve_prompt_working_directory
+from bridge_common.execution_policy import (
+    APPROVAL_REQUIRED,
+    AUTOMATIC,
+    AUTONOMOUS,
+    READ_ONLY,
+    ExecutionPolicy,
+    resolve_prompt_working_directory,
+)
 from codex_bridge.codex_executor import CodexExecutor
 
 
@@ -33,7 +40,7 @@ class ExecutionPolicyTest(unittest.TestCase):
                 },
             },
         })
-        self.assertEqual(ExecutionPolicy(read_file=True), policy)
+        self.assertEqual(ExecutionPolicy(access_mode=READ_ONLY, read_file=True), policy)
 
     def test_claude_policy_keeps_native_config_and_denies_ungranted_local_tools(self) -> None:
         policy = ExecutionPolicy(read_file=True)
@@ -44,11 +51,38 @@ class ExecutionPolicyTest(unittest.TestCase):
         self.assertNotIn("--strict-mcp-config", args)
         self.assertNotIn("--disable-slash-commands", args)
         self.assertNotIn("--tools", args)
-        self.assertEqual("manual", args[args.index("--permission-mode") + 1])
+        self.assertNotIn("--permission-mode", args)
         self.assertIn("Write", denied)
         self.assertIn("Bash", denied)
         self.assertNotIn("Read", denied)
         self.assertNotIn("sandbox", settings)
+
+    def test_approval_mode_adds_silk_approval_without_replacing_other_native_config(self) -> None:
+        args = ExecutionPolicy(access_mode=APPROVAL_REQUIRED, read_file=True).claude_cli_args()
+        self.assertEqual("manual", args[args.index("--permission-mode") + 1])
+
+    def test_automatic_agent_mode_overrides_native_approval_but_keeps_silk_limits(self) -> None:
+        policy = ExecutionPolicy(
+            access_mode=AUTONOMOUS,
+            agent_permission_mode=AUTOMATIC,
+            read_file=True,
+            write_file=True,
+            run_command=True,
+        )
+        args = policy.claude_cli_args()
+        settings = json.loads(args[args.index("--settings") + 1])
+        self.assertEqual("bypassPermissions", args[args.index("--permission-mode") + 1])
+        self.assertTrue(settings["sandbox"]["enabled"])
+        self.assertFalse(settings["sandbox"]["allowUnsandboxedCommands"])
+
+    def test_workspace_approval_wins_over_automatic_agent_mode(self) -> None:
+        policy = ExecutionPolicy(
+            access_mode=APPROVAL_REQUIRED,
+            agent_permission_mode=AUTOMATIC,
+            read_file=True,
+        )
+        args = policy.claude_cli_args()
+        self.assertEqual("manual", args[args.index("--permission-mode") + 1])
 
     def test_claude_bash_requires_complete_grant_and_hard_sandbox(self) -> None:
         policy = ExecutionPolicy(read_file=True, write_file=True, run_command=True)

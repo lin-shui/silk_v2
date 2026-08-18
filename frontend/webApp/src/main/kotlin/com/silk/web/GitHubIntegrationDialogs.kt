@@ -247,6 +247,7 @@ internal fun GithubIssueWorkspaceDialog(
     var selectedAgentId by remember(issueNumber) { mutableStateOf("") }
     var loadingAgents by remember(issueNumber) { mutableStateOf(true) }
     var visibility by remember { mutableStateOf("PRIVATE") }
+    var accessMode by remember { mutableStateOf(BindingAccessMode.APPROVAL_REQUIRED) }
     var saving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showFolderPicker by remember { mutableStateOf(false) }
@@ -317,6 +318,7 @@ internal fun GithubIssueWorkspaceDialog(
                 workingDir = workingDir.trim(),
                 agentType = agentType,
                 agentInstanceId = selectedAgent.agentInstanceId,
+                accessMode = accessMode.name,
                 visibility = visibility,
                 name = name.trim().ifBlank { null },
             )
@@ -425,6 +427,17 @@ internal fun GithubIssueWorkspaceDialog(
             if (rememberedDirAgentId == selectedAgentId && workingDir.isNotBlank()) {
                 Div({ style { marginTop(6.px); fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
                     Text("已自动填入此工作群组在该 Agent 上最近使用的目录")
+                }
+            }
+            WorkspaceFormLabel("Workspace 访问")
+            Select({
+                style { workspaceFormInputStyle() }
+                onChange { accessMode = BindingAccessMode.valueOf(it.value ?: BindingAccessMode.APPROVAL_REQUIRED.name) }
+            }) {
+                availableBindingAccessModes(BindingTargetType.WORKSPACE).forEach { mode ->
+                    Option(mode.name, attrs = { if (mode == accessMode) attr("selected", "") }) {
+                        Text(bindingAccessModeLabel(mode))
+                    }
                 }
             }
             Div({

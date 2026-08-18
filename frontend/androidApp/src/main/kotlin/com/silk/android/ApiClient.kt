@@ -822,7 +822,7 @@ object ApiClient {
         userId: String,
         initialDir: String,
         agentType: String = "claude_code",
-        permissionMode: String = "",
+        workspaceAccessMode: String = "",
     ): CreateWorkflowResult = withContext(Dispatchers.IO) {
         try {
             val body = buildJsonObject {
@@ -833,8 +833,8 @@ object ApiClient {
                 if (agentType.isNotBlank()) {
                     put("agentType", JsonPrimitive(agentType))
                 }
-                if (permissionMode.isNotBlank()) {
-                    put("permissionMode", JsonPrimitive(permissionMode))
+                if (workspaceAccessMode.isNotBlank()) {
+                    put("workspaceAccessMode", JsonPrimitive(workspaceAccessMode))
                 }
             }.toString()
             val response = post("/api/workflows", body)
@@ -940,12 +940,12 @@ object ApiClient {
         }
     }
 
-    /** 更新工作流会话设置（agent / permissionMode）。 */
+    /** 更新工作流会话设置（Agent / Workspace 访问模式）。 */
     suspend fun updateCcSettings(
         userId: String,
         workspaceId: String,
         activeAgent: String? = null,
-        permissionMode: String? = null,
+        workspaceAccessMode: String? = null,
     ): CcStateResponse = withContext(Dispatchers.IO) {
         try {
             val body = buildJsonObject {
@@ -953,8 +953,8 @@ object ApiClient {
                 if (!activeAgent.isNullOrBlank()) {
                     put("activeAgent", JsonPrimitive(activeAgent))
                 }
-                if (!permissionMode.isNullOrBlank()) {
-                    put("permissionMode", JsonPrimitive(permissionMode))
+                if (!workspaceAccessMode.isNullOrBlank()) {
+                    put("workspaceAccessMode", JsonPrimitive(workspaceAccessMode))
                 }
             }.toString()
             val response = post("/users/$userId/cc-settings/update", body)

@@ -1,6 +1,7 @@
 package com.silk.backend
 
 import com.silk.backend.agents.auth.AgentAuthProtocol
+import com.silk.backend.agents.auth.AgentAccessMode
 import com.silk.backend.agents.auth.AgentAuthErrorResponse
 import com.silk.backend.agents.auth.AgentBindingListResponse
 import com.silk.backend.agents.auth.AgentBindingDto
@@ -10,6 +11,7 @@ import com.silk.backend.agents.auth.AgentCapability
 import com.silk.backend.agents.auth.AgentDeviceListResponse
 import com.silk.backend.agents.auth.AgentInstanceListResponse
 import com.silk.backend.agents.auth.AgentInstanceStatus
+import com.silk.backend.agents.auth.AgentRuntimePermissionMode
 import com.silk.backend.agents.auth.AgentRevocationCleanupResponse
 import com.silk.backend.agents.auth.AgentSecurityEventAction
 import com.silk.backend.agents.auth.AgentSecurityEventListResponse
@@ -38,6 +40,7 @@ import com.silk.backend.agents.auth.CreateAgentBindingRequest
 import com.silk.backend.agents.auth.CreateAgentPairingResponse
 import com.silk.backend.agents.auth.CreateTrustedDeviceAgentRequest
 import com.silk.backend.agents.auth.UpdateAgentBindingRequest
+import com.silk.backend.agents.auth.UpdateAgentRuntimePermissionModeRequest
 import com.silk.backend.agents.auth.UpdateAgentResourceNameRequest
 import com.silk.backend.agents.auth.DeviceEnrollmentStatus
 import com.silk.backend.auth.JwtProvider
@@ -256,6 +259,41 @@ class AgentAuthRouteContractTest {
                         .decode<AgentInstanceListResponse>()
                     assertEquals(listOf(completed.agentInstanceId), agents.agents.map { it.agentInstanceId })
                     assertEquals(AgentInstanceStatus.ACTIVE, agents.agents.single().status)
+                    assertEquals(
+                        AgentRuntimePermissionMode.NATIVE_DEFAULT,
+                        agents.agents.single().runtimePermissionMode,
+                    )
+
+                    val otherCannotUpdateAgentPermission = client.put(
+                        "/api/agent-instances/${completed.agentInstanceId}/permission-mode",
+                    ) {
+                        bearer(otherAccessToken)
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            json.encodeToString(
+                                UpdateAgentRuntimePermissionModeRequest(AgentRuntimePermissionMode.AUTOMATIC),
+                            ),
+                        )
+                    }
+                    assertEquals(HttpStatusCode.NotFound, otherCannotUpdateAgentPermission.status)
+                    val updateAgentPermission = client.put(
+                        "/api/agent-instances/${completed.agentInstanceId}/permission-mode",
+                    ) {
+                        bearer(accessToken)
+                        contentType(ContentType.Application.Json)
+                        setBody(
+                            json.encodeToString(
+                                UpdateAgentRuntimePermissionModeRequest(AgentRuntimePermissionMode.AUTOMATIC),
+                            ),
+                        )
+                    }
+                    assertEquals(HttpStatusCode.OK, updateAgentPermission.status)
+                    val agentsAfterPermissionUpdate = client.get("/api/agent-instances") { bearer(accessToken) }
+                        .decode<AgentInstanceListResponse>()
+                    assertEquals(
+                        AgentRuntimePermissionMode.AUTOMATIC,
+                        agentsAfterPermissionUpdate.agents.single().runtimePermissionMode,
+                    )
 
                     val otherCannotRename = client.put("/api/agent-devices/${completed.deviceId}") {
                         bearer(otherAccessToken)
@@ -496,6 +534,7 @@ class AgentAuthRouteContractTest {
                     assertEquals(HttpStatusCode.Created, binding.status)
                     val createdBinding = binding.decode<AgentBindingDto>()
                     assertEquals(room.id, createdBinding.targetId)
+                    assertEquals(AgentAccessMode.CHAT_ONLY, createdBinding.accessMode)
                     val updatedBinding = client.put("/api/agent-bindings/${createdBinding.bindingId}") {
                         bearer(accessToken)
                         contentType(ContentType.Application.Json)
@@ -662,6 +701,11 @@ class AgentAuthRouteContractTest {
                     assertTrue(securityEvents.events.any { it.action == AgentSecurityEventAction.AGENT_ENROLLED })
                     assertTrue(securityEvents.events.any { it.action == AgentSecurityEventAction.AGENT_REVOKED })
                     assertTrue(securityEvents.events.any { it.action == AgentSecurityEventAction.DEVICE_REVOKED })
+                    assertTrue(
+                        securityEvents.events.any {
+                            it.action == AgentSecurityEventAction.AGENT_RUNTIME_PERMISSION_CHANGED
+                        },
+                    )
                 }
             }
         } finally {

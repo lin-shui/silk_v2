@@ -6,7 +6,24 @@ from dataclasses import dataclass
 from typing import Any
 
 
-SILK_PROMPT_POLICY_VERSION = 1
+SILK_PROMPT_POLICY_VERSION = 2
+
+CHAT_ONLY = "CHAT_ONLY"
+READ_ONLY = "READ_ONLY"
+APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+AUTONOMOUS = "AUTONOMOUS"
+_ACCESS_MODES = {CHAT_ONLY, READ_ONLY, APPROVAL_REQUIRED, AUTONOMOUS}
+
+NATIVE_DEFAULT = "NATIVE_DEFAULT"
+AGENT_APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+AGENT_READ_ONLY = "READ_ONLY"
+AUTOMATIC = "AUTOMATIC"
+_AGENT_PERMISSION_MODES = {
+    NATIVE_DEFAULT,
+    AGENT_APPROVAL_REQUIRED,
+    AGENT_READ_ONLY,
+    AUTOMATIC,
+}
 
 _CLAUDE_READ_TOOLS = ("Glob", "Grep", "Read")
 _CLAUDE_WRITE_TOOLS = ("Edit", "NotebookEdit", "Write")
@@ -16,6 +33,8 @@ _CLAUDE_WRITE_TOOLS = ("Edit", "NotebookEdit", "Write")
 class ExecutionPolicy:
     """Server-derived core local file/command ceiling for one managed prompt."""
 
+    access_mode: str = CHAT_ONLY
+    agent_permission_mode: str = NATIVE_DEFAULT
     read_file: bool = False
     write_file: bool = False
     run_command: bool = False
@@ -31,15 +50,32 @@ class ExecutionPolicy:
         if not isinstance(params, dict) or "_silk" not in params:
             return cls() if managed_connection else None
         silk = params.get("_silk")
-        if not isinstance(silk, dict) or silk.get("protocolVersion") != SILK_PROMPT_POLICY_VERSION:
+        if not isinstance(silk, dict) or silk.get("protocolVersion") not in {1, SILK_PROMPT_POLICY_VERSION}:
             return cls()
         raw = silk.get("executionPolicy")
         if not isinstance(raw, dict):
             return cls()
+        read_file = raw.get("readFile") is True
+        write_file = raw.get("writeFile") is True
+        run_command = raw.get("runCommand") is True
+        raw_mode = raw.get("accessMode")
+        raw_agent_mode = raw.get("agentPermissionMode")
+        if silk.get("protocolVersion") == 1:
+            access_mode = (
+                APPROVAL_REQUIRED if write_file or run_command
+                else READ_ONLY if read_file
+                else CHAT_ONLY
+            )
+        else:
+            access_mode = raw_mode if raw_mode in _ACCESS_MODES else CHAT_ONLY
         return cls(
-            read_file=raw.get("readFile") is True,
-            write_file=raw.get("writeFile") is True,
-            run_command=raw.get("runCommand") is True,
+            access_mode=access_mode,
+            agent_permission_mode=(
+                raw_agent_mode if raw_agent_mode in _AGENT_PERMISSION_MODES else NATIVE_DEFAULT
+            ),
+            read_file=read_file,
+            write_file=write_file,
+            run_command=run_command,
         )
 
     @property
@@ -60,6 +96,19 @@ class ExecutionPolicy:
     @property
     def codex_sandbox(self) -> str:
         return "workspace-write" if self.read_file and self.write_file else "read-only"
+
+    @property
+    def requires_approval(self) -> bool:
+        return self.access_mode == APPROVAL_REQUIRED
+
+    @property
+    def automatic_execution(self) -> bool:
+        """Whether Silk should override native approvals for this prompt.
+
+        Workspace approval/read-only modes remain stricter and therefore never
+        enable automatic execution, even if the Agent owner selected it.
+        """
+        return self.access_mode == AUTONOMOUS and self.agent_permission_mode == AUTOMATIC
 
     def claude_cli_args(self) -> list[str]:
         denied: list[str] = []
@@ -86,8 +135,11 @@ class ExecutionPolicy:
             # tools; native user/project settings, hooks, MCP, plugins, rules,
             # authentication, provider and model selection remain available.
             "--settings", json.dumps(settings, separators=(",", ":")),
-            "--permission-mode", "manual",
         ]
+        if self.requires_approval:
+            args.extend(("--permission-mode", "manual"))
+        elif self.automatic_execution:
+            args.extend(("--permission-mode", "bypassPermissions"))
         if denied:
             args.extend(("--disallowedTools", ",".join(sorted(denied))))
         return args

@@ -1,6 +1,7 @@
 package com.silk.backend.agents.core
 
 import com.silk.backend.agents.auth.AgentBindingDto
+import com.silk.backend.agents.auth.AgentAccessMode
 import com.silk.backend.agents.auth.AgentBindingMessageScope
 import com.silk.backend.agents.auth.AgentBindingStatus
 import com.silk.backend.agents.auth.AgentBindingTargetType
@@ -54,6 +55,7 @@ class AgentBindingTriggerMatcherTest {
         targetId = "room",
         messageScope = AgentBindingMessageScope.TEAM,
         triggerPolicy = policy,
+        accessMode = AgentAccessMode.CHAT_ONLY,
         permissions = setOf(AgentPermission.READ_MESSAGE, AgentPermission.SEND_MESSAGE),
         status = AgentBindingStatus.ACTIVE,
         createdBy = "owner",

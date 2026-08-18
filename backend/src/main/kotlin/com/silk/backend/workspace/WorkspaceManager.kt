@@ -223,16 +223,6 @@ class WorkspaceManager(
         save(store); return true
     }
 
-    @Synchronized fun updatePermissionMode(workspaceId: String, permissionMode: String): Boolean {
-        val store = load()
-        val idx = store.workspaces.indexOfFirst { it.workspaceId == workspaceId }
-        if (idx < 0) return false
-        if (store.workspaces[idx].permissionMode == permissionMode) return false
-        store.workspaces[idx] = store.workspaces[idx].copy(
-            permissionMode = permissionMode, updatedAt = System.currentTimeMillis())
-        save(store); return true
-    }
-
     /** Returns (workingDir, cliSessionId, sessionStarted); null if no useful seed. */
     fun loadSeed(
         workspaceId: String,
@@ -423,7 +413,7 @@ class WorkspaceManager(
                 name = wf.name.ifBlank { "default" }, workingDir = wf.workingDir,
                 agentType = agent, cliSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted, activeAgent = wf.activeAgent,
-                agentSessions = wf.agentSessions, permissionMode = wf.permissionMode,
+                agentSessions = wf.agentSessions,
                 createdAt = wf.createdAt, updatedAt = wf.updatedAt,
             ))
         }

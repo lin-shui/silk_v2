@@ -28,6 +28,7 @@ data class WorkspaceDto(
     val workingDir: String = "",
     val agentType: String = "claude-code",
     val activeAgentInstanceId: String = "",
+    val accessMode: String = "",
     val visibility: String = "PRIVATE",
     val copilots: List<String> = emptyList(),
     val role: String = "OBSERVER",
@@ -56,6 +57,7 @@ private data class CreateWorkspaceRequest(
     val workingDir: String,
     val agentType: String,
     val agentInstanceId: String,
+    val accessMode: String,
     val visibility: String,
 )
 
@@ -66,6 +68,7 @@ private data class IssueToWorkspaceRequest(
     val workingDir: String,
     val agentType: String,
     val agentInstanceId: String,
+    val accessMode: String,
     val visibility: String,
 )
 
@@ -148,6 +151,7 @@ suspend fun createWorkspace(
     workingDir: String,
     agentType: String,
     agentInstanceId: String,
+    accessMode: String = "APPROVAL_REQUIRED",
     visibility: String,
 ): WorkspaceDto {
     val response = window.fetch(
@@ -156,7 +160,7 @@ suspend fun createWorkspace(
             method = "POST",
             headers = authHeaders(authToken, jsonBody = true),
             body = workspaceJson.encodeToString(
-                CreateWorkspaceRequest(name, workingDir, agentType, agentInstanceId, visibility)
+                CreateWorkspaceRequest(name, workingDir, agentType, agentInstanceId, accessMode, visibility)
             ),
         ),
     ).await().requireSuccess()
@@ -170,6 +174,7 @@ suspend fun createWorkspaceFromGithubIssue(
     workingDir: String,
     agentType: String = "claude-code",
     agentInstanceId: String,
+    accessMode: String = "APPROVAL_REQUIRED",
     visibility: String = "PRIVATE",
     name: String? = null,
 ): IssueToWorkspaceResponse {
@@ -179,7 +184,7 @@ suspend fun createWorkspaceFromGithubIssue(
             method = "POST",
             headers = authHeaders(authToken, jsonBody = true),
             body = workspaceJson.encodeToString(
-                IssueToWorkspaceRequest(issueNumber, name, workingDir, agentType, agentInstanceId, visibility)
+                IssueToWorkspaceRequest(issueNumber, name, workingDir, agentType, agentInstanceId, accessMode, visibility)
             ),
         ),
     ).await().requireSuccess()

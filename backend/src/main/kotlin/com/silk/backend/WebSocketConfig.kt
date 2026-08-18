@@ -828,7 +828,7 @@ class ChatServer(
             requiredPermissions = workspaceAgentMessagePermissions(message.content),
             requiredCapabilities = setOf(
                 AgentCapability.PROMPT,
-                AgentCapability.EXECUTION_POLICY_V1,
+                AgentCapability.EXECUTION_POLICY_V2,
             ),
         )
         if (!authorization.allowed) {
@@ -907,7 +907,7 @@ class ChatServer(
                 requiredPermissions = setOf(AgentPermission.READ_MESSAGE, AgentPermission.SEND_MESSAGE),
                 requiredCapabilities = setOf(
                     AgentCapability.PROMPT,
-                    AgentCapability.EXECUTION_POLICY_V1,
+                    AgentCapability.EXECUTION_POLICY_V2,
                 ),
             )
             if (authorization.allowed) Triple(binding, prompt, authorization.executionPolicy) else null

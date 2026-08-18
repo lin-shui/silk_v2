@@ -191,7 +191,7 @@ private fun WorkflowChatPanel(
     var kbRefIsSearching by remember(groupId) { mutableStateOf(false) }
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
-    var permissionMode by remember(groupId) { mutableStateOf("") }
+    var workspaceAccessMode by remember(groupId) { mutableStateOf("") }
     var availableAgents by remember(groupId) { mutableStateOf<List<AgentInfo>>(emptyList()) }
     var showFolderPicker by remember(groupId) { mutableStateOf(false) }
     var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
@@ -457,7 +457,7 @@ private fun WorkflowChatPanel(
         if (workspaceId == null || !canControlActiveWorkspace) {
             workingDir = ""
             activeAgentDisplay = ""
-            permissionMode = ""
+            workspaceAccessMode = ""
             sourcePanelOpen = false
             return@LaunchedEffect
         }
@@ -469,13 +469,12 @@ private fun WorkflowChatPanel(
         if (snap.success) {
             workingDir = snap.workingDir
             activeAgentDisplay = snap.agentDisplayName
-            permissionMode = snap.permissionMode
+            workspaceAccessMode = snap.workspaceAccessMode
         }
         availableAgents = ApiClient.listAgents(userId)
     }
 
-    // 监听新增消息，刷新 activeAgent / permissionMode 显示。
-    // 后端在 agent 切换、权限模式切换时都会广播 SYSTEM 消息（"已切换到 ..."），
+    // 监听新增消息，刷新当前 Agent 显示。
     // 新增消息改变 messages.size → 触发此 effect → 仅检查最新一条是否匹配。
     LaunchedEffect(messages.size, activeWorkspaceId) {
         val workspaceId = activeWorkspaceId ?: return@LaunchedEffect
@@ -487,7 +486,7 @@ private fun WorkflowChatPanel(
             val snap = ApiClient.getCcState(userId, workspaceId)
             if (snap.success) {
                 activeAgentDisplay = snap.agentDisplayName
-                permissionMode = snap.permissionMode
+                workspaceAccessMode = snap.workspaceAccessMode
             }
         }
     }
@@ -970,7 +969,7 @@ private fun WorkflowChatPanel(
                 },
             )
         }
-        // Badge row: new session + permission mode + agent quick-switch
+        // Badge row: new session + Workspace access mode + Agent quick-switch
         ConversationComposerAccessoryRow("silk-workflow-composer-badges") {
             if (activeTab == "team") {
                 SilkMentionButton(
@@ -1008,14 +1007,11 @@ private fun WorkflowChatPanel(
                 }) { Text("新会话") }
             }
 
-            // Permission mode badge
-                if (permissionMode.isNotBlank()) {
-                    val modeLabel = when (permissionMode) {
-                        "INTERACTIVE" -> "Interactive"
-                        "ACCEPT_EDITS" -> "Accept Edits"
-                        "BYPASS" -> "Bypass"
-                        else -> permissionMode
-                    }
+            // Workspace access badge
+                if (workspaceAccessMode.isNotBlank()) {
+                    val modeLabel = runCatching {
+                        bindingAccessModeLabel(BindingAccessMode.valueOf(workspaceAccessMode))
+                    }.getOrDefault(workspaceAccessMode)
                     Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
                         Span({
                             style {
@@ -1050,12 +1046,13 @@ private fun WorkflowChatPanel(
                                 }
                             }) {
                                 listOf(
-                                    "INTERACTIVE" to "Interactive",
-                                    "ACCEPT_EDITS" to "Accept Edits",
-                                    "BYPASS" to "Bypass",
-                                ).forEach { (value, label) ->
-                                    val isCurrent = value == permissionMode ||
-                                        (value == "INTERACTIVE" && permissionMode.isBlank())
+                                    BindingAccessMode.READ_ONLY,
+                                    BindingAccessMode.APPROVAL_REQUIRED,
+                                    BindingAccessMode.AUTONOMOUS,
+                                ).forEach { mode ->
+                                    val value = mode.name
+                                    val label = bindingAccessModeLabel(mode)
+                                    val isCurrent = value == workspaceAccessMode
                                     Div({
                                         style {
                                             padding(8.px, 12.px)
@@ -1072,10 +1069,10 @@ private fun WorkflowChatPanel(
                                                 scope.launch {
                                                     val resp = ApiClient.updateCcSettings(
                                                         userId, activeWorkspaceId ?: return@launch,
-                                                        permissionMode = value,
+                                                        workspaceAccessMode = value,
                                                     )
                                                     if (resp.success) {
-                                                        permissionMode = resp.permissionMode
+                                                        workspaceAccessMode = resp.workspaceAccessMode
                                                     } else {
                                                         switchError = resp.error ?: "切换失败"
                                                     }
@@ -1738,6 +1735,7 @@ private fun WorkspaceCreateDialog(
     var devices by remember { mutableStateOf<List<ManagedDeviceDto>>(emptyList()) }
     var agents by remember { mutableStateOf<List<ManagedAgentDto>>(emptyList()) }
     var selectedAgentId by remember { mutableStateOf("") }
+    var accessMode by remember { mutableStateOf(BindingAccessMode.APPROVAL_REQUIRED) }
     var loadingAgents by remember { mutableStateOf(true) }
     var visibility by remember { mutableStateOf("PRIVATE") }
     var saving by remember { mutableStateOf(false) }
@@ -1804,6 +1802,7 @@ private fun WorkspaceCreateDialog(
                 workingDir = workingDir.trim(),
                 agentType = agentType,
                 agentInstanceId = selectedAgent.agentInstanceId,
+                accessMode = accessMode.name,
                 visibility = visibility,
             )
             onCreated(created)
@@ -1917,6 +1916,18 @@ private fun WorkspaceCreateDialog(
             if (rememberedDirAgentId == selectedAgentId && workingDir.isNotBlank()) {
                 Div({ style { marginTop(6.px); fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
                     Text("已自动填入此工作群组在该 Agent 上最近使用的目录")
+                }
+            }
+
+            WorkspaceFormLabel("Workspace 访问")
+            Select({
+                style { workspaceFormInputStyle() }
+                onChange { accessMode = BindingAccessMode.valueOf(it.value ?: BindingAccessMode.APPROVAL_REQUIRED.name) }
+            }) {
+                availableBindingAccessModes(BindingTargetType.WORKSPACE).forEach { mode ->
+                    Option(mode.name, attrs = { if (mode == accessMode) attr("selected", "") }) {
+                        Text(bindingAccessModeLabel(mode))
+                    }
                 }
             }
 
@@ -2471,7 +2482,7 @@ private fun WorkspaceGroupSelect(
 }
 
 /**
- * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
+ * 会话设置弹窗：工作目录 / Agent / Workspace 访问模式三合一。
  */
 @Suppress("UnusedPrivateMember", "CyclomaticComplexMethod")
 @Composable
@@ -2480,15 +2491,17 @@ private fun WorkflowSettingsDialog(
     workspaceId: String,
     currentWorkingDir: String,
     currentAgentDisplay: String,
-    currentPermissionMode: String,
+    currentAccessMode: String,
     onDismiss: () -> Unit,
-    onApplied: (workingDir: String, agentDisplay: String, permissionMode: String) -> Unit,
+    onApplied: (workingDir: String, agentDisplay: String, accessMode: String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var editDir by remember { mutableStateOf(currentWorkingDir) }
     var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
     var selectedAgentType by remember { mutableStateOf("") }
-    var selectedPermMode by remember { mutableStateOf(currentPermissionMode) }
+    var selectedAccessMode by remember {
+        mutableStateOf(currentAccessMode.ifBlank { BindingAccessMode.APPROVAL_REQUIRED.name })
+    }
     var showFolderPicker by remember { mutableStateOf(false) }
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustConfirmPath by remember { mutableStateOf("") }
@@ -2514,7 +2527,7 @@ private fun WorkflowSettingsDialog(
         val resultDir = editDir.trim()
         var newDir = currentWorkingDir
         var newAgentDisplay = currentAgentDisplay
-        var newPermMode = currentPermissionMode
+        var newAccessMode = currentAccessMode
 
         try {
             // 1. 如果目录变了，先 cd（含信任检查）
@@ -2545,31 +2558,31 @@ private fun WorkflowSettingsDialog(
                 newDir = cdResp.workingDir
             }
 
-            // 2. Agent / 权限模式变化：合并为一次 API 调用
+            // 2. Agent / Workspace 访问模式变化：合并为一次 API 调用
             val currentAgentUnderscore = currentAgentDisplay.let {
                 // 从当前 snapshot 再取一次精确的 agentType
                 val s = ApiClient.getCcState(userId, workspaceId)
                 s.agentType.replace('-', '_')
             }
             val agentChanged = selectedAgentType.isNotBlank() && selectedAgentType != currentAgentUnderscore
-            val permChanged = selectedPermMode != currentPermissionMode
-            if (agentChanged || permChanged) {
+            val accessModeChanged = selectedAccessMode != currentAccessMode
+            if (agentChanged || accessModeChanged) {
                 val resp = ApiClient.updateCcSettings(
                     userId, workspaceId,
                     activeAgent = if (agentChanged) selectedAgentType else null,
-                    permissionMode = if (permChanged) selectedPermMode.ifBlank { "INTERACTIVE" } else null,
+                    workspaceAccessMode = selectedAccessMode.takeIf { accessModeChanged },
                 )
                 if (!resp.success) {
                     errorMsg = "更新设置失败：${resp.error ?: "未知错误"}"
                     return
                 }
                 newAgentDisplay = resp.agentDisplayName
-                newPermMode = resp.permissionMode
+                newAccessMode = resp.workspaceAccessMode
                 // 如果前面没 cd 过，workingDir 也从这里取
                 if (newDir == currentWorkingDir) newDir = resp.workingDir
             }
 
-            onApplied(newDir, newAgentDisplay, newPermMode)
+            onApplied(newDir, newAgentDisplay, newAccessMode)
         } finally {
             saving = false
         }
@@ -2652,13 +2665,13 @@ private fun WorkflowSettingsDialog(
                 }
             }
 
-            // 权限模式
+            // Workspace 访问模式
             Span({
                 style {
                     fontSize(12.px); color(Color(SilkColors.textSecondary))
                     property("display", "block"); marginBottom(4.px)
                 }
-            }) { Text("权限模式") }
+            }) { Text("Workspace 访问") }
             Select({
                 style {
                     width(100.percent); height(40.px); borderRadius(6.px)
@@ -2666,11 +2679,13 @@ private fun WorkflowSettingsDialog(
                     padding(8.px); fontSize(14.px); marginBottom(12.px)
                     property("box-sizing", "border-box"); backgroundColor(Color.white)
                 }
-                onChange { selectedPermMode = it.value ?: "" }
+                onChange { selectedAccessMode = it.value ?: BindingAccessMode.APPROVAL_REQUIRED.name }
             }) {
-                Option("", attrs = { if (selectedPermMode.isBlank() || selectedPermMode == "INTERACTIVE") attr("selected", "") }) { Text("Interactive") }
-                Option("ACCEPT_EDITS", attrs = { if (selectedPermMode == "ACCEPT_EDITS") attr("selected", "") }) { Text("Accept Edits") }
-                Option("BYPASS", attrs = { if (selectedPermMode == "BYPASS") attr("selected", "") }) { Text("Bypass") }
+                availableBindingAccessModes(BindingTargetType.WORKSPACE).forEach { mode ->
+                    Option(mode.name, attrs = { if (selectedAccessMode == mode.name) attr("selected", "") }) {
+                        Text(bindingAccessModeLabel(mode))
+                    }
+                }
             }
 
             // 工作目录

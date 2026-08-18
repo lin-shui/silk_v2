@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var hostVersion = "0.4.10"
+var hostVersion = "0.4.11"
 
 type supportedAgent struct {
 	Type         string
@@ -25,12 +25,12 @@ var supportedAgents = map[string]supportedAgent{
 	"claude-code": {
 		Type:         "claude-code",
 		DisplayName:  "Claude Code",
-		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "QUESTION_RESPONSE", "PERMISSION_RESPONSE", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
+		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "QUESTION_RESPONSE", "PERMISSION_RESPONSE", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "EXECUTION_POLICY_V2", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
 	},
 	"codex": {
 		Type:         "codex",
 		DisplayName:  "Codex",
-		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
+		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "QUESTION_RESPONSE", "PERMISSION_RESPONSE", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "EXECUTION_POLICY_V2", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
 	},
 }
 

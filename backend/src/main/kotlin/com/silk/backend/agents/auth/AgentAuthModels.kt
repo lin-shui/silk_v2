@@ -44,6 +44,7 @@ enum class AgentCapability {
     WRITE_FILE,
     RUN_COMMAND,
     EXECUTION_POLICY_V1,
+    EXECUTION_POLICY_V2,
     READ_WORKSPACE,
     WRITE_WORKSPACE,
     IMAGE_INPUT,
@@ -62,6 +63,7 @@ internal object AgentCapabilityPolicy {
         AgentCapability.WRITE_FILE,
         AgentCapability.RUN_COMMAND,
         AgentCapability.EXECUTION_POLICY_V1,
+        AgentCapability.EXECUTION_POLICY_V2,
         AgentCapability.READ_WORKSPACE,
         AgentCapability.WRITE_WORKSPACE,
         AgentCapability.IMAGE_INPUT,
@@ -82,6 +84,31 @@ enum class AgentBindingMessageScope { TEAM, WORKSPACE }
 
 @Serializable
 enum class AgentTriggerPolicy { ALL, MENTION, EVENT }
+
+/**
+ * The only Silk-side execution choice exposed to users.
+ * CHAT_ONLY is assigned internally to Room bindings and is never selectable for a Workspace.
+ */
+@Serializable
+enum class AgentAccessMode {
+    CHAT_ONLY,
+    READ_ONLY,
+    APPROVAL_REQUIRED,
+    AUTONOMOUS,
+}
+
+/**
+ * Agent-side runtime preference maintained by Silk, independent from a Workspace binding.
+ * NATIVE_DEFAULT delegates approval behavior to the CLI's local config; the other values
+ * are applied to the next prompt without rewriting that config on the device.
+ */
+@Serializable
+enum class AgentRuntimePermissionMode {
+    NATIVE_DEFAULT,
+    APPROVAL_REQUIRED,
+    READ_ONLY,
+    AUTOMATIC,
+}
 
 @Serializable
 enum class AgentPermission {
@@ -232,11 +259,17 @@ data class AgentInstanceDto(
     val displayName: String,
     val connectorVersion: String,
     val capabilities: Set<AgentCapability>,
+    val runtimePermissionMode: AgentRuntimePermissionMode = AgentRuntimePermissionMode.NATIVE_DEFAULT,
     val status: AgentInstanceStatus,
     val createdAtEpochMs: Long,
     val lastSeenAtEpochMs: Long? = null,
     val revokedAtEpochMs: Long? = null,
     val connected: Boolean = false,
+)
+
+@Serializable
+data class UpdateAgentRuntimePermissionModeRequest(
+    val mode: AgentRuntimePermissionMode,
 )
 
 @Serializable
@@ -256,6 +289,8 @@ data class AgentBindingDto(
     val messageScope: AgentBindingMessageScope,
     val triggerPolicy: AgentTriggerPolicy,
     val mentionAlias: String = "",
+    val accessMode: AgentAccessMode,
+    /** Legacy compatibility projection. New clients configure [accessMode]. */
     val permissions: Set<AgentPermission>,
     val status: AgentBindingStatus,
     val createdBy: String,
@@ -282,6 +317,8 @@ data class CreateAgentBindingRequest(
     val messageScope: AgentBindingMessageScope,
     val triggerPolicy: AgentTriggerPolicy,
     val mentionAlias: String = "",
+    val accessMode: AgentAccessMode? = null,
+    /** Legacy client input. Ignored when [accessMode] is present. */
     val permissions: Set<AgentPermission> = setOf(
         AgentPermission.READ_MESSAGE,
         AgentPermission.SEND_MESSAGE,
@@ -296,6 +333,8 @@ data class UpdateAgentBindingRequest(
     val messageScope: AgentBindingMessageScope,
     val triggerPolicy: AgentTriggerPolicy,
     val mentionAlias: String = "",
+    val accessMode: AgentAccessMode? = null,
+    /** Legacy client input. Ignored when [accessMode] is present. */
     val permissions: Set<AgentPermission> = setOf(
         AgentPermission.READ_MESSAGE,
         AgentPermission.SEND_MESSAGE,
@@ -304,6 +343,47 @@ data class UpdateAgentBindingRequest(
 
 @Serializable
 data class AgentBindingApprovalRequest(val approve: Boolean = true)
+
+internal fun resolveAgentAccessMode(
+    targetType: AgentBindingTargetType,
+    requestedMode: AgentAccessMode?,
+    legacyPermissions: Set<AgentPermission>,
+): AgentAccessMode = when (targetType) {
+    AgentBindingTargetType.ROOM -> {
+        if (requestedMode !in setOf(null, AgentAccessMode.CHAT_ONLY) ||
+            legacyPermissions.any { it !in setOf(AgentPermission.READ_MESSAGE, AgentPermission.SEND_MESSAGE) }
+        ) {
+            throw AgentAuthException("INVALID_ACCESS_MODE", "Room bindings are chat-only")
+        }
+        AgentAccessMode.CHAT_ONLY
+    }
+    AgentBindingTargetType.WORKSPACE -> when {
+        requestedMode == AgentAccessMode.CHAT_ONLY ->
+            throw AgentAuthException("INVALID_ACCESS_MODE", "Workspace bindings cannot be chat-only")
+        requestedMode != null -> requestedMode
+        AgentPermission.WRITE_FILE in legacyPermissions || AgentPermission.RUN_COMMAND in legacyPermissions ->
+            AgentAccessMode.APPROVAL_REQUIRED
+        AgentPermission.READ_FILE in legacyPermissions -> AgentAccessMode.READ_ONLY
+        else -> AgentAccessMode.APPROVAL_REQUIRED
+    }
+}
+
+internal fun AgentAccessMode.derivedPermissions(): Set<AgentPermission> = when (this) {
+    AgentAccessMode.CHAT_ONLY -> setOf(
+        AgentPermission.READ_MESSAGE,
+        AgentPermission.SEND_MESSAGE,
+    )
+    AgentAccessMode.READ_ONLY -> setOf(
+        AgentPermission.READ_MESSAGE,
+        AgentPermission.SEND_MESSAGE,
+        AgentPermission.READ_FILE,
+        AgentPermission.READ_WORKSPACE,
+        AgentPermission.WRITE_WORKSPACE,
+    )
+    AgentAccessMode.APPROVAL_REQUIRED,
+    AgentAccessMode.AUTONOMOUS,
+    -> AgentPermission.entries.toSet()
+}
 
 @Serializable
 data class AgentDeviceListResponse(val devices: List<AgentDeviceDto>)
@@ -321,6 +401,7 @@ enum class AgentSecurityEventAction {
     AGENT_ENROLLED,
     DEVICE_REVOKED,
     AGENT_REVOKED,
+    AGENT_RUNTIME_PERMISSION_CHANGED,
 }
 
 @Serializable

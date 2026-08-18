@@ -629,6 +629,50 @@ internal object AgentAuthRepository {
         } == 1
     }
 
+    /** Read the latest Silk-managed Agent runtime overlay for the next prompt. */
+    fun findAgentRuntimePermissionMode(agentInstanceId: String): AgentRuntimePermissionMode = transaction {
+        AgentInstances.select { AgentInstances.id eq agentInstanceId }
+            .singleOrNull()
+            ?.get(AgentInstances.runtimePermissionMode)
+            ?.let { runCatching { AgentRuntimePermissionMode.valueOf(it) }.getOrNull() }
+            ?: AgentRuntimePermissionMode.NATIVE_DEFAULT
+    }
+
+    /** Only the Agent owner (the user who enrolled the instance) may change this overlay. */
+    fun updateAgentRuntimePermissionMode(
+        userId: String,
+        agentInstanceId: String,
+        mode: AgentRuntimePermissionMode,
+        now: LocalDateTime = nowUtc(),
+    ): Boolean = transaction {
+        val agent = AgentInstances.select {
+            (AgentInstances.id eq agentInstanceId) and
+                (AgentInstances.userId eq userId) and
+                (AgentInstances.status eq AgentInstanceStatus.ACTIVE.name)
+        }.singleOrNull() ?: return@transaction false
+        val previous = runCatching {
+            AgentRuntimePermissionMode.valueOf(agent[AgentInstances.runtimePermissionMode])
+        }.getOrDefault(AgentRuntimePermissionMode.NATIVE_DEFAULT)
+        AgentInstances.update({ AgentInstances.id eq agentInstanceId }) { row ->
+            row[AgentInstances.runtimePermissionMode] = mode.name
+        }
+        if (previous != mode) {
+            recordSecurityEvent(
+                userId = userId,
+                actorId = userId,
+                action = AgentSecurityEventAction.AGENT_RUNTIME_PERMISSION_CHANGED,
+                deviceId = agent[AgentInstances.deviceId],
+                agentInstanceId = agentInstanceId,
+                metadata = buildJsonObject {
+                    put("from", previous.name)
+                    put("to", mode.name)
+                },
+                now = now,
+            )
+        }
+        true
+    }
+
     fun listBindings(): List<AgentBindingDto> = transaction {
         ((AgentBindings innerJoin AgentInstances) innerJoin AgentDevices)
             .select { AgentBindings.status inList AgentBindingStatus.entries.map { it.name } }
@@ -703,6 +747,8 @@ internal object AgentAuthRepository {
         } else {
             AgentBindingStatus.PENDING
         }
+        val accessMode = resolveAgentAccessMode(request.targetType, request.accessMode, request.permissions)
+        val permissions = accessMode.derivedPermissions()
         var bindingId = UUID.randomUUID().toString()
         var mentionAlias = resolveBindingMentionAlias(
             request.targetType,
@@ -742,7 +788,8 @@ internal object AgentAuthRepository {
                     AgentBindings.update({ AgentBindings.id eq bindingId }) { row ->
                         row[triggerPolicy] = request.triggerPolicy.name
                         row[AgentBindings.mentionAlias] = mentionAlias
-                        row[permissionsJson] = json.encodeToString(request.permissions)
+                        row[AgentBindings.accessMode] = accessMode.name
+                        row[permissionsJson] = json.encodeToString(permissions)
                         row[status] = bindingStatus.name
                         row[createdBy] = userId
                         row[AgentBindings.ownerId] = ownerId
@@ -766,7 +813,8 @@ internal object AgentAuthRepository {
                         row[messageScope] = request.messageScope.name
                         row[triggerPolicy] = request.triggerPolicy.name
                         row[AgentBindings.mentionAlias] = mentionAlias
-                        row[permissionsJson] = json.encodeToString(request.permissions)
+                        row[AgentBindings.accessMode] = accessMode.name
+                        row[permissionsJson] = json.encodeToString(permissions)
                         row[status] = bindingStatus.name
                         row[createdBy] = userId
                         row[AgentBindings.ownerId] = ownerId
@@ -810,6 +858,8 @@ internal object AgentAuthRepository {
         } else {
             AgentBindingStatus.PENDING
         }
+        val accessMode = resolveAgentAccessMode(request.targetType, request.accessMode, request.permissions)
+        val permissions = accessMode.derivedPermissions()
         val mentionAlias = resolveBindingMentionAlias(
             request.targetType,
             request.mentionAlias,
@@ -843,7 +893,8 @@ internal object AgentAuthRepository {
                     row[messageScope] = request.messageScope.name
                     row[triggerPolicy] = request.triggerPolicy.name
                     row[AgentBindings.mentionAlias] = mentionAlias
-                    row[permissionsJson] = json.encodeToString(request.permissions)
+                    row[AgentBindings.accessMode] = accessMode.name
+                    row[permissionsJson] = json.encodeToString(permissions)
                     row[status] = bindingStatus.name
                     row[AgentBindings.ownerId] = ownerId
                     row[agentOwnerApprovedBy] = userId.takeIf { approveAsAgentOwner }
@@ -1397,38 +1448,52 @@ internal object AgentAuthRepository {
             this[AgentInstances.agentType],
             decodeCapabilities(this[AgentInstances.capabilitiesJson]),
         ),
+        runtimePermissionMode = runCatching {
+            AgentRuntimePermissionMode.valueOf(this[AgentInstances.runtimePermissionMode])
+        }.getOrDefault(AgentRuntimePermissionMode.NATIVE_DEFAULT),
         status = AgentInstanceStatus.valueOf(this[AgentInstances.status]),
         createdAtEpochMs = this[AgentInstances.createdAt].toEpochMillis(),
         lastSeenAtEpochMs = this[AgentInstances.lastSeenAt]?.toEpochMillis(),
         revokedAtEpochMs = this[AgentInstances.revokedAt]?.toEpochMillis(),
     )
 
-    private fun ResultRow.toBindingDto() = AgentBindingDto(
-        bindingId = this[AgentBindings.id],
-        agentInstanceId = this[AgentBindings.agentInstanceId],
-        agentType = this[AgentInstances.agentType],
-        agentDisplayName = this[AgentInstances.displayName],
-        agentDeviceDisplayName = this[AgentDevices.displayName],
-        mentionAlias = this[AgentBindings.mentionAlias],
-        targetType = AgentBindingTargetType.valueOf(this[AgentBindings.targetType]),
-        targetId = this[AgentBindings.targetId],
-        messageScope = AgentBindingMessageScope.valueOf(this[AgentBindings.messageScope]),
-        triggerPolicy = AgentTriggerPolicy.valueOf(this[AgentBindings.triggerPolicy]),
-        permissions = runCatching {
-            json.decodeFromString<Set<AgentPermission>>(this[AgentBindings.permissionsJson])
-        }.getOrDefault(emptySet()),
-        status = AgentBindingStatus.valueOf(this[AgentBindings.status]),
-        createdBy = this[AgentBindings.createdBy],
-        ownerId = this[AgentBindings.ownerId] ?: this[AgentInstances.userId],
-        agentOwnerApprovedBy = this[AgentBindings.agentOwnerApprovedBy],
-        agentOwnerApprovedAtEpochMs = this[AgentBindings.agentOwnerApprovedAt]?.toEpochMillis(),
-        targetApprovedBy = this[AgentBindings.targetApprovedBy],
-        targetApprovedAtEpochMs = this[AgentBindings.targetApprovedAt]?.toEpochMillis(),
-        createdAtEpochMs = this[AgentBindings.createdAt].toEpochMillis(),
-        updatedAtEpochMs = this[AgentBindings.updatedAt]?.toEpochMillis(),
-        revokedBy = this[AgentBindings.revokedBy],
-        revokedAtEpochMs = this[AgentBindings.revokedAt]?.toEpochMillis(),
-    )
+    private fun ResultRow.toBindingDto(): AgentBindingDto {
+        val targetType = AgentBindingTargetType.valueOf(this[AgentBindings.targetType])
+        val legacyPermissions = decodePermissions(this[AgentBindings.permissionsJson])
+        val accessMode = runCatching {
+            AgentAccessMode.valueOf(this[AgentBindings.accessMode])
+        }.getOrNull() ?: runCatching {
+            resolveAgentAccessMode(targetType, null, legacyPermissions)
+        }.getOrDefault(
+            if (targetType == AgentBindingTargetType.ROOM) AgentAccessMode.CHAT_ONLY
+            else AgentAccessMode.APPROVAL_REQUIRED,
+        )
+        return AgentBindingDto(
+            bindingId = this[AgentBindings.id],
+            agentInstanceId = this[AgentBindings.agentInstanceId],
+            agentType = this[AgentInstances.agentType],
+            agentDisplayName = this[AgentInstances.displayName],
+            agentDeviceDisplayName = this[AgentDevices.displayName],
+            mentionAlias = this[AgentBindings.mentionAlias],
+            targetType = targetType,
+            targetId = this[AgentBindings.targetId],
+            messageScope = AgentBindingMessageScope.valueOf(this[AgentBindings.messageScope]),
+            triggerPolicy = AgentTriggerPolicy.valueOf(this[AgentBindings.triggerPolicy]),
+            accessMode = accessMode,
+            permissions = accessMode.derivedPermissions(),
+            status = AgentBindingStatus.valueOf(this[AgentBindings.status]),
+            createdBy = this[AgentBindings.createdBy],
+            ownerId = this[AgentBindings.ownerId] ?: this[AgentInstances.userId],
+            agentOwnerApprovedBy = this[AgentBindings.agentOwnerApprovedBy],
+            agentOwnerApprovedAtEpochMs = this[AgentBindings.agentOwnerApprovedAt]?.toEpochMillis(),
+            targetApprovedBy = this[AgentBindings.targetApprovedBy],
+            targetApprovedAtEpochMs = this[AgentBindings.targetApprovedAt]?.toEpochMillis(),
+            createdAtEpochMs = this[AgentBindings.createdAt].toEpochMillis(),
+            updatedAtEpochMs = this[AgentBindings.updatedAt]?.toEpochMillis(),
+            revokedBy = this[AgentBindings.revokedBy],
+            revokedAtEpochMs = this[AgentBindings.revokedAt]?.toEpochMillis(),
+        )
+    }
 
     private fun decodeCapabilities(value: String): Set<AgentCapability> = runCatching {
         json.decodeFromString<Set<AgentCapability>>(value)

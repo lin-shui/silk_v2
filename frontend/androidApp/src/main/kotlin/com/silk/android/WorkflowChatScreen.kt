@@ -88,7 +88,7 @@ fun WorkflowChatScreen(appState: AppState) {
         var messageText by remember(groupId) { mutableStateOf(TextFieldValue("")) }
         var workingDir by remember(groupId) { mutableStateOf(workflow.workingDir) }
         var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
-        var permissionMode by remember(groupId) { mutableStateOf("") }
+        var workspaceAccessMode by remember(groupId) { mutableStateOf("") }
         var showFolderPicker by remember(groupId) { mutableStateOf(false) }
         var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
         var trustConfirmPath by remember(groupId) { mutableStateOf("") }
@@ -115,7 +115,7 @@ fun WorkflowChatScreen(appState: AppState) {
             }
         }
 
-        // Sync working dir, agent display, permission mode after WebSocket connects
+        // Sync working dir, Agent display, and Workspace access mode after WebSocket connects.
         LaunchedEffect(groupId, connectionState) {
             if (groupId.isBlank()) return@LaunchedEffect
             val activeWorkspaceId = ApiClient.getWorkspaces(groupId)
@@ -129,7 +129,7 @@ fun WorkflowChatScreen(appState: AppState) {
                 if (snap.success) {
                     if (snap.workingDir.isNotBlank()) workingDir = snap.workingDir
                     activeAgentDisplay = snap.agentDisplayName
-                    permissionMode = snap.permissionMode
+                    workspaceAccessMode = snap.workspaceAccessMode
                 }
                 availableAgents = ApiClient.listAgents(user.id)
             }
@@ -144,7 +144,7 @@ fun WorkflowChatScreen(appState: AppState) {
             }
         }
 
-        // 监听新增消息，刷新 activeAgent / permissionMode 显示
+        // 监听新增消息，刷新当前 Agent 显示。
         LaunchedEffect(messages.size, workspaceId) {
             val activeWorkspaceId = workspaceId ?: return@LaunchedEffect
             val latest = messages.lastOrNull() ?: return@LaunchedEffect
@@ -155,7 +155,7 @@ fun WorkflowChatScreen(appState: AppState) {
                 val snap = ApiClient.getCcState(user.id, activeWorkspaceId)
                 if (snap.success) {
                     activeAgentDisplay = snap.agentDisplayName
-                    permissionMode = snap.permissionMode
+                    workspaceAccessMode = snap.workspaceAccessMode
                 }
             }
         }
@@ -388,7 +388,7 @@ fun WorkflowChatScreen(appState: AppState) {
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                     ) {
-                        // Badge row: new session + permission mode + agent quick-switch
+        // Badge row: new session + Workspace access mode + Agent quick-switch
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -422,9 +422,9 @@ fun WorkflowChatScreen(appState: AppState) {
                                 )
                             }
 
-                        if (permissionMode.isNotBlank() || activeAgentDisplay.isNotBlank()) {
-                                // Permission mode badge
-                                if (permissionMode.isNotBlank()) {
+                        if (workspaceAccessMode.isNotBlank() || activeAgentDisplay.isNotBlank()) {
+                                // Workspace access mode badge
+                                if (workspaceAccessMode.isNotBlank()) {
                                     Box {
                                         Surface(
                                             onClick = {
@@ -436,7 +436,7 @@ fun WorkflowChatScreen(appState: AppState) {
                                             border = BorderStroke(1.dp, Color(0xFFE0E0E0)),
                                         ) {
                                             Text(
-                                                text = permModeLabel(permissionMode),
+                                                text = workspaceAccessModeLabel(workspaceAccessMode),
                                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Medium,
@@ -448,12 +448,11 @@ fun WorkflowChatScreen(appState: AppState) {
                                             onDismissRequest = { showPermModeDropdown = false },
                                         ) {
                                             listOf(
-                                                "" to "Interactive",
-                                                "ACCEPT_EDITS" to "Accept Edits",
-                                                "BYPASS" to "Bypass",
+                                                "READ_ONLY" to "只读",
+                                                "APPROVAL_REQUIRED" to "需审批",
+                                                "AUTONOMOUS" to "放行",
                                             ).forEach { (value, label) ->
-                                                val isCurrent = value == permissionMode ||
-                                                    (value == "" && permissionMode == "INTERACTIVE")
+                                                val isCurrent = value == workspaceAccessMode
                                                 DropdownMenuItem(
                                                     text = {
                                                         Text(
@@ -465,14 +464,13 @@ fun WorkflowChatScreen(appState: AppState) {
                                                     onClick = {
                                                         showPermModeDropdown = false
                                                         if (!isCurrent) {
-                                                            val newMode = value.ifBlank { "INTERACTIVE" }
                                                             scope.launch {
                                                                 val resp = ApiClient.updateCcSettings(
                                                                     user.id, workspaceId ?: return@launch,
-                                                                    permissionMode = newMode,
+                                                                    workspaceAccessMode = value,
                                                                 )
                                                                 if (resp.success) {
-                                                                    permissionMode = resp.permissionMode
+                                                                    workspaceAccessMode = resp.workspaceAccessMode
                                                                 } else {
                                                                     android.widget.Toast.makeText(
                                                                         context,
@@ -539,7 +537,7 @@ fun WorkflowChatScreen(appState: AppState) {
                                                                 )
                                                                 if (resp.success) {
                                                                     activeAgentDisplay = resp.agentDisplayName
-                                                                    permissionMode = resp.permissionMode
+                                                                    workspaceAccessMode = resp.workspaceAccessMode
                                                                 } else {
                                                                     android.widget.Toast.makeText(
                                                                         context,

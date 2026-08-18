@@ -314,14 +314,14 @@ private fun FolderRow(name: String, subtle: Boolean = false, onClick: () -> Unit
     }
 }
 
-internal fun permModeLabel(mode: String): String = when (mode) {
-    "ACCEPT_EDITS" -> "Accept Edits"
-    "BYPASS" -> "Bypass"
-    else -> "Interactive"
+internal fun workspaceAccessModeLabel(mode: String): String = when (mode) {
+    "READ_ONLY" -> "只读"
+    "AUTONOMOUS" -> "放行"
+    else -> "需审批"
 }
 
 /**
- * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
+ * 会话设置弹窗：工作目录 / Agent / Workspace 访问模式三合一。
  */
 @Suppress("CyclomaticComplexMethod")
 @Composable
@@ -330,15 +330,15 @@ fun WorkflowSettingsDialog(
     workspaceId: String,
     currentWorkingDir: String,
     currentAgentDisplay: String,
-    currentPermissionMode: String,
+    currentAccessMode: String,
     onDismiss: () -> Unit,
-    onApplied: (workingDir: String, agentDisplay: String, permissionMode: String) -> Unit,
+    onApplied: (workingDir: String, agentDisplay: String, accessMode: String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var editDir by remember { mutableStateOf(currentWorkingDir) }
     var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
     var selectedAgentType by remember { mutableStateOf("") }
-    var selectedPermMode by remember { mutableStateOf(currentPermissionMode) }
+    var selectedAccessMode by remember { mutableStateOf(currentAccessMode.ifBlank { "APPROVAL_REQUIRED" }) }
     var agentDropdownExpanded by remember { mutableStateOf(false) }
     var permDropdownExpanded by remember { mutableStateOf(false) }
     var showFolderPicker by remember { mutableStateOf(false) }
@@ -357,22 +357,13 @@ fun WorkflowSettingsDialog(
         }
     }
 
-    val permModeLabel = { mode: String ->
-        when (mode) {
-            "ACCEPT_EDITS" -> "Accept Edits"
-            "BYPASS" -> "Bypass"
-            "INTERACTIVE" -> "Interactive"
-            else -> "Interactive"
-        }
-    }
-
     suspend fun applyChanges() {
         saving = true
         errorMsg = null
         val resultDir = editDir.trim()
         var newDir = currentWorkingDir
         var newAgentDisplay = currentAgentDisplay
-        var newPermMode = currentPermissionMode
+        var newAccessMode = currentAccessMode
 
         try {
             // 1. 目录变化
@@ -393,22 +384,22 @@ fun WorkflowSettingsDialog(
                 newDir = cdResp.workingDir
             }
 
-            // 2. Agent / 权限模式变化
+            // 2. Agent / Workspace 访问模式变化
             val currentAgentUnderscore = ApiClient.getCcState(userId, workspaceId).agentType.replace('-', '_')
             val agentChanged = selectedAgentType.isNotBlank() && selectedAgentType != currentAgentUnderscore
-            val permChanged = selectedPermMode != currentPermissionMode
-            if (agentChanged || permChanged) {
+            val accessModeChanged = selectedAccessMode != currentAccessMode
+            if (agentChanged || accessModeChanged) {
                 val resp = ApiClient.updateCcSettings(
                     userId, workspaceId,
                     activeAgent = if (agentChanged) selectedAgentType else null,
-                    permissionMode = if (permChanged) selectedPermMode.ifBlank { "INTERACTIVE" } else null,
+                    workspaceAccessMode = selectedAccessMode.takeIf { accessModeChanged },
                 )
                 if (!resp.success) { errorMsg = "更新设置失败：${resp.error ?: "未知错误"}"; return }
                 newAgentDisplay = resp.agentDisplayName
-                newPermMode = resp.permissionMode
+                newAccessMode = resp.workspaceAccessMode
                 if (newDir == currentWorkingDir) newDir = resp.workingDir
             }
-            onApplied(newDir, newAgentDisplay, newPermMode)
+            onApplied(newDir, newAgentDisplay, newAccessMode)
         } finally {
             saving = false
         }
@@ -469,12 +460,12 @@ fun WorkflowSettingsDialog(
                 }
                 Spacer(Modifier.height(12.dp))
 
-                // 权限模式
-                Text("权限模式", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
+                // Workspace 访问模式
+                Text("Workspace 访问", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
                 Spacer(Modifier.height(4.dp))
                 Box {
                     OutlinedTextField(
-                        value = permModeLabel(selectedPermMode),
+                        value = workspaceAccessModeLabel(selectedAccessMode),
                         onValueChange = {},
                         readOnly = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -490,14 +481,14 @@ fun WorkflowSettingsDialog(
                         onDismissRequest = { permDropdownExpanded = false },
                     ) {
                         listOf(
-                            "" to "Interactive",
-                            "ACCEPT_EDITS" to "Accept Edits",
-                            "BYPASS" to "Bypass",
+                            "READ_ONLY" to "只读",
+                            "APPROVAL_REQUIRED" to "需审批",
+                            "AUTONOMOUS" to "放行",
                         ).forEach { (value, label) ->
                             DropdownMenuItem(
                                 text = { Text(label) },
                                 onClick = {
-                                    selectedPermMode = value
+                                    selectedAccessMode = value
                                     permDropdownExpanded = false
                                 },
                             )

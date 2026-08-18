@@ -404,12 +404,22 @@ def test_managed_read_policy_disables_shell_and_legacy_bypass():
         execution_policy=ExecutionPolicy(read_file=True),
     )
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
-    assert cmd[cmd.index("--ask-for-approval") + 1] == "never"
+    assert "--ask-for-approval" not in cmd
     assert "shell_tool" in cmd
     assert "unified_exec" in cmd
     assert "--ignore-user-config" not in cmd
     assert "--ignore-rules" not in cmd
     assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+
+
+def test_managed_approval_policy_uses_native_on_request_mode():
+    ex = CodexExecutor(auto_approve=True)
+    cmd = ex._build_cmd(
+        cwd="/tmp",
+        resume_thread_id=None,
+        execution_policy=ExecutionPolicy(access_mode="APPROVAL_REQUIRED", read_file=True),
+    )
+    assert cmd[cmd.index("--ask-for-approval") + 1] == "on-request"
 
 
 def test_managed_write_and_command_policy_uses_workspace_sandbox():

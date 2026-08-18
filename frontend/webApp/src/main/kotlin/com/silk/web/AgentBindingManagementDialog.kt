@@ -74,7 +74,7 @@ internal fun AgentBindingManagementDialog(
         mutableStateOf(if (targetType == BindingTargetType.ROOM) BindingTriggerPolicy.MENTION else BindingTriggerPolicy.ALL)
     }
     var selectedMentionAlias by remember(targetType, targetId) { mutableStateOf("") }
-    var selectedPermissions by remember(targetType, targetId) { mutableStateOf(defaultBindingPermissions()) }
+    var selectedAccessMode by remember(targetType, targetId) { mutableStateOf(defaultBindingAccessMode(targetType)) }
     var currentAgentInstanceId by remember(targetType, targetId) { mutableStateOf(activeAgentInstanceId) }
 
     val activeAgents = agents.filter { it.status == ManagedAgentStatus.ACTIVE }
@@ -104,7 +104,7 @@ internal fun AgentBindingManagementDialog(
         } else {
             BindingTriggerPolicy.ALL
         }
-        selectedPermissions = defaultBindingPermissions()
+        selectedAccessMode = defaultBindingAccessMode(targetType)
         errorMessage = null
     }
 
@@ -251,7 +251,7 @@ internal fun AgentBindingManagementDialog(
                                 selectedAgentId = binding.agentInstanceId
                                 selectedTrigger = binding.triggerPolicy
                                 selectedMentionAlias = binding.mentionAlias
-                                selectedPermissions = binding.permissions
+                                selectedAccessMode = binding.accessMode
                                 errorMessage = null
                             }
                         } else null,
@@ -348,22 +348,15 @@ internal fun AgentBindingManagementDialog(
                         }
                     }
 
-                    Div({ style { marginTop(14.px) } }) {
-                        AgentDialogLabel("权限")
-                        Div({ style { display(DisplayStyle.Flex); gap(12.px); property("flex-wrap", "wrap") } }) {
-                            availableBindingPermissions(targetType).forEach { permission ->
-                                Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); gap(6.px); fontSize(12.px) } }) {
-                                    Input(InputType.Checkbox) {
-                                        checked(permission in selectedPermissions)
-                                        onInput {
-                                            selectedPermissions = updateBindingPermissionSelection(
-                                                selectedPermissions,
-                                                permission,
-                                                permission !in selectedPermissions,
-                                            )
-                                        }
+                    if (targetType == BindingTargetType.WORKSPACE) {
+                        Div({ style { marginTop(14.px) } }) {
+                            AgentDialogSelect("Workspace 访问", selectedAccessMode.name, {
+                                selectedAccessMode = BindingAccessMode.valueOf(it)
+                            }) {
+                                availableBindingAccessModes(targetType).forEach { mode ->
+                                    Option(mode.name, attrs = { if (mode == selectedAccessMode) attr("selected", "") }) {
+                                        Text(bindingAccessModeLabel(mode))
                                     }
-                                    Text(bindingPermissionLabel(permission))
                                 }
                             }
                         }
@@ -390,7 +383,7 @@ internal fun AgentBindingManagementDialog(
                                         messageScope = compatibleMessageScope(targetType),
                                         triggerPolicy = selectedTrigger,
                                         mentionAlias = selectedMentionAlias,
-                                        permissions = selectedPermissions,
+                                        accessMode = selectedAccessMode,
                                     )
                                     val editingId = editingBindingId
                                     val saved = if (editingId == null) {
@@ -452,7 +445,7 @@ private fun AgentTargetBindingRow(
                 val mention = binding.mentionAlias.takeIf {
                     binding.targetType == BindingTargetType.ROOM && !it.startsWith("__")
                 }?.let { "@$it · " }.orEmpty()
-                Text("$mention${triggerPolicyLabel(binding.triggerPolicy)} · ${binding.permissions.joinToString(" · ") { bindingPermissionLabel(it) }}")
+                Text("$mention${triggerPolicyLabel(binding.triggerPolicy)} · ${bindingAccessModeLabel(binding.accessMode)}")
             }
             bindingApprovalSummary(binding)?.let { summary ->
                 Div({ style { marginTop(4.px); fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) { Text(summary) }
