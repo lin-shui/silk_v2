@@ -12,6 +12,34 @@ import kotlin.test.assertTrue
 
 class AgentAuthProtocolTest {
     @Test
+    fun `capability refresh canonical payload is stable and sorted`() {
+        val payload = AgentAuthProtocol.canonicalAgentCapabilityRefresh(
+            serverOrigin = "https://silk.example.com",
+            deviceId = "device-1",
+            agentInstanceId = "agent-1",
+            agentType = "codex",
+            connectorVersion = "0.4.12",
+            capabilities = setOf(AgentCapability.EXECUTION_POLICY_V2, AgentCapability.PROMPT, AgentCapability.STREAM),
+            timestampEpochMs = 1_000L,
+        )
+
+        assertEquals(
+            listOf(
+                "silk-agent-capability-refresh/v1",
+                "https://silk.example.com",
+                "1",
+                "device-1",
+                "agent-1",
+                "codex",
+                "0.4.12",
+                "EXECUTION_POLICY_V2,PROMPT,STREAM",
+                "1000",
+            ).joinToString("\n"),
+            payload.toString(Charsets.UTF_8),
+        )
+    }
+
+    @Test
     fun `trusted device Agent request has stable sorted canonical payload`() {
         val payload = AgentAuthProtocol.canonicalTrustedDeviceAgentRequest(
             serverOrigin = "https://silk.example.com",

@@ -70,6 +70,13 @@ internal object AgentCapabilityPolicy {
         AgentCapability.IMAGE_OUTPUT,
     )
 
+    /**
+     * Capabilities that may be added to an already-approved instance during a
+     * Host software upgrade. These must not grant a new data or command
+     * permission; the binding remains the authority for those operations.
+     */
+    val autoUpgradable: Set<AgentCapability> = setOf(AgentCapability.EXECUTION_POLICY_V2)
+
     fun effective(agentType: String, reported: Set<AgentCapability>): Set<AgentCapability> = when (agentType) {
         "claude-code", "codex" -> reported intersect directBridgeCapabilities
         else -> emptySet()
@@ -402,6 +409,7 @@ enum class AgentSecurityEventAction {
     DEVICE_REVOKED,
     AGENT_REVOKED,
     AGENT_RUNTIME_PERMISSION_CHANGED,
+    AGENT_CAPABILITIES_REFRESHED,
 }
 
 @Serializable
@@ -533,6 +541,10 @@ data class AgentHostOpen(
     val protocolVersion: Int = AgentAuthProtocol.VERSION,
     val agentInstanceId: String,
     val agentType: String,
+    val connectorVersion: String? = null,
+    val capabilities: Set<AgentCapability>? = null,
+    val timestampEpochMs: Long? = null,
+    val signature: String? = null,
 )
 
 @Serializable

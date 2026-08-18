@@ -5,6 +5,7 @@ import com.silk.backend.agents.auth.AgentAuthErrorResponse
 import com.silk.backend.agents.auth.AgentAuthProtocol
 import com.silk.backend.agents.auth.AgentAuthException
 import com.silk.backend.agents.auth.AgentAuthRepository
+import com.silk.backend.agents.auth.AgentCapabilityPolicy
 import com.silk.backend.agents.auth.AgentBindingListResponse
 import com.silk.backend.agents.auth.AgentBindingApprovalRequest
 import com.silk.backend.agents.auth.AgentBindingDto
@@ -960,6 +961,58 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 sendError("AGENT_TYPE_MISMATCH", "Agent type does not match enrollment", request.agentInstanceId)
                 return@withLock
             }
+            val refreshRequested = request.connectorVersion != null ||
+                request.capabilities != null ||
+                request.timestampEpochMs != null ||
+                request.signature != null
+            val refreshedIdentity = if (!refreshRequested) {
+                // A previously upgraded database snapshot must not make an
+                // old Host appear V2-capable when it cannot send the signed
+                // refresh metadata. Keep the persisted upgrade, but fail
+                // closed for this legacy connection.
+                identity.copy(
+                    capabilities = identity.capabilities - AgentCapabilityPolicy.autoUpgradable,
+                )
+            } else {
+                val connectorVersion = request.connectorVersion
+                val capabilities = request.capabilities
+                val timestampEpochMs = request.timestampEpochMs
+                val signature = request.signature
+                if (connectorVersion == null || capabilities == null || timestampEpochMs == null || signature == null) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is incomplete", request.agentInstanceId)
+                    return@withLock
+                }
+                val now = System.currentTimeMillis()
+                if (connectorVersion.isBlank() || connectorVersion != connectorVersion.trim() ||
+                    connectorVersion.length > 64 || !connectorVersion.isSafeMetadata() ||
+                    capabilities.size > 32 ||
+                    kotlin.math.abs(now - timestampEpochMs) > TIMESTAMP_WINDOW_MS
+                ) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is invalid", request.agentInstanceId)
+                    return@withLock
+                }
+                val payload = AgentAuthProtocol.canonicalAgentCapabilityRefresh(
+                    serverOrigin = identity.authenticationOrigin,
+                    deviceId = identity.deviceId,
+                    agentInstanceId = identity.agentInstanceId,
+                    agentType = identity.agentType,
+                    connectorVersion = connectorVersion,
+                    capabilities = capabilities,
+                    timestampEpochMs = timestampEpochMs,
+                )
+                if (!AgentAuthProtocol.verifySignature(identity.publicKey, payload, signature)) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh signature is invalid", request.agentInstanceId)
+                    return@withLock
+                }
+                AgentAuthRepository.refreshActiveIdentityCapabilities(
+                    identity = identity,
+                    connectorVersion = connectorVersion,
+                    reportedCapabilities = capabilities,
+                ) ?: run {
+                    sendError("AGENT_NOT_AVAILABLE", "Agent is not active on this device", request.agentInstanceId)
+                    return@withLock
+                }
+            }
             closeLogicalStream(request.agentInstanceId, "reopened by Host", notifyHost = false)
 
             val streamScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -970,33 +1023,33 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                     val payload = agentAuthJson.parseToJsonElement(line).jsonObject
                     sendEncoded(
                         agentAuthJson.encodeToString(
-                            AgentHostRpc(agentInstanceId = identity.agentInstanceId, payload = payload),
+                            AgentHostRpc(agentInstanceId = refreshedIdentity.agentInstanceId, payload = payload),
                         ),
                     )
                 },
                 onClose = { reason ->
-                    closeLogicalStream(identity.agentInstanceId, reason, notifyHost = true, expected = stream)
+                    closeLogicalStream(refreshedIdentity.agentInstanceId, reason, notifyHost = true, expected = stream)
                 },
             )
             val client = AcpClient(transport, streamScope)
-            stream = AgentHostLogicalStream(identity, transport, client, streamScope)
-            streams[identity.agentInstanceId] = stream
+            stream = AgentHostLogicalStream(refreshedIdentity, transport, client, streamScope)
+            streams[refreshedIdentity.agentInstanceId] = stream
             val evicted = AcpRegistry.put(
-                userId = identity.userId,
-                agentType = identity.agentType,
+                userId = refreshedIdentity.userId,
+                agentType = refreshedIdentity.agentType,
                 client = client,
                 remoteIp = call.request.local.remoteAddress,
                 authenticationMode = AcpRegistry.AuthenticationMode.DEVICE_SIGNATURE,
-                agentInstanceId = identity.agentInstanceId,
-                capabilities = identity.capabilities,
+                agentInstanceId = refreshedIdentity.agentInstanceId,
+                capabilities = refreshedIdentity.capabilities,
             )
             runCatching { evicted?.close("replaced by the same AgentInstance connection") }
             val previousDisconnect = AgentHostConnectionRegistry.registerAgent(
-                deviceId = identity.deviceId,
-                agentInstanceId = identity.agentInstanceId,
+                deviceId = refreshedIdentity.deviceId,
+                agentInstanceId = refreshedIdentity.agentInstanceId,
                 session = this@runMultiplexedAgentHost,
             ) { reason ->
-                closeLogicalStream(identity.agentInstanceId, reason, notifyHost = true, expected = stream)
+                closeLogicalStream(refreshedIdentity.agentInstanceId, reason, notifyHost = true, expected = stream)
             }
             runCatching { previousDisconnect?.invoke("replaced by newer logical stream") }
 
@@ -1010,20 +1063,20 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                         ),
                     ),
                 )
-                AgentAuthRepository.touchAuthenticated(identity, call.request.local.remoteAddress)
-                if (streams[identity.agentInstanceId] !== stream) return@withLock
+                AgentAuthRepository.touchAuthenticated(refreshedIdentity, call.request.local.remoteAddress)
+                if (streams[refreshedIdentity.agentInstanceId] !== stream) return@withLock
                 sendEncoded(
                     agentAuthJson.encodeToString(
                         AgentHostOpened(
-                            agentInstanceId = identity.agentInstanceId,
-                            agentType = identity.agentType,
-                            capabilities = identity.capabilities,
+                            agentInstanceId = refreshedIdentity.agentInstanceId,
+                            agentType = refreshedIdentity.agentType,
+                            capabilities = refreshedIdentity.capabilities,
                         ),
                     ),
                 )
             } catch (error: CancellationException) {
                 closeLogicalStream(
-                    identity.agentInstanceId,
+                    refreshedIdentity.agentInstanceId,
                     "Host connection closed",
                     notifyHost = false,
                     expected = stream,
@@ -1031,7 +1084,7 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 throw error
             } catch (error: Exception) {
                 closeLogicalStream(
-                    identity.agentInstanceId,
+                    refreshedIdentity.agentInstanceId,
                     "initialize failed",
                     notifyHost = false,
                     expected = stream,
@@ -1039,7 +1092,7 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 sendError(
                     "AGENT_INITIALIZE_FAILED",
                     error.message?.take(256) ?: "Agent initialization failed",
-                    identity.agentInstanceId,
+                    refreshedIdentity.agentInstanceId,
                 )
             }
         }

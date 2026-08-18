@@ -484,6 +484,79 @@ internal object AgentAuthRepository {
             }
     }
 
+    /**
+     * Refresh the persisted Host metadata without changing the approved
+     * AgentInstance identity or any binding. Only the explicit capability
+     * upgrade allowlist is eligible for automatic addition.
+     */
+    fun refreshActiveIdentityCapabilities(
+        identity: ActiveAgentIdentity,
+        connectorVersion: String,
+        reportedCapabilities: Set<AgentCapability>,
+        now: LocalDateTime = nowUtc(),
+    ): ActiveAgentIdentity? = transaction {
+        val row = (AgentInstances innerJoin AgentDevices)
+            .select {
+                (AgentInstances.id eq identity.agentInstanceId) and
+                    (AgentInstances.deviceId eq identity.deviceId) and
+                    (AgentInstances.status eq AgentInstanceStatus.ACTIVE.name) and
+                    (AgentDevices.status eq DeviceEnrollmentStatus.ACTIVE.name) and
+                    (AgentInstances.userId eq identity.userId) and
+                    (AgentDevices.userId eq identity.userId)
+            }
+            .singleOrNull() ?: return@transaction null
+        val previousVersion = row[AgentInstances.connectorVersion]
+        val previousCapabilities = decodeCapabilities(row[AgentInstances.capabilitiesJson])
+        val effectiveReported = AgentCapabilityPolicy.effective(
+            row[AgentInstances.agentType],
+            reportedCapabilities,
+        )
+        val upgradedCapabilities = previousCapabilities +
+            (effectiveReported intersect AgentCapabilityPolicy.autoUpgradable)
+        if (previousVersion != connectorVersion || previousCapabilities != upgradedCapabilities) {
+            AgentInstances.update({ AgentInstances.id eq identity.agentInstanceId }) { updated ->
+                updated[AgentInstances.connectorVersion] = connectorVersion
+                updated[AgentInstances.capabilitiesJson] = json.encodeToString(upgradedCapabilities)
+            }
+            recordSecurityEvent(
+                userId = identity.userId,
+                actorId = null,
+                action = AgentSecurityEventAction.AGENT_CAPABILITIES_REFRESHED,
+                deviceId = identity.deviceId,
+                agentInstanceId = identity.agentInstanceId,
+                metadata = buildJsonObject {
+                    put("fromConnectorVersion", previousVersion)
+                    put("toConnectorVersion", connectorVersion)
+                    put("addedCapabilities", json.encodeToString(upgradedCapabilities - previousCapabilities))
+                },
+                now = now,
+            )
+        }
+        val refreshed = (AgentInstances innerJoin AgentDevices)
+            .select {
+                (AgentInstances.id eq identity.agentInstanceId) and
+                    (AgentInstances.deviceId eq identity.deviceId) and
+                    (AgentInstances.status eq AgentInstanceStatus.ACTIVE.name) and
+                    (AgentDevices.status eq DeviceEnrollmentStatus.ACTIVE.name) and
+                    (AgentInstances.userId eq identity.userId) and
+                    (AgentDevices.userId eq identity.userId)
+            }
+            .singleOrNull() ?: return@transaction null
+        val authenticationOrigin = refreshed[AgentDevices.authenticationOrigin] ?: return@transaction null
+        ActiveAgentIdentity(
+            userId = refreshed[AgentInstances.userId],
+            deviceId = refreshed[AgentDevices.id],
+            agentInstanceId = refreshed[AgentInstances.id],
+            publicKey = refreshed[AgentDevices.publicKey],
+            agentType = refreshed[AgentInstances.agentType],
+            capabilities = AgentCapabilityPolicy.effective(
+                refreshed[AgentInstances.agentType],
+                decodeCapabilities(refreshed[AgentInstances.capabilitiesJson]),
+            ),
+            authenticationOrigin = authenticationOrigin,
+        )
+    }
+
     fun touchAuthenticated(identity: ActiveAgentIdentity, remoteIp: String?, now: LocalDateTime = nowUtc()) {
         transaction {
             AgentDevices.update({ AgentDevices.id eq identity.deviceId }) { row ->

@@ -31,8 +31,12 @@ func (err *agentServerError) Error() string {
 }
 
 type multiplexedHostConnection struct {
-	socket  *websocket.Conn
-	writeMu sync.Mutex
+	socket             *websocket.Conn
+	writeMu            sync.Mutex
+	serverOrigin       string
+	deviceID           string
+	signer             *deviceSigner
+	serverTimeOffsetMs int64
 }
 
 func dialMultiplexedHost(
@@ -69,7 +73,11 @@ func dialMultiplexedHostWithDialer(
 		_ = socket.Close()
 		return nil, fmt.Errorf("set Agent Host authentication deadline: %w", err)
 	}
-	connection := &multiplexedHostConnection{socket: socket}
+	connection := &multiplexedHostConnection{
+		socket:   socket,
+		deviceID: config.DeviceID,
+		signer:   signer,
+	}
 	fail := func(err error) (*multiplexedHostConnection, error) {
 		_ = socket.Close()
 		return nil, err
@@ -96,6 +104,8 @@ func dialMultiplexedHostWithDialer(
 	if challenge.ServerOrigin != authenticationOrigin {
 		return fail(errors.New("Silk Agent authentication origin does not match the enrolled profile"))
 	}
+	connection.serverOrigin = challenge.ServerOrigin
+	connection.serverTimeOffsetMs = challenge.ServerTimeMs - time.Now().UnixMilli()
 	timestamp := challenge.ServerTimeMs
 	payload := canonicalAgentAuth(
 		challenge.ServerOrigin,
@@ -133,11 +143,27 @@ func dialMultiplexedHostWithDialer(
 }
 
 func (connection *multiplexedHostConnection) openAgent(agent agentConfig) error {
+	timestampMs := time.Now().UnixMilli() + connection.serverTimeOffsetMs
+	capabilities := append([]string(nil), agent.Capabilities...)
+	connectorVersion := hostVersion
+	payload := canonicalAgentCapabilityRefresh(
+		connection.serverOrigin,
+		connection.deviceID,
+		agent.AgentInstanceID,
+		agent.AgentType,
+		connectorVersion,
+		capabilities,
+		timestampMs,
+	)
 	return connection.writeJSON(hostAgentOpen{
-		Type:            "agent_open",
-		ProtocolVersion: protocolVersion,
-		AgentInstanceID: agent.AgentInstanceID,
-		AgentType:       agent.AgentType,
+		Type:             "agent_open",
+		ProtocolVersion:  protocolVersion,
+		AgentInstanceID:  agent.AgentInstanceID,
+		AgentType:        agent.AgentType,
+		ConnectorVersion: connectorVersion,
+		Capabilities:     capabilities,
+		TimestampMs:      timestampMs,
+		Signature:        connection.signer.sign(payload),
 	})
 }
 

@@ -125,8 +125,13 @@ Managed Claude Code and Codex registrations advertise `EXECUTION_POLICY_V1` and
 `EXECUTION_POLICY_V2`. The backend requires `EXECUTION_POLICY_V2` for new
 device-signed Workspace prompts so an older Agent cannot silently ignore the
 two-layer per-prompt execution policy. Agents enrolled before V2 was introduced
-must be removed and enrolled again after upgrading `silk-agent`; reconnecting
-the old enrollment does not rewrite its persisted capability snapshot.
+are upgraded automatically when `silk-agent` 0.4.12 or newer reconnects: the Host
+refreshes its local capability snapshot and sends a device-signed `agent_open`
+metadata envelope. The backend preserves the existing `agentInstanceId`,
+Device identity, Workspace Binding, approvals, and sessions, and only
+auto-adds the safe `EXECUTION_POLICY_V2` capability. No Silk Web unbind/rebind
+action is required. An old Host that does not send the refresh envelope
+remains fail-closed until it is upgraded.
 
 The child receives a filtered environment: `SILK_AGENT_HOME`, Silk/Bridge token
 variables, and reserved `SILK_AGENT_SECRET_*` variables are removed. The

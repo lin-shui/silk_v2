@@ -585,8 +585,23 @@ class AgentAuthRouteContractTest {
                         deviceId = completed.deviceId,
                         authenticationAgentId = completed.agentInstanceId,
                     )
-                    openHostAgent(hostSession, completed.agentInstanceId, "codex")
-                    openHostAgent(hostSession, completed.agentInstanceId, "codex")
+                    openHostAgent(
+                        session = hostSession,
+                        agentInstanceId = completed.agentInstanceId,
+                        agentType = "codex",
+                        refresh = true,
+                        keyPair = keyPair,
+                        deviceId = completed.deviceId,
+                        serverOrigin = created.serverOrigin,
+                    )
+                    val refreshedAgents = client.get("/api/agent-instances") { bearer(accessToken) }
+                        .decode<AgentInstanceListResponse>()
+                    assertTrue(
+                        refreshedAgents.agents.first { it.agentInstanceId == completed.agentInstanceId }
+                            .capabilities.contains(AgentCapability.EXECUTION_POLICY_V2),
+                    )
+                    val legacyCapabilities = openHostAgent(hostSession, completed.agentInstanceId, "codex")
+                    assertFalse(legacyCapabilities.contains(AgentCapability.EXECUTION_POLICY_V2))
                     openHostAgent(hostSession, addedAgentId, "claude-code")
                     val multiplexedAgents = client.get("/api/agent-instances") { bearer(accessToken) }
                         .decode<AgentInstanceListResponse>()
@@ -759,7 +774,15 @@ class AgentAuthRouteContractTest {
         val authenticated = json.decodeFromString<AgentSocketAuthenticated>(session.receiveText())
         assertEquals(deviceId, authenticated.deviceId)
         assertEquals(agentInstanceId, authenticated.agentInstanceId)
-        assertEquals(setOf(AgentCapability.PROMPT, AgentCapability.STREAM, AgentCapability.CANCEL), authenticated.capabilities)
+        assertEquals(
+            setOf(
+                AgentCapability.PROMPT,
+                AgentCapability.STREAM,
+                AgentCapability.CANCEL,
+                AgentCapability.EXECUTION_POLICY_V2,
+            ),
+            authenticated.capabilities,
+        )
         session.close()
     }
 
@@ -872,11 +895,47 @@ class AgentAuthRouteContractTest {
         session: DefaultClientWebSocketSession,
         agentInstanceId: String,
         agentType: String,
-    ) {
+        refresh: Boolean = false,
+        keyPair: KeyPair? = null,
+        deviceId: String? = null,
+        serverOrigin: String? = null,
+    ): Set<AgentCapability> {
+        val open = if (refresh) {
+            val signingKey = requireNotNull(keyPair)
+            val signingDeviceId = requireNotNull(deviceId)
+            val signingOrigin = requireNotNull(serverOrigin)
+            val capabilities = setOf(
+                AgentCapability.PROMPT,
+                AgentCapability.STREAM,
+                AgentCapability.CANCEL,
+                AgentCapability.EXECUTION_POLICY_V1,
+                AgentCapability.EXECUTION_POLICY_V2,
+            )
+            val timestamp = System.currentTimeMillis()
+            val payload = AgentAuthProtocol.canonicalAgentCapabilityRefresh(
+                serverOrigin = signingOrigin,
+                deviceId = signingDeviceId,
+                agentInstanceId = agentInstanceId,
+                agentType = agentType,
+                connectorVersion = "0.4.12",
+                capabilities = capabilities,
+                timestampEpochMs = timestamp,
+            )
+            AgentHostOpen(
+                agentInstanceId = agentInstanceId,
+                agentType = agentType,
+                connectorVersion = "0.4.12",
+                capabilities = capabilities,
+                timestampEpochMs = timestamp,
+                signature = sign(signingKey, payload),
+            )
+        } else {
+            AgentHostOpen(agentInstanceId = agentInstanceId, agentType = agentType)
+        }
         session.send(
             Frame.Text(
                 json.encodeToString(
-                    AgentHostOpen(agentInstanceId = agentInstanceId, agentType = agentType),
+                    open,
                 ),
             ),
         )
@@ -897,6 +956,7 @@ class AgentAuthRouteContractTest {
         val opened = json.decodeFromString<AgentHostOpened>(session.receiveText())
         assertEquals(agentInstanceId, opened.agentInstanceId)
         assertEquals(agentType, opened.agentType)
+        return opened.capabilities
     }
 
     private suspend fun io.ktor.client.plugins.websocket.DefaultClientWebSocketSession.receiveText(): String {

@@ -139,10 +139,14 @@ type heartbeat struct {
 const hostConnectionMode = "HOST_MULTIPLEXED_V1"
 
 type hostAgentOpen struct {
-	Type            string `json:"type"`
-	ProtocolVersion int    `json:"protocolVersion"`
-	AgentInstanceID string `json:"agentInstanceId"`
-	AgentType       string `json:"agentType"`
+	Type             string   `json:"type"`
+	ProtocolVersion  int      `json:"protocolVersion"`
+	AgentInstanceID  string   `json:"agentInstanceId"`
+	AgentType        string   `json:"agentType"`
+	ConnectorVersion string   `json:"connectorVersion,omitempty"`
+	Capabilities     []string `json:"capabilities,omitempty"`
+	TimestampMs      int64    `json:"timestampEpochMs,omitempty"`
+	Signature        string   `json:"signature,omitempty"`
 }
 
 type hostAgentOpened struct {
@@ -191,6 +195,24 @@ func canonicalAgentAuth(serverOrigin string, challengeID string, nonce string, d
 	return []byte(strings.Join([]string{
 		"silk-device-auth/v1", serverOrigin, "1", challengeID, nonce,
 		deviceID, agentID, fmt.Sprintf("%d", timestampMs),
+	}, "\n"))
+}
+
+func canonicalAgentCapabilityRefresh(
+	serverOrigin string,
+	deviceID string,
+	agentInstanceID string,
+	agentType string,
+	connectorVersion string,
+	capabilities []string,
+	timestampMs int64,
+) []byte {
+	sortedCapabilities := append([]string(nil), capabilities...)
+	sort.Strings(sortedCapabilities)
+	return []byte(strings.Join([]string{
+		"silk-agent-capability-refresh/v1", serverOrigin, "1", deviceID,
+		agentInstanceID, agentType, connectorVersion,
+		strings.Join(sortedCapabilities, ","), fmt.Sprintf("%d", timestampMs),
 	}, "\n"))
 }
 
