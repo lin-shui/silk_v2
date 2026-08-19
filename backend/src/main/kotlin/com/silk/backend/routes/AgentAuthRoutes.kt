@@ -978,16 +978,20 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 val capabilities = request.capabilities
                 val timestampEpochMs = request.timestampEpochMs
                 val signature = request.signature
-                if (connectorVersion == null || capabilities == null || timestampEpochMs == null || signature == null) {
+                if (connectorVersion == null || capabilities == null) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is incomplete", request.agentInstanceId)
+                    return@withLock
+                }
+                if (timestampEpochMs == null || signature == null) {
                     sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is incomplete", request.agentInstanceId)
                     return@withLock
                 }
                 val now = System.currentTimeMillis()
-                if (connectorVersion.isBlank() || connectorVersion != connectorVersion.trim() ||
-                    connectorVersion.length > 64 || !connectorVersion.isSafeMetadata() ||
-                    capabilities.size > 32 ||
-                    kotlin.math.abs(now - timestampEpochMs) > TIMESTAMP_WINDOW_MS
-                ) {
+                val connectorVersionHasInvalidShape = connectorVersion.isBlank() ||
+                    connectorVersion != connectorVersion.trim() || connectorVersion.length > 64
+                val connectorVersionIsInvalid = connectorVersionHasInvalidShape || !connectorVersion.isSafeMetadata()
+                val timestampIsInvalid = kotlin.math.abs(now - timestampEpochMs) > TIMESTAMP_WINDOW_MS
+                if (connectorVersionIsInvalid || capabilities.size > 32 || timestampIsInvalid) {
                     sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is invalid", request.agentInstanceId)
                     return@withLock
                 }
