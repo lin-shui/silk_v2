@@ -11,7 +11,7 @@ A cross-platform chat application built with Kotlin Multiplatform. It provides a
 - **Android**: Kotlin Multiplatform Android app; APK can be built and served for download.
 - **Vector store**: Weaviate (run via Docker by `silk.sh`). Used for context and file search.
 - **AI**: Any OpenAI-compatible API; configure `API_BASE_URL`, `OPENAI_API_KEY`, and `AI_MODEL` in `.env`.
-- **Workflow**: Named, persistent Claude Code agent sessions. Each workflow creates a dedicated chat room with CC mode always active — no need to type `/cc`.
+- **Workflow**: Named, persistent Agent sessions. Each workflow creates a dedicated chat room with the selected managed Agent active — no need to type the trigger command.
 
 ## Todo Roadmap Governance
 
@@ -36,9 +36,10 @@ All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the *
 | `.env` | Local config (create from `.env.example`). Not committed. |
 | `.env.example` | Template and documentation for required/optional env vars. |
 | `backend/` | Kotlin backend (Ktor), static files, chat history. |
-| `backend/.../agents/` | Agent framework: AgentRuntime, ACP protocol layer, Claude Code adapter descriptor. |
-| `cc_bridge/` | ACP Bridge Adapter: external Python process running Claude CLI; connects to backend `/agent-bridge` via ACP. |
-| `silk-agent/` | Go companion Host: device pairing, one multiplexed `/agent-connect` WSS, and managed Claude/Codex Adapter processes. |
+| `backend/.../agents/` | Agent framework: AgentRuntime, ACP protocol layer, and Claude Code/Codex descriptors. |
+| `cc_bridge/` | Managed Claude Code ACP Adapter source; launched by `silk-agent` over Host IPC v2. It is not a standalone backend bridge client. |
+| `codex_bridge/` | Managed Codex ACP Adapter source; launched by `silk-agent` over Host IPC v2. |
+| `silk-agent/` | Go companion Host: device pairing, one multiplexed `/agent-connect` WSS, signed capability refresh, and managed Claude/Codex Adapter processes. |
 | `frontend/webApp/` | Kotlin/JS web frontend. |
 | `frontend/androidApp/` | Android app; APK output can be copied to `backend/static`. |
 | `frontend/desktopApp/` | Desktop client (optional). |
@@ -196,16 +197,17 @@ Workflows require a running **silk-agent Host and managed ACP Adapter** — see 
 
 ---
 
-## Claude Code integration
+## Claude Code and Codex integration
 
-Silk supports a **Claude Code (CC) mode** that lets users interact with a Claude Code CLI from any chat session. This turns Silk into a programming assistant interface — users can ask Claude to read, write, and edit code on the filesystem.
+Silk supports managed **Claude Code** and **Codex** sessions that let users interact with a local vendor CLI from any chat session. Claude Code uses `/cc`; Codex uses `/codex`. The backend never runs either vendor CLI itself: the user-owned `silk-agent` Host runs the selected CLI locally through its packaged Adapter.
 
-CC mode uses an **ACP (Agent Client Protocol) Host** architecture: the Silk backend does not run the Claude CLI itself. The standalone `silk-agent` Host authenticates a user-owned device, maintains one multiplexed WebSocket, and supervises the packaged Python Adapter that executes Claude Code locally. This decouples the backend deployment from the Claude execution environment without giving the Adapter a Silk credential or device-signing API.
+Managed Claude/Codex sessions use an **ACP (Agent Client Protocol) Host** architecture: the Silk backend does not run the vendor CLI itself. The standalone `silk-agent` Host authenticates a user-owned device, maintains one multiplexed WebSocket, and supervises the packaged Python Adapter that executes the selected CLI locally. This decouples the backend deployment from the CLI execution environment without giving the Adapter a Silk credential or device-signing API.
 
 ### Prerequisites
 
 - **`silk-agent` Host** paired and running on the execution device (see [External Agent Host](#external-agent-host) below)
-- **Claude CLI** and Python installed on that device (`npm install -g @anthropic-ai/claude-code` or equivalent)
+- **Claude CLI** and Python installed on that device (`npm install -g @anthropic-ai/claude-code` or equivalent) when using Claude Code
+- **Codex CLI** installed and authenticated on that device when using Codex; the managed Codex Adapter requires a Codex CLI with app-server support
 
 ### Configuration
 
@@ -234,6 +236,10 @@ In any Silk chat (group or private), send `/cc` to enter Claude Code mode:
 <any text>       Send as prompt to Claude Code
 /exit            Exit CC mode, return to normal Silk chat
 ```
+
+For Codex, use the same flow with `/codex`. The shared Agent controls are also
+available through `/agents`, `/use claude-code`, `/use codex`, and one-shot
+`@cc <text>` / `@codex <text>` routing.
 
 #### Session management
 
@@ -280,7 +286,7 @@ The integration point is `AgentRuntime.handleIfActive()` called from `ChatServer
 
 ### External Agent Host
 
-The Claude CLI runs on a separate machine (or the same machine in a different process) via the **ACP Bridge Adapter** managed by `silk-agent`: the Host owns one device-authenticated `/agent-connect` WSS and carries each Adapter's ACP objects in `agentInstanceId` envelopes. The Adapter receives no Silk credential or signing API. The old user-level `/agent-bridge` Token path is retired; cc-connect keeps its separate group Token until Phase 8. This is useful when:
+The Claude or Codex CLI runs on a separate machine (or the same machine in a different process) via the packaged ACP Adapter managed by `silk-agent`: the Host owns one device-authenticated `/agent-connect` WSS and carries each Adapter's ACP objects in `agentInstanceId` envelopes. The Adapter receives no Silk credential or signing API. The old user-level `/agent-bridge` query-Token path is retired; that endpoint only remains as a device-signature compatibility handshake for older Hosts. `cc-connect` keeps its separate group-token compatibility route until Phase 8. This is useful when:
 
 - The backend runs in a container or VM without Claude CLI installed
 - You want to run Claude CLI on a machine with direct access to your codebase
@@ -289,14 +295,49 @@ The Claude CLI runs on a separate machine (or the same machine in a different pr
 #### How it works
 
 ```
-User (browser) → Silk backend ← one WSS → silk-agent Host ← stdio ACP → Adapter → Claude CLI
+User (browser) → Silk backend ← one WSS → silk-agent Host ← stdio ACP → Adapter → Claude/Codex CLI
 ```
 
-`silk-agent` authenticates the device once and opens a logical stream for each approved Agent; `cc_bridge/acp_adapter.py --silk-host-stdio` handles ACP requests (`session/new`, `session/prompt`, `_silk/*` extensions) over Host IPC v2.
+`silk-agent` authenticates the device once and opens a logical stream for each approved Agent. It launches `cc_bridge/acp_adapter.py --silk-host-stdio` for Claude Code or `codex_bridge/codex_adapter.py` through the same Host IPC v2 contract. Do not start either Adapter with the retired direct `--server`/`--token` mode; the Adapter is not an independent connection method.
+
+#### Quick download and upgrade example (Linux x86_64)
+
+Most users do not need to compile `silk-agent`. Download the prebuilt bundle,
+verify it, and keep the extracted directory intact:
+
+```bash
+VERSION=0.4.12
+ARCHIVE="silk-agent_${VERSION}_linux_amd64.tar.gz"
+RELEASE_URL="https://github.com/shenman9/silk_v2/releases/download/silk-agent-v${VERSION}"
+
+curl -fL -o "$ARCHIVE" "$RELEASE_URL/$ARCHIVE"
+curl -fL -o SHA256SUMS "$RELEASE_URL/SHA256SUMS"
+grep "  $ARCHIVE$" SHA256SUMS | sha256sum -c -
+tar -xzf "$ARCHIVE"
+cd "silk-agent_${VERSION}_linux_amd64"
+./silk-agent --version
+```
+
+For a new device, continue with `connect` below. For an existing device, use
+the same OS user and preserve its existing profile (including a custom
+`SILK_AGENT_HOME`), then restart the Host from the new bundle directory:
+
+```bash
+# export SILK_AGENT_HOME=/path/to/existing/profile  # only if previously configured
+./silk-agent stop host  # if an older Host is running
+./silk-agent start
+./silk-agent status
+```
+
+Do not run `connect`, revoke the device, or delete the existing profile during
+an upgrade. `silk-agent` 0.4.12 or newer refreshes the allowlisted capability
+metadata automatically without requiring a Silk Web unbind/rebind. For ARM64,
+macOS, Windows, service installation, full release verification, and source
+compilation, see [`silk-agent/README.md`](silk-agent/README.md).
 
 #### Device Setup
 
-1. Install the signed `silk-agent` bundle for the target platform and ensure Python, the Adapter requirements, and the desired Claude/Codex CLI are available.
+1. Install the prebuilt signed `silk-agent` bundle as shown above, and ensure Python, the Adapter requirements, and the desired Claude/Codex CLI are available. Other platforms and detailed installation options are documented in [`silk-agent/README.md`](silk-agent/README.md).
 
 2. Pair the first Agent and approve the displayed code on `/device`:
 
@@ -309,7 +350,7 @@ User (browser) → Silk backend ← one WSS → silk-agent Host ← stdio ACP �
    If Web and Backend use different origins and the backend has no
    `BACKEND_WEB_APP_BASE_URL`, also pass `--web https://<silk-web-host>`.
 
-3. Use `silk-agent status`, `start`, `stop`, or `logs` to manage the Host. Adding the other Agent type repeats `connect` and requires another Web approval; the running Host hot-loads it. `service install` is available for advanced deployments, but service managers do not inherit an interactive shell's provider credentials or custom environment; configure those explicitly before relying on service mode.
+3. Use `silk-agent status`, `start`, `stop`, or `logs` to manage the Host. Adding the other Agent type repeats `connect` and requires another Web approval; the running Host hot-loads it. When upgrading an existing device to `silk-agent` 0.4.12 or newer, replace the complete bundle but preserve the existing profile/`SILK_AGENT_HOME`; reconnecting automatically refreshes the allowlisted capability metadata without revoking or re-binding the device in Silk Web. `service install` is available for advanced deployments, but service managers do not inherit an interactive shell's provider credentials or custom environment; configure those explicitly before relying on service mode.
 
 4. Create a Room or Workspace Binding on `/device`. A cross-owner Binding remains pending until both the Agent owner and target manager approve it.
 
@@ -326,6 +367,7 @@ silk-agent release verify --manifest manifest.json --signature manifest.sig --ar
 |------|---------------|
 | `silk-agent/` | Device identity, pairing, Host lifecycle, multiplexed WSS, Adapter supervision and signed releases |
 | `cc_bridge/acp_adapter.py` | Managed ACP Adapter: handles session/prompt, streams updates and `_silk/*` extensions over Host IPC |
+| `codex_bridge/codex_adapter.py` | Managed Codex ACP Adapter: handles session/prompt, streaming, approvals, resume, and `_silk/*` extensions over Host IPC |
 | `cc_bridge/executor.py` | Claude CLI subprocess management |
 | `cc_bridge/cc_session_index.py` | Claude native session discovery and resume-file lookup |
 | `cc_bridge/fs_listing.py` | Directory listing helper (used by _silk/list_dir) |
