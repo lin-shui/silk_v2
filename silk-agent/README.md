@@ -5,6 +5,90 @@ current slice implements device authentication, Host lifecycle management, one
 device-level multiplexed WSS, and direct Claude/Codex Adapter supervision. The legacy
 `cc-connect` transport is not managed by this Host yet.
 
+Most users should download a prebuilt bundle from the
+[GitHub Releases page](https://github.com/shenman9/silk_v2/releases) instead of
+building from source. A bundle contains the Host binary, both Adapter wrappers,
+and the Python modules required by the managed Adapters; keep the whole extracted
+directory together.
+
+## Download and use a prebuilt bundle
+
+The following is a Linux x86_64 example. Choose the matching `linux_arm64`,
+`darwin_amd64`, `darwin_arm64`, `windows_amd64`, or `windows_arm64` archive for
+the target device. Replace `0.4.12` with the release version you want to use.
+
+```bash
+VERSION=0.4.12
+ARCHIVE=silk-agent_${VERSION}_linux_amd64.tar.gz
+RELEASE_URL="https://github.com/shenman9/silk_v2/releases/download/silk-agent-v${VERSION}"
+
+curl -fL -o "$ARCHIVE" "$RELEASE_URL/$ARCHIVE"
+curl -fL -o SHA256SUMS "$RELEASE_URL/SHA256SUMS"
+grep "  $ARCHIVE$" SHA256SUMS | sha256sum -c -
+tar -xzf "$ARCHIVE"
+cd "silk-agent_${VERSION}_linux_amd64"
+./silk-agent --version
+```
+
+The last command should print the selected version. Do not copy only the
+`silk-agent` executable out of the directory: the `adapters/`,
+`bridge_common/`, `cc_bridge/`, and `codex_bridge/` paths are part of the signed
+bundle.
+
+### First use on a new device
+
+Install Python and the desired vendor CLI on the device first. Then pair the
+first Agent and approve the displayed URL/code in Silk Web:
+
+```bash
+./silk-agent connect claude-code \
+  --server https://<silk-backend-host> \
+  --account <silk-login-name>
+# or: ./silk-agent connect codex --server https://<silk-backend-host> --account <silk-login-name>
+```
+
+If the Web UI and backend use different origins, also pass
+`--web https://<silk-web-host>`. The initial `connect` command may run the Host
+in the foreground after approval; press `Ctrl-C` when you are ready to manage
+it with the background command below:
+
+```bash
+./silk-agent start
+./silk-agent status
+```
+
+### Upgrade an existing device without re-pairing
+
+Use the same OS user and preserve the existing profile directory. If the old
+installation used a custom `SILK_AGENT_HOME`, export the same value before
+running the new binary:
+
+```bash
+export SILK_AGENT_HOME=/path/to/existing/silk-agent-profile  # only if previously configured
+./silk-agent stop host
+./silk-agent start
+./silk-agent status
+```
+
+Do not run `connect`, revoke the device, delete `config.json`, or delete the
+profile's `device_key`. With `silk-agent` 0.4.12 or newer, reconnecting sends
+signed capability metadata and the backend preserves the existing device,
+Agent instance, Workspace Binding, approvals, and sessions while adding the
+allowlisted capability needed by the new runtime policy.
+
+If the old installation runs as a user service, update that service to point at
+the new extracted bundle instead:
+
+```bash
+./silk-agent service uninstall
+./silk-agent service install
+./silk-agent service status
+```
+
+Service installation is per-user and does not require root. Keep provider CLI
+credentials and other runtime environment variables available to the service
+manager; an interactive shell's environment is not automatically inherited.
+
 ## Current commands
 
 ```text
@@ -166,11 +250,54 @@ failures; an Agent failure does not terminate other Agent processes.
 amd64/arm64. It embeds the trusted raw Ed25519 release public key, writes a
 SHA-256 manifest, signs the exact manifest, and verifies that the release
 directory has no unsigned files or directories. Production binaries do not
-accept a runtime public-key override. The GitHub release workflow obtains the
-private/public signing material from repository secrets and publishes only the
-verified artifacts. Archive, manifest, and signature modes are normalized to
-0644; bundle directories are 0755, executables are 0755, and source files are
-0644. Group/other-writable release output is rejected.
+accept a runtime public-key override. Publishing the verified output as GitHub
+Release assets is a separate release operation; never publish an artifact that
+was not produced and verified by this script. Archive, manifest, and signature
+modes are normalized to 0644; bundle directories are 0755, executables are
+0755, and source files are 0644. Group/other-writable release output is
+rejected.
+
+### Build a release bundle from source
+
+This section is for maintainers and CI. Most users should use the prebuilt
+installation above. Use Go 1.22 or newer, an isolated empty output directory,
+and an Ed25519 release key pair. The private key must be protected as a 0600
+file and must never be committed to the repository or placed in a bundle.
+
+```bash
+cd silk-agent
+go version
+
+PRIVATE_KEY_FILE=/secure/path/release-private.key
+PUBLIC_KEY_FILE=/secure/path/release-public.key
+OUTPUT_DIR=$(mktemp -d)
+
+./scripts/package-release.sh \
+  0.4.12 \
+  "$OUTPUT_DIR" \
+  "$PRIVATE_KEY_FILE" \
+  "$PUBLIC_KEY_FILE"
+```
+
+The script requires exactly four arguments: `<version> <empty-output-dir>
+<release-private-key-file> <release-public-key-file>`. Prefixing the version
+with `v` is also accepted. It cross-compiles six archives
+(`linux|darwin|windows` x `amd64|arm64`), includes the Host and Adapter files,
+creates `manifest.json` and `manifest.sig`, and verifies hashes, signatures,
+permissions, and unsigned files before returning success. Set `GO_BIN` when a
+specific Go executable is required, for example
+`GO_BIN=/opt/go/bin/go ./scripts/package-release.sh ...`.
+
+For an independently downloaded release, keep the archive, `manifest.json`,
+`manifest.sig`, and any release metadata in the same release directory and run
+the embedded verifier from the extracted Host:
+
+```bash
+./silk-agent release verify \
+  --manifest /path/to/release/manifest.json \
+  --signature /path/to/release/manifest.sig \
+  --artifacts /path/to/release
+```
 
 ## Development
 
