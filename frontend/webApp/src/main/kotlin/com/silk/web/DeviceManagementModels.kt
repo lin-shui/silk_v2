@@ -9,6 +9,14 @@ enum class DeviceEnrollmentStatus { ACTIVE, REVOKED }
 enum class ManagedAgentStatus { PENDING, ACTIVE, SUSPENDED, REVOKED }
 
 @Serializable
+enum class ManagedAgentRuntimePermissionMode {
+    NATIVE_DEFAULT,
+    APPROVAL_REQUIRED,
+    READ_ONLY,
+    AUTOMATIC,
+}
+
+@Serializable
 enum class ManagedBindingStatus { PENDING, ACTIVE, DISABLED, REVOKED }
 
 @Serializable
@@ -43,6 +51,7 @@ enum class ManagedAgentCapability {
     WRITE_FILE,
     RUN_COMMAND,
     EXECUTION_POLICY_V1,
+    EXECUTION_POLICY_V2,
     READ_WORKSPACE,
     WRITE_WORKSPACE,
     IMAGE_INPUT,
@@ -57,6 +66,9 @@ enum class BindingMessageScope { TEAM, WORKSPACE }
 
 @Serializable
 enum class BindingTriggerPolicy { ALL, MENTION, EVENT }
+
+@Serializable
+enum class BindingAccessMode { CHAT_ONLY, READ_ONLY, APPROVAL_REQUIRED, AUTONOMOUS }
 
 @Serializable
 enum class BindingPermission {
@@ -126,11 +138,18 @@ data class ManagedAgentDto(
     val displayName: String,
     val connectorVersion: String,
     val capabilities: Set<ManagedAgentCapability> = emptySet(),
+    val runtimePermissionMode: ManagedAgentRuntimePermissionMode =
+        ManagedAgentRuntimePermissionMode.NATIVE_DEFAULT,
     val status: ManagedAgentStatus,
     val createdAtEpochMs: Long,
     val lastSeenAtEpochMs: Long? = null,
     val revokedAtEpochMs: Long? = null,
     val connected: Boolean = false,
+)
+
+@Serializable
+data class UpdateManagedAgentRuntimePermissionModeRequest(
+    val mode: ManagedAgentRuntimePermissionMode,
 )
 
 @Serializable
@@ -150,6 +169,8 @@ data class ManagedBindingDto(
     val messageScope: BindingMessageScope,
     val triggerPolicy: BindingTriggerPolicy,
     val mentionAlias: String = "",
+    val accessMode: BindingAccessMode = BindingAccessMode.APPROVAL_REQUIRED,
+    /** Legacy compatibility projection; accessMode is the only configurable Silk permission. */
     val permissions: Set<BindingPermission> = emptySet(),
     val status: ManagedBindingStatus,
     val createdBy: String,
@@ -176,10 +197,7 @@ data class CreateManagedBindingRequest(
     val messageScope: BindingMessageScope,
     val triggerPolicy: BindingTriggerPolicy,
     val mentionAlias: String = "",
-    val permissions: Set<BindingPermission> = setOf(
-        BindingPermission.READ_MESSAGE,
-        BindingPermission.SEND_MESSAGE,
-    ),
+    val accessMode: BindingAccessMode = BindingAccessMode.APPROVAL_REQUIRED,
 )
 
 @Serializable
@@ -229,49 +247,25 @@ internal fun compatibleMessageScope(targetType: BindingTargetType): BindingMessa
     BindingTargetType.WORKSPACE -> BindingMessageScope.WORKSPACE
 }
 
-internal fun defaultBindingPermissions(): Set<BindingPermission> = setOf(
-    BindingPermission.READ_MESSAGE,
-    BindingPermission.SEND_MESSAGE,
-)
+internal fun defaultBindingAccessMode(targetType: BindingTargetType): BindingAccessMode = when (targetType) {
+    BindingTargetType.ROOM -> BindingAccessMode.CHAT_ONLY
+    BindingTargetType.WORKSPACE -> BindingAccessMode.APPROVAL_REQUIRED
+}
 
-internal fun availableBindingPermissions(targetType: BindingTargetType): List<BindingPermission> = when (targetType) {
-    BindingTargetType.ROOM -> listOf(BindingPermission.READ_MESSAGE, BindingPermission.SEND_MESSAGE)
+internal fun availableBindingAccessModes(targetType: BindingTargetType): List<BindingAccessMode> = when (targetType) {
+    BindingTargetType.ROOM -> listOf(BindingAccessMode.CHAT_ONLY)
     BindingTargetType.WORKSPACE -> listOf(
-        BindingPermission.READ_MESSAGE,
-        BindingPermission.SEND_MESSAGE,
-        BindingPermission.READ_FILE,
-        BindingPermission.WRITE_FILE,
-        BindingPermission.RUN_COMMAND,
-        BindingPermission.READ_WORKSPACE,
-        BindingPermission.WRITE_WORKSPACE,
+        BindingAccessMode.READ_ONLY,
+        BindingAccessMode.APPROVAL_REQUIRED,
+        BindingAccessMode.AUTONOMOUS,
     )
 }
 
-internal fun updateBindingPermissionSelection(
-    current: Set<BindingPermission>,
-    permission: BindingPermission,
-    enabled: Boolean,
-): Set<BindingPermission> = when {
-    enabled && permission in setOf(BindingPermission.WRITE_FILE, BindingPermission.RUN_COMMAND) ->
-        current + permission + BindingPermission.READ_FILE
-    enabled -> current + permission
-    permission == BindingPermission.READ_FILE ->
-        current - setOf(
-            BindingPermission.READ_FILE,
-            BindingPermission.WRITE_FILE,
-            BindingPermission.RUN_COMMAND,
-        )
-    else -> current - permission
-}
-
-internal fun bindingPermissionLabel(permission: BindingPermission): String = when (permission) {
-    BindingPermission.READ_MESSAGE -> "读取消息"
-    BindingPermission.SEND_MESSAGE -> "发送消息"
-    BindingPermission.READ_FILE -> "读取文件"
-    BindingPermission.WRITE_FILE -> "写入文件"
-    BindingPermission.RUN_COMMAND -> "运行命令"
-    BindingPermission.READ_WORKSPACE -> "读取工作区"
-    BindingPermission.WRITE_WORKSPACE -> "修改工作区"
+internal fun bindingAccessModeLabel(mode: BindingAccessMode): String = when (mode) {
+    BindingAccessMode.CHAT_ONLY -> "仅消息"
+    BindingAccessMode.READ_ONLY -> "只读"
+    BindingAccessMode.APPROVAL_REQUIRED -> "需审批"
+    BindingAccessMode.AUTONOMOUS -> "放行"
 }
 
 @Suppress("CyclomaticComplexMethod")
@@ -286,10 +280,18 @@ internal fun agentCapabilityLabel(capability: ManagedAgentCapability): String = 
     ManagedAgentCapability.WRITE_FILE -> "写入文件"
     ManagedAgentCapability.RUN_COMMAND -> "运行命令"
     ManagedAgentCapability.EXECUTION_POLICY_V1 -> "执行策略 V1"
+    ManagedAgentCapability.EXECUTION_POLICY_V2 -> "执行策略 V2"
     ManagedAgentCapability.READ_WORKSPACE -> "读取工作区"
     ManagedAgentCapability.WRITE_WORKSPACE -> "修改工作区"
     ManagedAgentCapability.IMAGE_INPUT -> "图片输入"
     ManagedAgentCapability.IMAGE_OUTPUT -> "图片输出"
+}
+
+internal fun agentRuntimePermissionModeLabel(mode: ManagedAgentRuntimePermissionMode): String = when (mode) {
+    ManagedAgentRuntimePermissionMode.NATIVE_DEFAULT -> "原生默认"
+    ManagedAgentRuntimePermissionMode.APPROVAL_REQUIRED -> "需要审批"
+    ManagedAgentRuntimePermissionMode.READ_ONLY -> "只读"
+    ManagedAgentRuntimePermissionMode.AUTOMATIC -> "自动执行"
 }
 
 internal fun defaultManagedAgentMentionAlias(agentType: String): String {

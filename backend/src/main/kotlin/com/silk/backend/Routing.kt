@@ -114,7 +114,12 @@ import com.silk.backend.agents.auth.AgentBindingAuthorizationService
 import com.silk.backend.agents.auth.AgentBindingMessageScope
 import com.silk.backend.agents.auth.AgentBindingTargetType
 import com.silk.backend.agents.auth.AgentCapability
+import com.silk.backend.agents.auth.AgentAccessMode
 import com.silk.backend.agents.auth.AgentPermission
+import com.silk.backend.agents.auth.AgentInstanceStatus
+import com.silk.backend.agents.auth.AgentTriggerPolicy
+import com.silk.backend.agents.auth.CreateAgentBindingRequest
+import com.silk.backend.agents.auth.UpdateAgentBindingRequest
 import com.silk.backend.agents.auth.AgentRevocationWatcher
 import com.silk.backend.agents.auth.AgentRevocationCleanupScheduler
 import com.silk.backend.agents.auth.authenticateAgentSocket
@@ -501,9 +506,6 @@ fun Application.configureRouting() {
             agentInstanceId: String?,
         ): Boolean = workspaceManager.updateActiveAgent(rawWorkspaceId, agentType, agentInstanceId)
 
-        override fun persistPermissionMode(rawWorkspaceId: String, permissionMode: String): Boolean =
-            workspaceManager.updatePermissionMode(rawWorkspaceId, permissionMode)
-
         override fun loadSeed(rawWorkspaceId: String): AgentRuntime.WorkflowSeed? {
             val ws = workspaceManager.getWorkspace(rawWorkspaceId) ?: return null
             if (ws.workingDir.isBlank() && ws.cliSessionId.isNullOrBlank()) return null
@@ -511,18 +513,15 @@ fun Application.configureRouting() {
                 workingDir = ws.workingDir,
                 cliSessionId = ws.cliSessionId?.takeIf { it.isNotBlank() },
                 sessionStarted = ws.sessionStarted,
-                permissionMode = ws.permissionMode,
             )
         }
 
         override fun loadSeed(rawWorkspaceId: String, agentType: String): AgentRuntime.WorkflowSeed? {
             val triple = workspaceManager.loadSeed(rawWorkspaceId, agentType) ?: return null
-            val ws = workspaceManager.getWorkspace(rawWorkspaceId) ?: return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = triple.first,
                 cliSessionId = triple.second,
                 sessionStarted = triple.third,
-                permissionMode = ws.permissionMode,
             )
         }
 
@@ -532,12 +531,10 @@ fun Application.configureRouting() {
             agentInstanceId: String?,
         ): AgentRuntime.WorkflowSeed? {
             val triple = workspaceManager.loadSeed(rawWorkspaceId, agentType, agentInstanceId) ?: return null
-            val ws = workspaceManager.getWorkspace(rawWorkspaceId) ?: return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = triple.first,
                 cliSessionId = triple.second,
                 sessionStarted = triple.third,
-                permissionMode = ws.permissionMode,
             )
         }
 
@@ -1084,7 +1081,7 @@ private fun Route.coreRoutes() {
                             binding?.agentDisplayName?.takeIf(String::isNotBlank) ?: descriptor?.displayName,
                             binding?.agentDeviceDisplayName?.takeIf(String::isNotBlank),
                         ).joinToString(" · "),
-                        permissionMode = agentSnap.permissionMode,
+                        workspaceAccessMode = binding?.accessMode?.name.orEmpty(),
                     )
                 )
             } else {
@@ -1262,14 +1259,14 @@ private fun Route.coreRoutes() {
                             bridgeConnected = bridgeConnected,
                             agentType = snap?.agentType ?: "",
                             agentDisplayName = descriptor?.displayName ?: "",
-                            permissionMode = snap?.permissionMode ?: "",
+                            workspaceAccessMode = authorization.binding?.accessMode?.name.orEmpty(),
                         )
                     )
                 }
             }
         }
 
-        // API-driven 切换 agent / 权限模式（更改对话框用，不走聊天消息流）
+        // API-driven Agent / Workspace 访问模式切换（更改对话框用，不走聊天消息流）。
         post("/users/{userId}/cc-settings/update") {
             val pathUserId = call.parameters["userId"].orEmpty()
             val reqJson = try {
@@ -1291,9 +1288,14 @@ private fun Route.coreRoutes() {
             }
             val workspace = call.resolveControllableWorkspace(pathUserId, workspaceId) ?: return@post
             val ownerId = workspace.ownerId
+            val callerId = call.resolveAuthenticatedUserId() ?: return@post call.respond(HttpStatusCode.Unauthorized)
             val newAgent = reqJson["activeAgent"]?.jsonPrimitive?.contentOrNull
             val newAgentInstanceId = reqJson["activeAgentInstanceId"]?.jsonPrimitive?.contentOrNull
-            val newPermMode = reqJson["permissionMode"]?.jsonPrimitive?.contentOrNull
+            val rawAccessMode = reqJson["workspaceAccessMode"]?.jsonPrimitive?.contentOrNull
+                ?: reqJson["permissionMode"]?.jsonPrimitive?.contentOrNull?.let { legacyMode ->
+                    if (legacyMode == "BYPASS") AgentAccessMode.AUTONOMOUS.name
+                    else AgentAccessMode.APPROVAL_REQUIRED.name
+                }
 
             // 切换 agent
             var agentSwitchMsg: String? = null
@@ -1335,16 +1337,61 @@ private fun Route.coreRoutes() {
                 agentSwitchMsg = "已切换到 ${descriptor.displayName}。"
             }
 
-            // 切换权限模式
-            if (!newPermMode.isNullOrBlank()) {
-                val ok = AgentRuntime.setPermissionMode(ownerId, workspaceId, newPermMode)
-                if (!ok) {
+            var updatedAccessMode: AgentAccessMode? = null
+            if (!rawAccessMode.isNullOrBlank()) {
+                val accessMode = runCatching { AgentAccessMode.valueOf(rawAccessMode) }.getOrNull()
+                if (accessMode == null || accessMode == AgentAccessMode.CHAT_ONLY) {
                     call.respond(
                         HttpStatusCode.BadRequest,
-                        CcStateResponse(success = false, error = "无效权限模式: $newPermMode（INTERACTIVE / ACCEPT_EDITS / BYPASS）")
+                        CcStateResponse(
+                            success = false,
+                            error = "无效 Workspace 访问模式: $rawAccessMode（READ_ONLY / APPROVAL_REQUIRED / AUTONOMOUS）",
+                        ),
                     )
                     return@post
                 }
+                val activeInstanceId = newAgentInstanceId?.takeIf(String::isNotBlank)
+                    ?: AgentRuntime.snapshotState(ownerId, workspaceId)?.agentInstanceId
+                    ?: workspace.activeAgentInstanceId.takeIf(String::isNotBlank)
+                val binding = activeInstanceId?.let { instanceId ->
+                    AgentAuthRepository.findActiveBinding(
+                        instanceId,
+                        AgentBindingTargetType.WORKSPACE,
+                        workspaceId,
+                        AgentBindingMessageScope.WORKSPACE,
+                    )
+                }
+                if (binding == null || binding.createdBy != callerId) {
+                    call.respond(
+                        HttpStatusCode.Conflict,
+                        CcStateResponse(success = false, error = "当前 Agent 绑定不可直接修改，请在 Agent 管理中处理"),
+                    )
+                    return@post
+                }
+                updatedAccessMode = runCatching {
+                    AgentAuthRepository.updateBinding(
+                        userId = callerId,
+                        bindingId = binding.bindingId,
+                        request = UpdateAgentBindingRequest(
+                            agentInstanceId = binding.agentInstanceId,
+                            targetType = binding.targetType,
+                            targetId = binding.targetId,
+                            messageScope = binding.messageScope,
+                            triggerPolicy = binding.triggerPolicy,
+                            mentionAlias = binding.mentionAlias,
+                            accessMode = accessMode,
+                        ),
+                        approveAsAgentOwner = binding.ownerId == callerId,
+                        approveAsTargetManager = workspace.ownerId == callerId,
+                    )
+                }.getOrElse { error ->
+                    logger.warn("更新 Workspace Agent 访问模式失败: {}", error.message)
+                    call.respond(
+                        HttpStatusCode.Conflict,
+                        CcStateResponse(success = false, error = error.message ?: "访问模式更新失败"),
+                    )
+                    return@post
+                }.accessMode
             }
 
             // 广播系统消息通知前端
@@ -1389,7 +1436,7 @@ private fun Route.coreRoutes() {
                         binding?.agentDisplayName?.takeIf(String::isNotBlank) ?: descriptor?.displayName,
                         binding?.agentDeviceDisplayName?.takeIf(String::isNotBlank),
                     ).joinToString(" · "),
-                    permissionMode = snap?.permissionMode ?: "",
+                    workspaceAccessMode = updatedAccessMode?.name ?: binding?.accessMode?.name.orEmpty(),
                 )
             )
         }
@@ -4027,7 +4074,17 @@ private fun Route.workflowKbRoutes() {
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
             val agentType = req["agentType"]?.jsonPrimitive?.contentOrNull ?: "claude_code"
             val taskFocus = req["taskFocus"]?.jsonPrimitive?.contentOrNull ?: ""
-            val permissionMode = req["permissionMode"]?.jsonPrimitive?.contentOrNull ?: ""
+            val rawAccessMode = req["workspaceAccessMode"]?.jsonPrimitive?.contentOrNull
+                ?: req["permissionMode"]?.jsonPrimitive?.contentOrNull?.let { legacyMode ->
+                    if (legacyMode == "BYPASS") AgentAccessMode.AUTONOMOUS.name
+                    else AgentAccessMode.APPROVAL_REQUIRED.name
+                }
+                ?: AgentAccessMode.APPROVAL_REQUIRED.name
+            val accessMode = runCatching { AgentAccessMode.valueOf(rawAccessMode) }.getOrNull()
+            if (accessMode == null || accessMode == AgentAccessMode.CHAT_ONLY) {
+                respondError(HttpStatusCode.BadRequest, "无效 Workspace 访问模式")
+                return@post
+            }
 
             // 房间类型由 room_kind 表达，不再编码到名称里。
             val groupName = GroupService.uniqueRoomName(name.trim())
@@ -4062,14 +4119,19 @@ private fun Route.workflowKbRoutes() {
                 respondError(HttpStatusCode.BadRequest, "工作目录不能为空")
                 return@post
             }
-            if (!isAnyBridgeConnected(userId)) {
+            val runtimeAgentType = agentType.replace('_', '-')
+            val selectedAgent = AgentAuthRepository.listAgents(userId).firstOrNull {
+                it.agentType == runtimeAgentType && it.status == AgentInstanceStatus.ACTIVE &&
+                    AcpRegistry.isConnectedInstance(it.agentInstanceId)
+            }
+            if (selectedAgent == null) {
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
-                respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
+                respondError(HttpStatusCode.Conflict, "所选 Agent Bridge 未连接，无法创建工作流。")
                 return@post
             }
 
             // 信任目录检查
-            val bridgeId = resolveBridgeId(userId) ?: "unknown"
+            val bridgeId = AcpRegistry.getRemoteIpByInstance(selectedAgent.agentInstanceId)?.let { "ip:$it" } ?: "unknown"
             if (!trustedDirManager.isTrusted(userId, bridgeId, initialDir)) {
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 val payload = kotlinx.serialization.json.buildJsonObject {
@@ -4084,20 +4146,23 @@ private fun Route.workflowKbRoutes() {
             }
 
             val wf = workflowManager.createWorkflow(name, desc, userId, group.id, agentType, "")
-            val runtimeAgentType = agentType.replace('_', '-')
             val workspace = workspaceManager.createWorkspace(
                 group.id,
                 userId,
                 "default",
                 agentType = runtimeAgentType,
+                activeAgentInstanceId = selectedAgent.agentInstanceId,
             )
-            if (permissionMode.isNotBlank()) {
-                workspaceManager.updatePermissionMode(workspace.workspaceId, permissionMode)
-            }
 
             // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
             val cdResult: AgentRuntime.CdResult = try {
-                AgentRuntime.cdSync(userId, workspace.workspaceId, initialDir, agentType = runtimeAgentType)
+                AgentRuntime.cdSync(
+                    userId,
+                    workspace.workspaceId,
+                    initialDir,
+                    agentType = runtimeAgentType,
+                    agentInstanceId = selectedAgent.agentInstanceId,
+                )
             } catch (e: Exception) {
                 AgentRuntime.CdResult.Err(e.message ?: "初始目录切换异常")
             }
@@ -4112,7 +4177,30 @@ private fun Route.workflowKbRoutes() {
             }
             val resolvedPath = (cdResult as AgentRuntime.CdResult.Ok).resolvedPath
             workspaceManager.updateWorkingDir(workspace.workspaceId, resolvedPath)
-            val wfWithDir = wf.copy(workingDir = resolvedPath, permissionMode = permissionMode, updatedAt = System.currentTimeMillis())
+            val bindingCreated = runCatching {
+                AgentAuthRepository.createBinding(
+                    userId = userId,
+                    request = CreateAgentBindingRequest(
+                        agentInstanceId = selectedAgent.agentInstanceId,
+                        targetType = AgentBindingTargetType.WORKSPACE,
+                        targetId = workspace.workspaceId,
+                        messageScope = AgentBindingMessageScope.WORKSPACE,
+                        triggerPolicy = AgentTriggerPolicy.ALL,
+                        accessMode = accessMode,
+                    ),
+                    approveAsAgentOwner = true,
+                    approveAsTargetManager = true,
+                )
+            }.isSuccess
+            if (!bindingCreated) {
+                workflowManager.deleteWorkflow(wf.id, userId)
+                com.silk.backend.database.GroupRepository.deleteGroup(group.id)
+                AgentRuntime.cleanupState(userId, workspace.workspaceId)
+                workspaceManager.deleteWorkspace(workspace.workspaceId)
+                respondError(HttpStatusCode.Conflict, "无法为工作区添加所选 Agent")
+                return@post
+            }
+            val wfWithDir = wf.copy(workingDir = resolvedPath, updatedAt = System.currentTimeMillis())
 
             call.respondText(
                 Json.encodeToString(Workflow.serializer(), wfWithDir),
@@ -4207,7 +4295,6 @@ private fun Route.workflowKbRoutes() {
                 sessionStarted = false,
                 activeAgent = "",
                 agentSessions = emptyMap(),
-                permissionMode = "",
             )
             call.respondText(
                 Json.encodeToString(Workflow.serializer(), visibleWorkflow),

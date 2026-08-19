@@ -24,7 +24,7 @@
 | `frontend/harmonyApp/` | HarmonyOS ArkTS 前端 | `entry/src/main/ets/pages/*.ets`, `api/*.ets`, `stores/*.ets` |
 | `search/` | Weaviate schema / indexing / startup 脚本（主线已由 Anthropic web_search + grep 替代） | `schema.py`, `indexer.py`, `start.sh` |
 | `cc_bridge/` | Claude CLI ACP adapter | `acp_adapter.py`, `executor.py`, `cc_session_index.py`, `fs_listing.py` |
-| `codex_bridge/` | Codex CLI ACP adapter | `codex_adapter.py`, `codex_executor.py`, `codex_session_index.py`, `fs_listing.py` |
+| `codex_bridge/` | Codex CLI ACP adapter and managed app-server approval transport | `codex_adapter.py`, `codex_executor.py`, `codex_app_server.py`, `codex_session_index.py`, `fs_listing.py` |
 | `bridge_common/` | Host-managed direct Bridge IPC v2 和每轮 CLI 执行权限策略 | `host_ipc.py`, `execution_policy.py` |
 | `feishu_bot/` | 飞书网关 | `main.py`, `silk_client.py`, `feishu_handler.py` |
 | `silk-agent/` | 外部 Agent 统一 Host（Go companion；设备认证、系统凭据/加密备份、单一 WSS 多路复用、签名新增 Agent/热加载、Host 生命周期、受控 Adapter supervision/stdio IPC v2 和签名发行包） | `main.go`, `connection.go`, `host.go`, `identity.go`, `credential_store_*.go`, `release.go`, `adapter_supervisor.go`, `adapters/`, `scripts/package-release.sh` |

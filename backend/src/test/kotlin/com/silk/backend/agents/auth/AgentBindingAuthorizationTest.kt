@@ -167,6 +167,48 @@ class AgentBindingAuthorizationTest {
             assertEquals(true, authorized.executionPolicy?.readFile)
             assertEquals(false, authorized.executionPolicy?.writeFile)
             assertEquals(false, authorized.executionPolicy?.runCommand)
+
+            assertTrue(
+                AgentAuthRepository.updateAgentRuntimePermissionMode(
+                    owner.id,
+                    agentId,
+                    AgentRuntimePermissionMode.READ_ONLY,
+                ),
+            )
+            val readOnly = AgentBindingAuthorizationService.authorize(
+                userId = owner.id,
+                agentType = "codex",
+                agentInstanceId = agentId,
+                targetType = AgentBindingTargetType.WORKSPACE,
+                targetId = workspaceId,
+                messageScope = AgentBindingMessageScope.WORKSPACE,
+                requiredPermissions = setOf(AgentPermission.READ_FILE),
+                requiredCapabilities = setOf(AgentCapability.READ_FILE),
+            )
+            assertTrue(readOnly.allowed)
+            assertEquals(AgentAccessMode.READ_ONLY, readOnly.executionPolicy?.accessMode)
+            assertEquals(AgentRuntimePermissionMode.READ_ONLY, readOnly.executionPolicy?.agentPermissionMode)
+            assertEquals(true, readOnly.executionPolicy?.readFile)
+            assertEquals(false, readOnly.executionPolicy?.writeFile)
+            assertEquals(false, readOnly.executionPolicy?.runCommand)
+
+            AgentAuthRepository.updateAgentRuntimePermissionMode(
+                owner.id,
+                agentId,
+                AgentRuntimePermissionMode.AUTOMATIC,
+            )
+            val workspaceApprovalWins = AgentBindingAuthorizationService.authorize(
+                userId = owner.id,
+                agentType = "codex",
+                agentInstanceId = agentId,
+                targetType = AgentBindingTargetType.WORKSPACE,
+                targetId = workspaceId,
+                messageScope = AgentBindingMessageScope.WORKSPACE,
+                requiredPermissions = setOf(AgentPermission.READ_FILE),
+                requiredCapabilities = setOf(AgentCapability.READ_FILE),
+            )
+            assertEquals(AgentAccessMode.APPROVAL_REQUIRED, workspaceApprovalWins.executionPolicy?.accessMode)
+            assertEquals(AgentRuntimePermissionMode.AUTOMATIC, workspaceApprovalWins.executionPolicy?.agentPermissionMode)
         }
     }
 

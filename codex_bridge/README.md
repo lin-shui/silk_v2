@@ -12,7 +12,7 @@ silk-agent connect codex --server https://<silk-host>
 
 The Host starts `codex_adapter.py --silk-host-stdio` automatically. Set `BRIDGE_PYTHON` only when the packaged Adapter should use a specific Python interpreter. Codex CLI must already be installed and authenticated for the Host user.
 
-Managed prompts start the device user's normal Codex CLI, so `CODEX_HOME`, login credentials, `config.toml`, `AGENTS.md`, rules, hooks, MCP servers, plugins, model/provider selection, and other native preferences remain available. Silk adds Binding-derived command-line limits for sandbox mode and shell access, and never adds the dangerous approval/sandbox bypass to a managed run. The Adapter supports streaming, cancellation, session resume, and Silk `_silk/*` directory/session helpers.
+Managed prompts start the device user's normal Codex CLI, so `CODEX_HOME`, login credentials, `config.toml`, `AGENTS.md`, rules, hooks, MCP servers, plugins, model/provider selection, and other native preferences remain available. Silk intersects the Agent owner's runtime mode with the Workspace Binding, then applies the result per prompt. `NATIVE_DEFAULT` leaves the native approval policy unchanged; explicit approval/read-only/automatic modes override approval behavior without rewriting `config.toml` or disabling the Silk-derived sandbox. The Adapter never adds Codex's dangerous approval-and-sandbox bypass to a managed run. It supports streaming, cancellation, session resume, and Silk `_silk/*` directory/session helpers.
 
 ## Tests
 

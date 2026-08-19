@@ -78,7 +78,7 @@ class AgentBindingTeamRoutingContractTest {
                     agentInstanceId = agentId,
                     capabilities = setOf(
                         AgentCapability.PROMPT,
-                        AgentCapability.EXECUTION_POLICY_V1,
+                        AgentCapability.EXECUTION_POLICY_V2,
                     ),
                 )
 
@@ -143,7 +143,7 @@ class AgentBindingTeamRoutingContractTest {
                     agentInstanceId = agentId,
                     capabilities = setOf(
                         AgentCapability.PROMPT,
-                        AgentCapability.EXECUTION_POLICY_V1,
+                        AgentCapability.EXECUTION_POLICY_V2,
                     ),
                 )
 
@@ -193,7 +193,7 @@ class AgentBindingTeamRoutingContractTest {
                     capabilities = setOf(
                         AgentCapability.PROMPT,
                         AgentCapability.CANCEL,
-                        AgentCapability.EXECUTION_POLICY_V1,
+                        AgentCapability.EXECUTION_POLICY_V2,
                     ),
                 )
 
@@ -264,7 +264,7 @@ class AgentBindingTeamRoutingContractTest {
                     client = AcpClient(linuxTransport, clientScope),
                     remoteIp = "10.0.0.1",
                     agentInstanceId = linuxAgent,
-                    capabilities = setOf(AgentCapability.PROMPT, AgentCapability.EXECUTION_POLICY_V1),
+                    capabilities = setOf(AgentCapability.PROMPT, AgentCapability.EXECUTION_POLICY_V2),
                 )
                 AcpRegistry.put(
                     userId = owner.id,
@@ -272,7 +272,7 @@ class AgentBindingTeamRoutingContractTest {
                     client = AcpClient(windowsTransport, clientScope),
                     remoteIp = "10.0.0.2",
                     agentInstanceId = windowsAgent,
-                    capabilities = setOf(AgentCapability.PROMPT, AgentCapability.EXECUTION_POLICY_V1),
+                    capabilities = setOf(AgentCapability.PROMPT, AgentCapability.EXECUTION_POLICY_V2),
                 )
 
                 val server = ChatServer("group_${room.id}", roomKind = RoomKind.CHAT)
@@ -347,7 +347,7 @@ class AgentBindingTeamRoutingContractTest {
                 row[AgentInstances.transportAdapter] = AgentTransportAdapter.ACP.name
                 row[AgentInstances.displayName] = "Team Codex $suffix"
                 row[AgentInstances.connectorVersion] = "test"
-                row[AgentInstances.capabilitiesJson] = "[\"PROMPT\",\"EXECUTION_POLICY_V1\"]"
+                row[AgentInstances.capabilitiesJson] = "[\"PROMPT\",\"EXECUTION_POLICY_V2\"]"
                 row[AgentInstances.status] = AgentInstanceStatus.ACTIVE.name
                 row[AgentInstances.createdAt] = now
             }

@@ -70,20 +70,43 @@ internal object AgentBindingAuthorizationService {
         if (!binding.permissions.containsAll(requiredPermissions)) {
             return denied("PERMISSION_DENIED", "Agent binding does not grant the required permissions")
         }
+        val runtimePermissionMode = AgentAuthRepository.findAgentRuntimePermissionMode(resolvedAgentInstanceId)
+        if (runtimePermissionMode == AgentRuntimePermissionMode.READ_ONLY && requiredPermissions.any {
+                it in setOf(
+                    AgentPermission.WRITE_FILE,
+                    AgentPermission.RUN_COMMAND,
+                )
+            }
+        ) {
+            return denied("PERMISSION_DENIED", "Agent runtime permission mode is read-only")
+        }
         if (!connection.capabilities.containsAll(requiredCapabilities)) {
             return denied("CAPABILITY_DENIED", "Agent did not declare the required capabilities")
+        }
+        val effectiveAccessMode = when {
+            binding.accessMode == AgentAccessMode.CHAT_ONLY -> AgentAccessMode.CHAT_ONLY
+            binding.accessMode == AgentAccessMode.READ_ONLY ||
+                runtimePermissionMode == AgentRuntimePermissionMode.READ_ONLY -> AgentAccessMode.READ_ONLY
+            binding.accessMode == AgentAccessMode.APPROVAL_REQUIRED ||
+                runtimePermissionMode == AgentRuntimePermissionMode.APPROVAL_REQUIRED ->
+                AgentAccessMode.APPROVAL_REQUIRED
+            else -> AgentAccessMode.AUTONOMOUS
         }
         return AgentBindingAuthorization(
             allowed = true,
             binding = binding,
             agentInstanceId = resolvedAgentInstanceId,
             executionPolicy = SilkExecutionPolicy(
+                accessMode = effectiveAccessMode,
+                agentPermissionMode = runtimePermissionMode,
                 readFile = AgentPermission.READ_FILE in binding.permissions &&
                     AgentCapability.READ_FILE in connection.capabilities,
                 writeFile = AgentPermission.WRITE_FILE in binding.permissions &&
-                    AgentCapability.WRITE_FILE in connection.capabilities,
+                    AgentCapability.WRITE_FILE in connection.capabilities &&
+                    runtimePermissionMode != AgentRuntimePermissionMode.READ_ONLY,
                 runCommand = AgentPermission.RUN_COMMAND in binding.permissions &&
-                    AgentCapability.RUN_COMMAND in connection.capabilities,
+                    AgentCapability.RUN_COMMAND in connection.capabilities &&
+                    runtimePermissionMode != AgentRuntimePermissionMode.READ_ONLY,
             ),
         )
     }

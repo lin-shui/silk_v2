@@ -88,6 +88,30 @@ func TestCanonicalPayloadsMatchVersionOneContract(t *testing.T) {
 	if agentRequest != expectedAgentRequest {
 		t.Fatalf("unexpected trusted-device Agent request payload:\n%s", agentRequest)
 	}
+
+	refresh := string(canonicalAgentCapabilityRefresh(
+		"https://silk.example.com",
+		"device-1",
+		"agent-1",
+		"codex",
+		"0.4.12",
+		[]string{"EXECUTION_POLICY_V2", "PROMPT", "STREAM"},
+		4000,
+	))
+	expectedRefresh := strings.Join([]string{
+		"silk-agent-capability-refresh/v1",
+		"https://silk.example.com",
+		"1",
+		"device-1",
+		"agent-1",
+		"codex",
+		"0.4.12",
+		"EXECUTION_POLICY_V2,PROMPT,STREAM",
+		"4000",
+	}, "\n")
+	if refresh != expectedRefresh {
+		t.Fatalf("unexpected capability refresh payload:\n%s", refresh)
+	}
 }
 
 func TestAgentRequestIDsAreOpaqueAndUnique(t *testing.T) {

@@ -57,6 +57,22 @@ func TestHostReloadsApprovedAgentFromProtectedConfig(t *testing.T) {
 	}
 }
 
+func TestRefreshConfiguredAgentCapabilitiesAddsCurrentHostDeclaration(t *testing.T) {
+	config := hostConfig{Agents: map[string]agentConfig{
+		"codex": {
+			AgentInstanceID: "agent-1",
+			AgentType:       "codex",
+			Capabilities:    []string{"PROMPT", "EXECUTION_POLICY_V1"},
+		},
+	}}
+	if !refreshConfiguredAgentCapabilities(&config) {
+		t.Fatal("expected stale capabilities to be refreshed")
+	}
+	if !sameStringSet(config.Agents["codex"].Capabilities, supportedAgents["codex"].Capabilities) {
+		t.Fatalf("unexpected refreshed capabilities: %#v", config.Agents["codex"].Capabilities)
+	}
+}
+
 func TestHostRoutesACPByAgentInstanceWithoutCrossStreamBlocking(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

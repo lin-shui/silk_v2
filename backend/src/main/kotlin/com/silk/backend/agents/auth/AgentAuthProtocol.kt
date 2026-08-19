@@ -130,6 +130,26 @@ object AgentAuthProtocol {
         timestampEpochMs.toString(),
     )
 
+    fun canonicalAgentCapabilityRefresh(
+        serverOrigin: String,
+        deviceId: String,
+        agentInstanceId: String,
+        agentType: String,
+        connectorVersion: String,
+        capabilities: Set<AgentCapability>,
+        timestampEpochMs: Long,
+    ): ByteArray = canonicalLines(
+        "silk-agent-capability-refresh/v1",
+        serverOrigin,
+        VERSION.toString(),
+        deviceId,
+        agentInstanceId,
+        agentType,
+        connectorVersion,
+        capabilities.map { it.name }.sorted().joinToString(","),
+        timestampEpochMs.toString(),
+    )
+
     fun verifySignature(publicKey: String, payload: ByteArray, encodedSignature: String): Boolean {
         val signatureBytes = runCatching { base64UrlDecoder.decode(encodedSignature) }.getOrNull() ?: return false
         if (signatureBytes.size != 64) return false

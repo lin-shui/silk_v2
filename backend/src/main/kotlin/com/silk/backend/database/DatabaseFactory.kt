@@ -87,6 +87,7 @@ object DatabaseFactory {
             migrateAgentAuthenticationOrigins()
             migrateAgentBindingApprovals()
             migrateAgentBindingMentionAliases()
+            migrateAgentBindingAccessModes()
             ensureAgentBindingMentionIndex()
         }
         
@@ -185,6 +186,22 @@ object DatabaseFactory {
                 }
             }
         }
+    }
+
+    /** Collapse legacy granular grants into one conservative Workspace access mode. */
+    private fun org.jetbrains.exposed.sql.Transaction.migrateAgentBindingAccessModes() {
+        exec(
+            """
+            UPDATE agent_bindings
+            SET access_mode = CASE
+                WHEN target_type = 'ROOM' THEN 'CHAT_ONLY'
+                WHEN permissions_json LIKE '%WRITE_FILE%'
+                  OR permissions_json LIKE '%RUN_COMMAND%' THEN 'APPROVAL_REQUIRED'
+                ELSE 'READ_ONLY'
+            END
+            WHERE access_mode IS NULL OR access_mode = ''
+            """.trimIndent()
+        )
     }
 
     /** Revoked bindings rewrite their route so a new active binding can reuse the alias. */

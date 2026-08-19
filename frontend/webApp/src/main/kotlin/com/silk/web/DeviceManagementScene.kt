@@ -79,7 +79,7 @@ fun DeviceManagementScene(appState: WebAppState) {
     var selectedTargetId by remember { mutableStateOf("") }
     var selectedTrigger by remember { mutableStateOf(BindingTriggerPolicy.MENTION) }
     var selectedMentionAlias by remember { mutableStateOf("") }
-    var selectedPermissions by remember { mutableStateOf(defaultBindingPermissions()) }
+    var selectedAccessMode by remember { mutableStateOf(defaultBindingAccessMode(BindingTargetType.ROOM)) }
     var editingBindingId by remember { mutableStateOf<String?>(null) }
     var bindingSubmissionError by remember { mutableStateOf<String?>(null) }
 
@@ -297,6 +297,25 @@ fun DeviceManagementScene(appState: WebAppState) {
                                     agent.displayName,
                                 )
                             },
+                            onPermissionModeChange = { mode ->
+                                scope.launch {
+                                    busyAction = "agent:${agent.agentInstanceId}"
+                                    pageError = null
+                                    try {
+                                        ApiClient.updateManagedAgentRuntimePermissionMode(agent.agentInstanceId, mode)
+                                        agents = agents.map {
+                                            if (it.agentInstanceId == agent.agentInstanceId) {
+                                                it.copy(runtimePermissionMode = mode)
+                                            } else it
+                                        }
+                                        feedback = "Agent 权限已更新，将在下一轮生效。"
+                                    } catch (error: Exception) {
+                                        pageError = error.message ?: "更新 Agent 权限失败"
+                                    } finally {
+                                        busyAction = null
+                                    }
+                                }
+                            },
                             onRevoke = {
                                 if (window.confirm("撤销 Agent ${agent.displayName}？相关 Binding 将同时失效。")) {
                                     scope.launch {
@@ -329,7 +348,7 @@ fun DeviceManagementScene(appState: WebAppState) {
                 selectedTargetId = selectedTargetId,
                 selectedTrigger = selectedTrigger,
                 selectedMentionAlias = selectedMentionAlias,
-                selectedPermissions = selectedPermissions,
+                selectedAccessMode = selectedAccessMode,
                 editing = editingBindingId != null,
                 busy = busyAction == "binding:create",
                 mentionConflictMessage = mentionConflictMessage,
@@ -348,7 +367,7 @@ fun DeviceManagementScene(appState: WebAppState) {
                     bindingSubmissionError = null
                     selectedTargetType = type
                     selectedTargetId = targets.firstOrNull { it.type == type }?.id.orEmpty()
-                    selectedPermissions = defaultBindingPermissions()
+                    selectedAccessMode = defaultBindingAccessMode(type)
                 },
                 onTargetChange = {
                     bindingSubmissionError = null
@@ -362,13 +381,9 @@ fun DeviceManagementScene(appState: WebAppState) {
                     bindingSubmissionError = null
                     selectedMentionAlias = formatManagedAgentMentionAlias(it)
                 },
-                onPermissionChange = { permission, enabled ->
+                onAccessModeChange = { mode ->
                     bindingSubmissionError = null
-                    selectedPermissions = updateBindingPermissionSelection(
-                        selectedPermissions,
-                        permission,
-                        enabled,
-                    )
+                    selectedAccessMode = mode
                 },
                 onCancel = {
                     bindingSubmissionError = null
@@ -399,7 +414,7 @@ fun DeviceManagementScene(appState: WebAppState) {
                                 messageScope = compatibleMessageScope(selectedTargetType),
                                 triggerPolicy = selectedTrigger,
                                 mentionAlias = selectedMentionAlias,
-                                permissions = selectedPermissions,
+                                accessMode = selectedAccessMode,
                             )
                             val bindingId = editingBindingId
                             val saved = if (bindingId == null) {
@@ -492,7 +507,7 @@ fun DeviceManagementScene(appState: WebAppState) {
                             selectedTargetId = binding.targetId
                             selectedTrigger = binding.triggerPolicy
                             selectedMentionAlias = binding.mentionAlias
-                            selectedPermissions = binding.permissions
+                            selectedAccessMode = binding.accessMode
                             bindingSubmissionError = null
                         },
                     ) {
@@ -724,6 +739,7 @@ private fun RevokedHistorySection(
                         busy = false,
                         onDetails = { onAgentDetails(agent.agentInstanceId) },
                         onRename = null,
+                        onPermissionModeChange = null,
                         onRevoke = null,
                     )
                 }
@@ -776,12 +792,14 @@ private fun DeviceCard(
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun AgentCard(
     agent: ManagedAgentDto,
     deviceName: String,
     busy: Boolean,
     onDetails: () -> Unit,
     onRename: (() -> Unit)?,
+    onPermissionModeChange: ((ManagedAgentRuntimePermissionMode) -> Unit)?,
     onRevoke: (() -> Unit)?,
 ) {
     Div({ style { deviceCardStyle() } }) {
@@ -807,6 +825,28 @@ private fun AgentCard(
             formatMessageTimestampForWeb(it, includeSeconds = false)
         } ?: "尚未连接")
         DeviceMetadata("设备", deviceName)
+        if (agent.status == ManagedAgentStatus.ACTIVE && onPermissionModeChange != null) {
+            Div({ style { marginTop(12.px) } }) {
+                DeviceSelectField(
+                    label = "Agent 权限",
+                    value = agent.runtimePermissionMode.name,
+                    onChange = { value ->
+                        runCatching { ManagedAgentRuntimePermissionMode.valueOf(value) }
+                            .getOrNull()
+                            ?.let(onPermissionModeChange)
+                    },
+                    disabled = busy,
+                ) {
+                    ManagedAgentRuntimePermissionMode.entries.forEach { mode ->
+                        Option(mode.name, attrs = {
+                            if (mode == agent.runtimePermissionMode) attr("selected", "")
+                        }) {
+                            Text(agentRuntimePermissionModeLabel(mode))
+                        }
+                    }
+                }
+            }
+        }
         Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); gap(8.px); marginTop(14.px) } }) {
             DeviceSecondaryButton("查看详情", busy, onDetails)
             if (agent.status == ManagedAgentStatus.ACTIVE && onRename != null) {
@@ -988,7 +1028,7 @@ private fun AgentDetailsBindingRow(binding: ManagedBindingDto, targetName: Strin
         }
         DeviceMetadata(
             "权限",
-            binding.permissions.sortedBy(::bindingPermissionLabel).joinToString(" · ", transform = ::bindingPermissionLabel),
+            bindingAccessModeLabel(binding.accessMode),
         )
     }
 }
@@ -1049,7 +1089,7 @@ private fun BindingCreator(
     selectedTargetId: String,
     selectedTrigger: BindingTriggerPolicy,
     selectedMentionAlias: String,
-    selectedPermissions: Set<BindingPermission>,
+    selectedAccessMode: BindingAccessMode,
     editing: Boolean,
     busy: Boolean,
     mentionConflictMessage: String?,
@@ -1060,7 +1100,7 @@ private fun BindingCreator(
     onTargetChange: (String) -> Unit,
     onTriggerChange: (BindingTriggerPolicy) -> Unit,
     onMentionAliasChange: (String) -> Unit,
-    onPermissionChange: (BindingPermission, Boolean) -> Unit,
+    onAccessModeChange: (BindingAccessMode) -> Unit,
     onCancel: () -> Unit,
     onSubmit: () -> Unit,
 ) {
@@ -1125,23 +1165,22 @@ private fun BindingCreator(
                 mentionConflictMessage?.let { DeviceInlineError(it) }
             }
         }
-        Div({ style { marginTop(14.px) } }) {
-            Div({ style { fontSize(12.px); fontWeight("600"); color(Color(SilkColors.textSecondary)); marginBottom(7.px) } }) {
-                Text("权限")
-            }
-            Div({ style { display(DisplayStyle.Flex); gap(12.px); property("flex-wrap", "wrap") } }) {
-                availableBindingPermissions(selectedTargetType).forEach { permission ->
-                    BindingPermissionToggle(
-                        permission = permission,
-                        checked = permission in selectedPermissions,
-                        onChange = { enabled -> onPermissionChange(permission, enabled) },
-                    )
+        if (selectedTargetType == BindingTargetType.WORKSPACE) {
+            Div({ style { marginTop(14.px); maxWidth(360.px) } }) {
+                DeviceSelectField("Workspace 访问", selectedAccessMode.name, { value ->
+                    onAccessModeChange(BindingAccessMode.valueOf(value))
+                }) {
+                    availableBindingAccessModes(selectedTargetType).forEach { mode ->
+                        Option(mode.name, attrs = { if (mode == selectedAccessMode) attr("selected", "") }) {
+                            Text(bindingAccessModeLabel(mode))
+                        }
+                    }
                 }
             }
         }
         Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.SpaceBetween); alignItems(AlignItems.Center); gap(12.px); marginTop(14.px); property("flex-wrap", "wrap") } }) {
             Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
-                Text("已选择 ${selectedPermissions.size} 项")
+                Text(bindingAccessModeLabel(selectedAccessMode))
             }
             Div({ style { display(DisplayStyle.Flex); gap(8.px) } }) {
                 if (editing) {
@@ -1166,33 +1205,11 @@ private fun BindingCreator(
 }
 
 @Composable
-private fun BindingPermissionToggle(
-    permission: BindingPermission,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            alignItems(AlignItems.Center)
-            gap(6.px)
-            fontSize(12.px)
-            color(Color(SilkColors.textPrimary))
-        }
-    }) {
-        Input(InputType.Checkbox) {
-            checked(checked)
-            onInput { onChange(!checked) }
-        }
-        Text(bindingPermissionLabel(permission))
-    }
-}
-
-@Composable
 private fun DeviceSelectField(
     label: String,
     value: String,
     onChange: (String) -> Unit,
+    disabled: Boolean = false,
     options: @Composable () -> Unit,
 ) {
     Div {
@@ -1202,6 +1219,7 @@ private fun DeviceSelectField(
         Select({
             attr("aria-label", label)
             attr("value", value)
+            if (disabled) attr("disabled", "")
             onChange { event -> onChange(event.value ?: "") }
             style { deviceInputStyle() }
         }) { options() }
@@ -1231,7 +1249,7 @@ private fun BindingRow(
                 val mention = binding.mentionAlias.takeIf {
                     binding.targetType == BindingTargetType.ROOM && !it.startsWith("__")
                 }?.let { "@$it · " }.orEmpty()
-                Text("${binding.targetType.name} · $mention${triggerPolicyLabel(binding.triggerPolicy)} · ${binding.permissions.joinToString(" · ") { it.name }}")
+                Text("${binding.targetType.name} · $mention${triggerPolicyLabel(binding.triggerPolicy)} · ${bindingAccessModeLabel(binding.accessMode)}")
             }
             bindingApprovalSummary(binding)?.let { summary ->
                 Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(5.px) } }) {

@@ -778,6 +778,17 @@ object ApiClient {
             )
         )
 
+    suspend fun updateManagedAgentRuntimePermissionMode(
+        agentInstanceId: String,
+        mode: ManagedAgentRuntimePermissionMode,
+    ): AgentManagementActionResponse = jsonParser.decodeFromString(
+        agentRequest(
+            "PUT",
+            "/api/agent-instances/${encodeUri(agentInstanceId)}/permission-mode",
+            jsonParser.encodeToString(UpdateManagedAgentRuntimePermissionModeRequest(mode)),
+        )
+    )
+
     suspend fun getManagedBindings(): List<ManagedBindingDto> = jsonParser
         .decodeFromString<ManagedBindingListResponse>(agentRequest("GET", "/api/agent-bindings"))
         .bindings
@@ -1238,13 +1249,13 @@ object ApiClient {
         }
     }
     
-    /** 更新工作流会话设置（agent / permissionMode）。 */
+    /** 更新工作流会话设置（Agent / Workspace 访问模式）。 */
     suspend fun updateCcSettings(
         userId: String,
         workspaceId: String,
         activeAgent: String? = null,
         activeAgentInstanceId: String? = null,
-        permissionMode: String? = null,
+        workspaceAccessMode: String? = null,
     ): CcStateResponse {
         return try {
             val body = kotlinx.serialization.json.buildJsonObject {
@@ -1255,8 +1266,8 @@ object ApiClient {
                 if (!activeAgentInstanceId.isNullOrBlank()) {
                     put("activeAgentInstanceId", kotlinx.serialization.json.JsonPrimitive(activeAgentInstanceId))
                 }
-                if (!permissionMode.isNullOrBlank()) {
-                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
+                if (!workspaceAccessMode.isNullOrBlank()) {
+                    put("workspaceAccessMode", kotlinx.serialization.json.JsonPrimitive(workspaceAccessMode))
                 }
             }.toString()
             val response = post("/users/$userId/cc-settings/update", body)
@@ -1598,7 +1609,7 @@ object ApiClient {
         userId: String,
         initialDir: String = "",
         agentType: String = "claude_code",
-        permissionMode: String = "",
+        workspaceAccessMode: String = "",
     ): CreateWorkflowResult {
         return try {
             // 构造 JSON，使用 JsonObject 安全编码避免手动转义
@@ -1612,8 +1623,8 @@ object ApiClient {
                 if (agentType.isNotBlank()) {
                     put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
                 }
-                if (permissionMode.isNotBlank()) {
-                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
+                if (workspaceAccessMode.isNotBlank()) {
+                    put("workspaceAccessMode", kotlinx.serialization.json.JsonPrimitive(workspaceAccessMode))
                 }
             }
             val response = post("/api/workflows", obj.toString())

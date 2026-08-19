@@ -22,7 +22,6 @@ data class PersonalWorkspace(
     val activeAgent: String = "",
     val activeAgentInstanceId: String = "",
     val agentSessions: Map<String, AgentSessionState> = emptyMap(),
-    val permissionMode: String = "",
     val visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
     val lastSharedName: String? = null,
     val copilots: List<String> = emptyList(),

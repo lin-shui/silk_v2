@@ -39,6 +39,11 @@ type hostRuntime struct {
 }
 
 func runHost(configDir string, configPath string, config hostConfig, signer *deviceSigner) error {
+	if refreshConfiguredAgentCapabilities(&config) {
+		if err := saveHostConfig(configPath, config); err != nil {
+			return err
+		}
+	}
 	enabled := 0
 	for _, agent := range config.Agents {
 		if agent.Enabled {

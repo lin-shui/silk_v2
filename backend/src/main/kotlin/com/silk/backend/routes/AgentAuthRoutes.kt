@@ -5,6 +5,7 @@ import com.silk.backend.agents.auth.AgentAuthErrorResponse
 import com.silk.backend.agents.auth.AgentAuthProtocol
 import com.silk.backend.agents.auth.AgentAuthException
 import com.silk.backend.agents.auth.AgentAuthRepository
+import com.silk.backend.agents.auth.AgentCapabilityPolicy
 import com.silk.backend.agents.auth.AgentBindingListResponse
 import com.silk.backend.agents.auth.AgentBindingApprovalRequest
 import com.silk.backend.agents.auth.AgentBindingDto
@@ -45,6 +46,7 @@ import com.silk.backend.agents.auth.CreateAgentPairingRequest
 import com.silk.backend.agents.auth.CreateAgentPairingResponse
 import com.silk.backend.agents.auth.CreateTrustedDeviceAgentRequest
 import com.silk.backend.agents.auth.UpdateAgentBindingRequest
+import com.silk.backend.agents.auth.UpdateAgentRuntimePermissionModeRequest
 import com.silk.backend.agents.auth.UpdateAgentResourceNameRequest
 import com.silk.backend.agents.auth.DeviceEnrollmentStatus
 import com.silk.backend.agents.auth.AgentInstanceStatus
@@ -581,6 +583,34 @@ fun Route.agentAuthRoutes() {
             call.respond(AgentManagementActionResponse(true, "Agent renamed"))
         }
 
+        put("/api/agent-instances/{agentInstanceId}/permission-mode") {
+            val userId = call.principal<UserIdPrincipal>()?.name
+                ?: return@put call.respondAgentError(
+                    io.ktor.http.HttpStatusCode.Unauthorized,
+                    "UNAUTHENTICATED",
+                    "Login required",
+                )
+            val agentInstanceId = call.parameters["agentInstanceId"].orEmpty()
+            val request = runCatching { call.receive<UpdateAgentRuntimePermissionModeRequest>() }.getOrElse {
+                call.respondAgentError(
+                    io.ktor.http.HttpStatusCode.BadRequest,
+                    "INVALID_REQUEST",
+                    "Invalid Agent permission mode",
+                )
+                return@put
+            }
+            if (!AgentAuthRepository.updateAgentRuntimePermissionMode(userId, agentInstanceId, request.mode)) {
+                // Keep existence and ownership indistinguishable to non-owners.
+                call.respondAgentError(
+                    io.ktor.http.HttpStatusCode.NotFound,
+                    "AGENT_NOT_FOUND",
+                    "Active Agent not found",
+                )
+                return@put
+            }
+            call.respond(AgentManagementActionResponse(true, "Agent permission mode updated"))
+        }
+
         get("/api/agent-security-events") {
             val userId = call.principal<UserIdPrincipal>()?.name
                 ?: return@get call.respondAgentError(io.ktor.http.HttpStatusCode.Unauthorized, "UNAUTHENTICATED", "Login required")
@@ -641,6 +671,10 @@ fun Route.agentAuthRoutes() {
                 call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_MESSAGE_SCOPE", "Binding messageScope does not match targetType")
                 return@post
             }
+            if (!request.hasCompatibleAccessMode()) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_ACCESS_MODE", "Binding accessMode does not match targetType")
+                return@post
+            }
             val ownerId = AgentAuthRepository.findActiveAgentOwner(request.agentInstanceId)
             if (ownerId == null) {
                 call.respondAgentError(io.ktor.http.HttpStatusCode.NotFound, "AGENT_NOT_FOUND", "Agent is not active")
@@ -668,7 +702,7 @@ fun Route.agentAuthRoutes() {
                     }
                     val status = when (authError.errorCode) {
                         "AGENT_NOT_FOUND" -> io.ktor.http.HttpStatusCode.NotFound
-                        "INVALID_MENTION_ALIAS" -> io.ktor.http.HttpStatusCode.BadRequest
+                        "INVALID_MENTION_ALIAS", "INVALID_ACCESS_MODE" -> io.ktor.http.HttpStatusCode.BadRequest
                         else -> io.ktor.http.HttpStatusCode.Conflict
                     }
                     call.respondAgentError(status, authError.errorCode, authError.message)
@@ -691,6 +725,10 @@ fun Route.agentAuthRoutes() {
             }
             if (!request.hasCompatibleMessageScope()) {
                 call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_MESSAGE_SCOPE", "Binding messageScope does not match targetType")
+                return@put
+            }
+            if (!request.hasCompatibleAccessMode()) {
+                call.respondAgentError(io.ktor.http.HttpStatusCode.BadRequest, "INVALID_ACCESS_MODE", "Binding accessMode does not match targetType")
                 return@put
             }
             val current = AgentAuthRepository.findBinding(bindingId)
@@ -725,7 +763,7 @@ fun Route.agentAuthRoutes() {
                 }
                 val status = when (authError.errorCode) {
                     "AGENT_NOT_FOUND", "BINDING_NOT_FOUND" -> io.ktor.http.HttpStatusCode.NotFound
-                    "INVALID_MENTION_ALIAS" -> io.ktor.http.HttpStatusCode.BadRequest
+                    "INVALID_MENTION_ALIAS", "INVALID_ACCESS_MODE" -> io.ktor.http.HttpStatusCode.BadRequest
                     else -> io.ktor.http.HttpStatusCode.Conflict
                 }
                 call.respondAgentError(status, authError.errorCode, authError.message)
@@ -923,6 +961,62 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 sendError("AGENT_TYPE_MISMATCH", "Agent type does not match enrollment", request.agentInstanceId)
                 return@withLock
             }
+            val refreshRequested = request.connectorVersion != null ||
+                request.capabilities != null ||
+                request.timestampEpochMs != null ||
+                request.signature != null
+            val refreshedIdentity = if (!refreshRequested) {
+                // A previously upgraded database snapshot must not make an
+                // old Host appear V2-capable when it cannot send the signed
+                // refresh metadata. Keep the persisted upgrade, but fail
+                // closed for this legacy connection.
+                identity.copy(
+                    capabilities = identity.capabilities - AgentCapabilityPolicy.autoUpgradable,
+                )
+            } else {
+                val connectorVersion = request.connectorVersion
+                val capabilities = request.capabilities
+                val timestampEpochMs = request.timestampEpochMs
+                val signature = request.signature
+                if (connectorVersion == null || capabilities == null) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is incomplete", request.agentInstanceId)
+                    return@withLock
+                }
+                if (timestampEpochMs == null || signature == null) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is incomplete", request.agentInstanceId)
+                    return@withLock
+                }
+                val now = System.currentTimeMillis()
+                val connectorVersionHasInvalidShape = connectorVersion.isBlank() ||
+                    connectorVersion != connectorVersion.trim() || connectorVersion.length > 64
+                val connectorVersionIsInvalid = connectorVersionHasInvalidShape || !connectorVersion.isSafeMetadata()
+                val timestampIsInvalid = kotlin.math.abs(now - timestampEpochMs) > TIMESTAMP_WINDOW_MS
+                if (connectorVersionIsInvalid || capabilities.size > 32 || timestampIsInvalid) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh metadata is invalid", request.agentInstanceId)
+                    return@withLock
+                }
+                val payload = AgentAuthProtocol.canonicalAgentCapabilityRefresh(
+                    serverOrigin = identity.authenticationOrigin,
+                    deviceId = identity.deviceId,
+                    agentInstanceId = identity.agentInstanceId,
+                    agentType = identity.agentType,
+                    connectorVersion = connectorVersion,
+                    capabilities = capabilities,
+                    timestampEpochMs = timestampEpochMs,
+                )
+                if (!AgentAuthProtocol.verifySignature(identity.publicKey, payload, signature)) {
+                    sendError("INVALID_AGENT_METADATA", "Agent capability refresh signature is invalid", request.agentInstanceId)
+                    return@withLock
+                }
+                AgentAuthRepository.refreshActiveIdentityCapabilities(
+                    identity = identity,
+                    connectorVersion = connectorVersion,
+                    reportedCapabilities = capabilities,
+                ) ?: run {
+                    sendError("AGENT_NOT_AVAILABLE", "Agent is not active on this device", request.agentInstanceId)
+                    return@withLock
+                }
+            }
             closeLogicalStream(request.agentInstanceId, "reopened by Host", notifyHost = false)
 
             val streamScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -933,33 +1027,33 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                     val payload = agentAuthJson.parseToJsonElement(line).jsonObject
                     sendEncoded(
                         agentAuthJson.encodeToString(
-                            AgentHostRpc(agentInstanceId = identity.agentInstanceId, payload = payload),
+                            AgentHostRpc(agentInstanceId = refreshedIdentity.agentInstanceId, payload = payload),
                         ),
                     )
                 },
                 onClose = { reason ->
-                    closeLogicalStream(identity.agentInstanceId, reason, notifyHost = true, expected = stream)
+                    closeLogicalStream(refreshedIdentity.agentInstanceId, reason, notifyHost = true, expected = stream)
                 },
             )
             val client = AcpClient(transport, streamScope)
-            stream = AgentHostLogicalStream(identity, transport, client, streamScope)
-            streams[identity.agentInstanceId] = stream
+            stream = AgentHostLogicalStream(refreshedIdentity, transport, client, streamScope)
+            streams[refreshedIdentity.agentInstanceId] = stream
             val evicted = AcpRegistry.put(
-                userId = identity.userId,
-                agentType = identity.agentType,
+                userId = refreshedIdentity.userId,
+                agentType = refreshedIdentity.agentType,
                 client = client,
                 remoteIp = call.request.local.remoteAddress,
                 authenticationMode = AcpRegistry.AuthenticationMode.DEVICE_SIGNATURE,
-                agentInstanceId = identity.agentInstanceId,
-                capabilities = identity.capabilities,
+                agentInstanceId = refreshedIdentity.agentInstanceId,
+                capabilities = refreshedIdentity.capabilities,
             )
             runCatching { evicted?.close("replaced by the same AgentInstance connection") }
             val previousDisconnect = AgentHostConnectionRegistry.registerAgent(
-                deviceId = identity.deviceId,
-                agentInstanceId = identity.agentInstanceId,
+                deviceId = refreshedIdentity.deviceId,
+                agentInstanceId = refreshedIdentity.agentInstanceId,
                 session = this@runMultiplexedAgentHost,
             ) { reason ->
-                closeLogicalStream(identity.agentInstanceId, reason, notifyHost = true, expected = stream)
+                closeLogicalStream(refreshedIdentity.agentInstanceId, reason, notifyHost = true, expected = stream)
             }
             runCatching { previousDisconnect?.invoke("replaced by newer logical stream") }
 
@@ -973,20 +1067,20 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                         ),
                     ),
                 )
-                AgentAuthRepository.touchAuthenticated(identity, call.request.local.remoteAddress)
-                if (streams[identity.agentInstanceId] !== stream) return@withLock
+                AgentAuthRepository.touchAuthenticated(refreshedIdentity, call.request.local.remoteAddress)
+                if (streams[refreshedIdentity.agentInstanceId] !== stream) return@withLock
                 sendEncoded(
                     agentAuthJson.encodeToString(
                         AgentHostOpened(
-                            agentInstanceId = identity.agentInstanceId,
-                            agentType = identity.agentType,
-                            capabilities = identity.capabilities,
+                            agentInstanceId = refreshedIdentity.agentInstanceId,
+                            agentType = refreshedIdentity.agentType,
+                            capabilities = refreshedIdentity.capabilities,
                         ),
                     ),
                 )
             } catch (error: CancellationException) {
                 closeLogicalStream(
-                    identity.agentInstanceId,
+                    refreshedIdentity.agentInstanceId,
                     "Host connection closed",
                     notifyHost = false,
                     expected = stream,
@@ -994,7 +1088,7 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 throw error
             } catch (error: Exception) {
                 closeLogicalStream(
-                    identity.agentInstanceId,
+                    refreshedIdentity.agentInstanceId,
                     "initialize failed",
                     notifyHost = false,
                     expected = stream,
@@ -1002,7 +1096,7 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.runMu
                 sendError(
                     "AGENT_INITIALIZE_FAILED",
                     error.message?.take(256) ?: "Agent initialization failed",
-                    identity.agentInstanceId,
+                    refreshedIdentity.agentInstanceId,
                 )
             }
         }
@@ -1288,4 +1382,18 @@ private fun CreateAgentBindingRequest.hasCompatibleMessageScope(): Boolean = whe
 private fun UpdateAgentBindingRequest.hasCompatibleMessageScope(): Boolean = when (targetType) {
     AgentBindingTargetType.ROOM -> messageScope == AgentBindingMessageScope.TEAM
     AgentBindingTargetType.WORKSPACE -> messageScope == AgentBindingMessageScope.WORKSPACE
+}
+
+private fun CreateAgentBindingRequest.hasCompatibleAccessMode(): Boolean = when (targetType) {
+    AgentBindingTargetType.ROOM ->
+        accessMode in setOf(null, com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY) &&
+            permissions.all { it in setOf(com.silk.backend.agents.auth.AgentPermission.READ_MESSAGE, com.silk.backend.agents.auth.AgentPermission.SEND_MESSAGE) }
+    AgentBindingTargetType.WORKSPACE -> accessMode != com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY
+}
+
+private fun UpdateAgentBindingRequest.hasCompatibleAccessMode(): Boolean = when (targetType) {
+    AgentBindingTargetType.ROOM ->
+        accessMode in setOf(null, com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY) &&
+            permissions.all { it in setOf(com.silk.backend.agents.auth.AgentPermission.READ_MESSAGE, com.silk.backend.agents.auth.AgentPermission.SEND_MESSAGE) }
+    AgentBindingTargetType.WORKSPACE -> accessMode != com.silk.backend.agents.auth.AgentAccessMode.CHAT_ONLY
 }

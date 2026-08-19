@@ -1,6 +1,6 @@
 # Domain Storage And Features
 
-Workspace 普通创建与 Issue-to-Workspace 可携带所有者 ACTIVE `agentInstanceId`，连接检查、目录信任、`/cd` 和初始 ACTIVE Workspace Binding 使用同一精确实例；不带 ID 的旧请求保留 type-only 兼容路径。设备和 Agent 的显示名可由其所有者更新，身份与授权字段保持不变。
+Workspace 普通创建与 Issue-to-Workspace 可携带所有者 ACTIVE `agentInstanceId`，连接检查、目录信任、`/cd` 和初始 ACTIVE Workspace Binding 使用同一精确实例；不带 ID 的旧请求保留 type-only 兼容路径。设备和 Agent 的显示名可由其所有者更新，身份与授权字段保持不变。Agent owner 还可通过 `PUT /api/agent-instances/{agentInstanceId}/permission-mode` 更新 Silk 持久化的 `runtime_permission_mode`；非 owner 得到不泄露实例存在性的 404，变更从下一轮 prompt 生效且不修改设备 CLI 配置。
 
 ## Database-Backed Domains
 
@@ -11,6 +11,7 @@ Workspace 普通创建与 Issue-to-Workspace 可携带所有者 ACTIVE `agentIns
 - 联系人与好友请求
 - 未读计数
 - 用户设置（含 `app_auth_token` 用于前端 Bearer 鉴权；读取/更新设置、资料更新、账号注销和 `/auth/validate/{userId}` 均要求当前用户 Bearer；遗留 Direct Bridge token 列仅为 schema 兼容并在启动迁移时清空）
+- 外部 Agent：`agent_instances.runtime_permission_mode` 保存 `NATIVE_DEFAULT / APPROVAL_REQUIRED / READ_ONLY / AUTOMATIC`；`AgentBindingAuthorizationService` 在每轮 prompt 读取最新值并与 Workspace `access_mode` 取更严格策略，权限变更另写 `agent_security_events`
 
 SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可用 `-Dsilk.databasePath=...` 覆盖。
 
@@ -31,7 +32,7 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
   - 保留 Workflow Room 入口元数据与旧记录；不再作为 Agent runtime 状态的权威存储
 - `workspace/WorkspaceManager.kt`:
   - 默认 `~/.silk-data/workflows/workspace_store.json`，覆盖方式同 Workflow
-  - 持久化 PersonalWorkspace 的 `workingDir` / `activeAgent` / `activeAgentInstanceId` / `permissionMode` / `agentSessions` / `visibility` / `lastSharedName` / `copilots` / `lifecycleState` / `updatedAt`，以及按 `ownerId + roomId + agentInstanceId` 隔离的最近成功工作目录；旧记录缺少新增字段时按默认值兼容读取，并从同一范围内最近更新的已有 Workspace 回填首次默认值。精确实例的 CLI session seed 使用实例 ID 隔离；目录记忆也不会跨 Agent 实例复用，以避免不同设备上的路径串用
+  - 持久化 PersonalWorkspace 的 `workingDir` / `activeAgent` / `activeAgentInstanceId` / `agentSessions` / `visibility` / `lastSharedName` / `copilots` / `lifecycleState` / `updatedAt`，以及按 `ownerId + roomId + agentInstanceId` 隔离的最近成功工作目录；Workspace 访问模式由 SQLite `agent_bindings.access_mode` 作为权威值，旧文件里的 `permissionMode` 会被忽略。精确实例的 CLI session seed 使用实例 ID 隔离；目录记忆也不会跨 Agent 实例复用，以避免不同设备上的路径串用
   - `AgentRuntime.WorkflowPersistence` 以 `workspaceId` 读写；首次启动从 `workflow_store.json` 迁移，但不删除旧文件
   - `WorkspaceAccessPolicy` 统一 Owner/Co-pilot/Observer 的控制与消息读取判定；PRIVATE 后端强制清空/拒绝 Co-pilot，历史使用发送时 `observerVisible` 快照
   - `PersonalWorkspace.linkedGithubRef` 为可选 GitHub Issue 来源引用，旧 `workspace_store.json` 缺少该字段时按 `null` 兼容读取；`routes/WorkspaceRoutes.kt` 提供 JWT + Room membership 保护的发现/CRUD，返回裁剪后的 Owner 展示名、`RUNNING/WAITING/IDLE/OFFLINE` 活动状态与生命周期；有历史的工作区只能归档，不能硬删除。Observer 合法保留的历史共享流以 `historyOnly` 元数据返回，只含 Owner 与最后共享名称，runtime 字段保持脱敏；旧记录缺少 `lastSharedName` 时会在首次历史发现时冻结当前可用名称，避免后续 PRIVATE 重命名继续外泄

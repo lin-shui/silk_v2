@@ -38,35 +38,40 @@ class DeviceManagementModelsTest {
     }
 
     @Test
-    fun workspaceBindingsExposeGranularPermissionsWhileRoomsStayMessageScoped() {
+    fun bindingsExposeOnlyRoomChatOrWorkspaceAccessModes() {
         assertEquals(
-            setOf(BindingPermission.READ_MESSAGE, BindingPermission.SEND_MESSAGE),
-            defaultBindingPermissions(),
+            BindingAccessMode.CHAT_ONLY,
+            defaultBindingAccessMode(BindingTargetType.ROOM),
         )
         assertEquals(
-            listOf(BindingPermission.READ_MESSAGE, BindingPermission.SEND_MESSAGE),
-            availableBindingPermissions(BindingTargetType.ROOM),
+            BindingAccessMode.APPROVAL_REQUIRED,
+            defaultBindingAccessMode(BindingTargetType.WORKSPACE),
         )
         assertEquals(
             listOf(
-                BindingPermission.READ_MESSAGE,
-                BindingPermission.SEND_MESSAGE,
-                BindingPermission.READ_FILE,
-                BindingPermission.WRITE_FILE,
-                BindingPermission.RUN_COMMAND,
-                BindingPermission.READ_WORKSPACE,
-                BindingPermission.WRITE_WORKSPACE,
+                BindingAccessMode.READ_ONLY,
+                BindingAccessMode.APPROVAL_REQUIRED,
+                BindingAccessMode.AUTONOMOUS,
             ),
-            availableBindingPermissions(BindingTargetType.WORKSPACE),
+            availableBindingAccessModes(BindingTargetType.WORKSPACE),
         )
-        assertEquals("读取文件", bindingPermissionLabel(BindingPermission.READ_FILE))
+        assertEquals("需审批", bindingAccessModeLabel(BindingAccessMode.APPROVAL_REQUIRED))
     }
 
     @Test
     fun agentCapabilitiesHaveReadableDetailLabels() {
         assertEquals("停止生成", agentCapabilityLabel(ManagedAgentCapability.CANCEL))
         assertEquals("执行策略 V1", agentCapabilityLabel(ManagedAgentCapability.EXECUTION_POLICY_V1))
+        assertEquals("执行策略 V2", agentCapabilityLabel(ManagedAgentCapability.EXECUTION_POLICY_V2))
         assertEquals("图片输出", agentCapabilityLabel(ManagedAgentCapability.IMAGE_OUTPUT))
+    }
+
+    @Test
+    fun agentRuntimePermissionModesHaveStableLabels() {
+        assertEquals("原生默认", agentRuntimePermissionModeLabel(ManagedAgentRuntimePermissionMode.NATIVE_DEFAULT))
+        assertEquals("需要审批", agentRuntimePermissionModeLabel(ManagedAgentRuntimePermissionMode.APPROVAL_REQUIRED))
+        assertEquals("只读", agentRuntimePermissionModeLabel(ManagedAgentRuntimePermissionMode.READ_ONLY))
+        assertEquals("自动执行", agentRuntimePermissionModeLabel(ManagedAgentRuntimePermissionMode.AUTOMATIC))
     }
 
     @Test
@@ -121,31 +126,6 @@ class DeviceManagementModelsTest {
                 mentionAlias = "cc",
             ),
         )
-    }
-
-    @Test
-    fun fileMutationAndCommandPermissionsKeepReadPrerequisite() {
-        val writeEnabled = updateBindingPermissionSelection(
-            defaultBindingPermissions(),
-            BindingPermission.WRITE_FILE,
-            enabled = true,
-        )
-        assertTrue(BindingPermission.READ_FILE in writeEnabled)
-        assertTrue(BindingPermission.WRITE_FILE in writeEnabled)
-
-        val commandEnabled = updateBindingPermissionSelection(
-            writeEnabled,
-            BindingPermission.RUN_COMMAND,
-            enabled = true,
-        )
-        val readDisabled = updateBindingPermissionSelection(
-            commandEnabled,
-            BindingPermission.READ_FILE,
-            enabled = false,
-        )
-        assertFalse(BindingPermission.READ_FILE in readDisabled)
-        assertFalse(BindingPermission.WRITE_FILE in readDisabled)
-        assertFalse(BindingPermission.RUN_COMMAND in readDisabled)
     }
 
     @Test

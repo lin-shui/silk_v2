@@ -1,6 +1,8 @@
 // backend/src/main/kotlin/com/silk/backend/agents/acp/AcpMessages.kt
 package com.silk.backend.agents.acp
 
+import com.silk.backend.agents.auth.AgentAccessMode
+import com.silk.backend.agents.auth.AgentRuntimePermissionMode
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -107,12 +109,14 @@ data class SessionPromptParams(
 
 @Serializable
 data class SilkPromptContext(
-    val protocolVersion: Int = 1,
+    val protocolVersion: Int = 2,
     val executionPolicy: SilkExecutionPolicy,
 )
 
 @Serializable
 data class SilkExecutionPolicy(
+    val accessMode: AgentAccessMode = AgentAccessMode.CHAT_ONLY,
+    val agentPermissionMode: AgentRuntimePermissionMode = AgentRuntimePermissionMode.NATIVE_DEFAULT,
     val readFile: Boolean = false,
     val writeFile: Boolean = false,
     val runCommand: Boolean = false,

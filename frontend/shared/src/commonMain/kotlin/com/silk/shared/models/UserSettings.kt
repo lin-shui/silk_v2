@@ -70,7 +70,10 @@ data class CcStateResponse(
     val agentInstanceId: String = "",
     /** 当前激活 agent 的显示名称（含 emoji）；未激活则为空字符串 */
     val agentDisplayName: String = "",
-    /** 当前工具权限模式（INTERACTIVE / ACCEPT_EDITS / BYPASS）；空字符串表示默认 */
+    /** Silk Workspace 访问模式（READ_ONLY / APPROVAL_REQUIRED / AUTONOMOUS）。 */
+    val workspaceAccessMode: String = "",
+    /** 旧客户端兼容字段，不再作为用户设置入口。 */
+    @Deprecated("Use workspaceAccessMode")
     val permissionMode: String = "",
     val error: String? = null,
 )

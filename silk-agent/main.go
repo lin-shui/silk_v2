@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var hostVersion = "0.4.10"
+var hostVersion = "0.4.12"
 
 type supportedAgent struct {
 	Type         string
@@ -25,12 +25,12 @@ var supportedAgents = map[string]supportedAgent{
 	"claude-code": {
 		Type:         "claude-code",
 		DisplayName:  "Claude Code",
-		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "QUESTION_RESPONSE", "PERMISSION_RESPONSE", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
+		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "QUESTION_RESPONSE", "PERMISSION_RESPONSE", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "EXECUTION_POLICY_V2", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
 	},
 	"codex": {
 		Type:         "codex",
 		DisplayName:  "Codex",
-		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
+		Capabilities: []string{"PROMPT", "STREAM", "CANCEL", "QUESTION_RESPONSE", "PERMISSION_RESPONSE", "SESSION_RESUME", "READ_FILE", "WRITE_FILE", "RUN_COMMAND", "EXECUTION_POLICY_V1", "EXECUTION_POLICY_V2", "READ_WORKSPACE", "WRITE_WORKSPACE", "IMAGE_INPUT", "IMAGE_OUTPUT"},
 	},
 }
 
@@ -92,6 +92,42 @@ func run(arguments []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])
 	}
+}
+
+// refreshConfiguredAgentCapabilities upgrades the local snapshot to the
+// current Host declaration. The backend separately limits which capabilities
+// may be persisted, so this is safe for previously enrolled instances.
+func refreshConfiguredAgentCapabilities(config *hostConfig) bool {
+	changed := false
+	for agentType, configured := range config.Agents {
+		supported, ok := supportedAgents[configured.AgentType]
+		if !ok || configured.AgentType != agentType {
+			continue
+		}
+		capabilities := append([]string(nil), supported.Capabilities...)
+		if !sameStringSet(configured.Capabilities, capabilities) {
+			configured.Capabilities = capabilities
+			config.Agents[agentType] = configured
+			changed = true
+		}
+	}
+	return changed
+}
+
+func sameStringSet(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	leftCopy := append([]string(nil), left...)
+	rightCopy := append([]string(nil), right...)
+	sort.Strings(leftCopy)
+	sort.Strings(rightCopy)
+	for index := range leftCopy {
+		if leftCopy[index] != rightCopy[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func connectCommand(arguments []string, configDir string, configPath string, config hostConfig) error {
@@ -252,6 +288,7 @@ func connectCommand(arguments []string, configDir string, configPath string, con
 		}
 		fmt.Printf("Agent instance %s approved for device %s.\n", completed.AgentInstanceID, completed.DeviceID)
 	} else {
+		configuredAgent.Capabilities = append([]string(nil), agent.Capabilities...)
 		configuredAgent.Enabled = true
 		config.Agents[agent.Type] = configuredAgent
 		if err := saveHostConfig(configPath, config); err != nil {
@@ -275,6 +312,11 @@ func runCommand(configDir string, config hostConfig) error {
 	}
 	if err := validateServerTransport(config.ServerOrigin, config.AllowInsecureHTTP); err != nil {
 		return err
+	}
+	if refreshConfiguredAgentCapabilities(&config) {
+		if err := saveHostConfig(filepath.Join(configDir, "config.json"), config); err != nil {
+			return err
+		}
 	}
 	signer, err := loadDeviceSigner(configDir, false)
 	if err != nil {

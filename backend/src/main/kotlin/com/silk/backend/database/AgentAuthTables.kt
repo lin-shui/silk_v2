@@ -48,6 +48,8 @@ object AgentInstances : Table("agent_instances") {
     val displayName = varchar("display_name", 256)
     val connectorVersion = varchar("connector_version", 64)
     val capabilitiesJson = text("capabilities_json")
+    /** Silk-managed Agent runtime overlay; the device's native config remains untouched. */
+    val runtimePermissionMode = varchar("runtime_permission_mode", 32).default("NATIVE_DEFAULT")
     val status = varchar("status", 32)
     val createdAt = datetime("created_at")
     val lastSeenAt = datetime("last_seen_at").nullable()
@@ -66,6 +68,8 @@ object AgentBindings : Table("agent_bindings") {
     val triggerPolicy = varchar("trigger_policy", 32)
     /** Room-local mention route; Workspace bindings keep an internal unique value. */
     val mentionAlias = varchar("mention_alias", 64).default("")
+    /** User-facing two-layer policy. Blank values are migrated from legacy permissions_json. */
+    val accessMode = varchar("access_mode", 32).default("")
     val permissionsJson = text("permissions_json")
     val status = varchar("status", 32)
     val createdBy = varchar("created_by", 128).references(Users.id)

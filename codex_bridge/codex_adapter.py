@@ -73,6 +73,10 @@ class AcpAgentServer:
         self.host_ipc = host_ipc
         self.executor = CodexExecutor(auto_approve=os.environ.get("CODEX_AUTO_APPROVE", "1") not in ("0", "false", "False"))
         self.sessions: dict[str, AcpSession] = {}
+        self._pending_permissions: dict[str, tuple[str, asyncio.Future[bool]]] = {}
+        self._pending_questions: dict[
+            str, tuple[str, asyncio.Future[dict[str, str]], dict[str, str]]
+        ] = {}
 
     # ------------------------------------------------------------------
     # Host IPC loop
@@ -154,6 +158,10 @@ class AcpAgentServer:
                 await self._handle_silk_git_status(msg_id, params)
             elif method == "_silk/git_diff":
                 await self._handle_silk_git_diff(msg_id, params)
+            elif method == "_silk/resolve_permission":
+                await self._handle_silk_resolve_permission(msg_id, params)
+            elif method == "_silk/resolve_question":
+                await self._handle_silk_resolve_question(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -192,6 +200,8 @@ class AcpAgentServer:
                     "listDir": True,            # M3
                     "gitStatus": True,
                     "gitDiff": True,
+                    "resolvePermission": True,
+                    "resolveQuestion": True,
                 },
             },
         }
@@ -277,6 +287,12 @@ class AcpAgentServer:
             logger.info("cancel: unknown sessionId %s", acp_session_id)
             return
         sess.cancelled = True
+        for request_id, (pending_sid, future) in list(self._pending_permissions.items()):
+            if pending_sid == acp_session_id and not future.done():
+                future.set_result(False)
+        for request_id, (pending_sid, future, _) in list(self._pending_questions.items()):
+            if pending_sid == acp_session_id and not future.done():
+                future.set_result({})
         proc = sess.proc_handle
         if proc is None:
             logger.info("cancel: no in-flight codex proc for %s", acp_session_id)
@@ -353,6 +369,16 @@ class AcpAgentServer:
                 cwd=sess.cwd,
                 resume_thread_id=sess.cli_session_id,
                 execution_policy=execution_policy,
+                approval_handler=lambda method, approval_params, item: self._on_permission_request(
+                    acp_session_id,
+                    method,
+                    approval_params,
+                    item,
+                    execution_policy,
+                ),
+                question_handler=lambda question_params: self._on_question_request(
+                    acp_session_id, question_params,
+                ),
             ):
                 kind = ev.get("kind")
 
@@ -477,6 +503,145 @@ class AcpAgentServer:
             msg_id, {"outcome": {"kind": "selected", "optionId": "approve"}}
         )
 
+    async def _on_permission_request(
+        self,
+        acp_session_id: str,
+        method: str,
+        approval_params: dict[str, Any],
+        item: dict[str, Any] | None,
+        execution_policy: ExecutionPolicy,
+    ) -> bool:
+        """Forward a native Codex approval request to Silk and wait for it."""
+        sess = self.sessions.get(acp_session_id)
+        if sess is None or sess.cancelled:
+            return False
+
+        tool_name, tool_input = _codex_permission_tool(method, approval_params, item)
+        denial = _codex_policy_denial(
+            method,
+            approval_params,
+            item,
+            execution_policy,
+            sess.cwd,
+        )
+        if denial is not None:
+            logger.warning(
+                "[ACP] Denying Codex approval outside Silk policy: method=%s reason=%s",
+                method,
+                denial,
+            )
+            return False
+
+        request_id = str(uuid.uuid4())
+        future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        self._pending_permissions[request_id] = (acp_session_id, future)
+        await self._send_notification("session/update", {
+            "sessionId": acp_session_id,
+            "update": {
+                "sessionUpdate": "permission_request",
+                "requestId": request_id,
+                "toolName": tool_name,
+                "toolInput": tool_input,
+            },
+        })
+
+        try:
+            return await asyncio.wait_for(future, timeout=300.0)
+        except asyncio.TimeoutError:
+            logger.warning("[ACP] Codex permission request timed out: %s", request_id[:8])
+            return False
+        finally:
+            self._pending_permissions.pop(request_id, None)
+
+    async def _handle_silk_resolve_permission(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        request_id = p.get("requestId", "")
+        if not request_id:
+            await self._send_error(msg_id, -32602, "Missing requestId")
+            return
+        pending = self._pending_permissions.get(request_id)
+        if pending is None or pending[1].done():
+            await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
+            return
+        pending[1].set_result(p.get("decision") == "allow")
+        logger.info(
+            "[ACP] Codex permission resolved: request=%s decision=%s",
+            request_id[:8],
+            p.get("decision", "deny"),
+        )
+        await self._send_response(msg_id, {"ok": True})
+
+    async def _on_question_request(
+        self,
+        acp_session_id: str,
+        question_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Expose Codex request_user_input through Silk's question card."""
+        request_id = str(uuid.uuid4())
+        questions = question_params.get("questions") or []
+        id_to_question: dict[str, str] = {}
+        normalized: list[dict[str, Any]] = []
+        for index, raw in enumerate(questions):
+            if not isinstance(raw, dict):
+                continue
+            question_id = str(raw.get("id") or index)
+            question_text = str(raw.get("question") or "")
+            id_to_question[question_id] = question_text
+            normalized.append({
+                "header": str(raw.get("header") or ""),
+                "question": question_text,
+                "options": raw.get("options") or [],
+            })
+        if not normalized:
+            return {"answers": {}}
+
+        future: asyncio.Future[dict[str, str]] = asyncio.get_running_loop().create_future()
+        self._pending_questions[request_id] = (acp_session_id, future, id_to_question)
+        await self._send_notification("session/update", {
+            "sessionId": acp_session_id,
+            "update": {
+                "sessionUpdate": "ask_user_question",
+                "requestId": request_id,
+                "questions": normalized,
+            },
+        })
+        try:
+            answers = await asyncio.wait_for(future, timeout=300.0)
+        except asyncio.TimeoutError:
+            logger.warning("[ACP] Codex question request timed out: %s", request_id[:8])
+            answers = {}
+        finally:
+            self._pending_questions.pop(request_id, None)
+
+        return {
+            "answers": {
+                question_id: {"answers": [answers.get(question_text, "")]}
+                for question_id, question_text in id_to_question.items()
+                if question_text in answers
+            }
+        }
+
+    async def _handle_silk_resolve_question(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        request_id = p.get("requestId", "")
+        pending = self._pending_questions.get(request_id)
+        if not request_id:
+            await self._send_error(msg_id, -32602, "Missing requestId")
+            return
+        if pending is None or pending[1].done():
+            await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
+            return
+        answers = p.get("answers")
+        if not isinstance(answers, dict):
+            answers = {}
+        _, future, id_to_question = pending
+        by_question = {
+            id_to_question.get(str(question_id), str(question_id)): str(answer)
+            for question_id, answer in answers.items()
+        }
+        future.set_result(by_question)
+        await self._send_response(msg_id, {"ok": True})
+
     # ------------------------------------------------------------------
     # _silk/* extensions supported by the Codex bridge
     # ------------------------------------------------------------------
@@ -571,6 +736,110 @@ class AcpAgentServer:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _codex_permission_tool(
+    method: str,
+    params: dict[str, Any],
+    item: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    item = item or {}
+    if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
+        return "Bash", {
+            "command": params.get("command") or item.get("command") or "",
+            "cwd": params.get("cwd") or item.get("cwd") or "",
+            "reason": params.get("reason") or "",
+        }
+    if method in ("item/fileChange/requestApproval", "applyPatchApproval"):
+        paths = [
+            str(change.get("path"))
+            for change in (item.get("changes") or [])
+            if isinstance(change, dict) and change.get("path")
+        ]
+        return "Edit", {
+            "file_path": ", ".join(paths),
+            "reason": params.get("reason") or "",
+        }
+    return "Permissions", {
+        "cwd": params.get("cwd") or "",
+        "reason": params.get("reason") or "Codex requested additional permissions.",
+    }
+
+
+def _codex_policy_denial(
+    method: str,
+    params: dict[str, Any],
+    item: dict[str, Any] | None,
+    policy: ExecutionPolicy,
+    working_dir: str,
+) -> str | None:
+    item = item or {}
+    if method in ("item/commandExecution/requestApproval", "execCommandApproval"):
+        if not policy.can_run_codex_shell:
+            return "Silk binding does not grant command execution."
+        command_cwd = params.get("cwd") or item.get("cwd") or working_dir
+        if not _is_within_workspace(str(command_cwd), working_dir):
+            return "Silk binding limits commands to the bound workspace."
+        return None
+
+    if method in ("item/fileChange/requestApproval", "applyPatchApproval"):
+        if not policy.write_file:
+            return "Silk binding does not grant file write access."
+        paths = [
+            change.get("path")
+            for change in (item.get("changes") or [])
+            if isinstance(change, dict) and change.get("path")
+        ]
+        if not paths:
+            return "Silk could not verify the requested file paths."
+        if any(not _is_within_workspace(str(path), working_dir) for path in paths):
+            return "Silk binding limits file changes to the bound workspace."
+        return None
+
+    if method == "item/permissions/requestApproval":
+        permissions = params.get("permissions") or {}
+        network = permissions.get("network") or {}
+        if network.get("enabled") is True and not policy.run_command:
+            return "Silk binding does not grant command/network expansion."
+        file_system = permissions.get("fileSystem") or {}
+        for access, paths in (
+            ("read", file_system.get("read") or []),
+            ("write", file_system.get("write") or []),
+        ):
+            if access == "read" and not policy.read_file:
+                return "Silk binding does not grant file read access."
+            if access == "write" and not policy.write_file:
+                return "Silk binding does not grant file write access."
+            if any(not _is_within_workspace(str(path), working_dir) for path in paths):
+                return "Silk binding limits additional file permissions to the workspace."
+        for entry in file_system.get("entries") or []:
+            if not isinstance(entry, dict):
+                return "Silk could not verify the requested filesystem permission."
+            access = entry.get("access")
+            if access == "read" and not policy.read_file:
+                return "Silk binding does not grant file read access."
+            if access == "write" and not policy.write_file:
+                return "Silk binding does not grant file write access."
+            path_spec = entry.get("path") or {}
+            if path_spec.get("type") != "path" or not _is_within_workspace(
+                str(path_spec.get("path") or ""), working_dir,
+            ):
+                return "Silk could not confine the requested filesystem permission."
+        return None
+
+    return "Unsupported Codex approval request."
+
+
+def _is_within_workspace(candidate: str, working_dir: str) -> bool:
+    root = os.path.realpath(working_dir)
+    expanded = os.path.expanduser(candidate)
+    path = os.path.realpath(
+        expanded if os.path.isabs(expanded) else os.path.join(root, expanded)
+    )
+    try:
+        return os.path.commonpath((root, path)) == root
+    except ValueError:
+        return False
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
