@@ -28,7 +28,7 @@ data class WorkspaceDto(
     val workingDir: String = "",
     val agentType: String = "claude-code",
     val activeAgentInstanceId: String = "",
-    val accessMode: String = "",
+    val accessMode: String? = null,
     val visibility: String = "PRIVATE",
     val copilots: List<String> = emptyList(),
     val role: String = "OBSERVER",
@@ -96,7 +96,7 @@ class WorkspaceApiException(
     val bridgeId: String? = null,
 ) : Exception(message)
 
-private val workspaceJson = Json {
+internal val workspaceJson = Json {
     ignoreUnknownKeys = true
     encodeDefaults = false
     explicitNulls = false
