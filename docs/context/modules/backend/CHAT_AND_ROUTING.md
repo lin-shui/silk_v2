@@ -61,6 +61,11 @@
   - `/api/asr/transcribe`
 - `routes/ObsidianRoutes.kt`:
   - `GET /api/obsidian/sync` — 一键导出用户所有群聊 + KB 条目的 Obsidian Markdown
+- `routes/DshBotRoutes.kt`（dsh-superagent 集成 bot，见 `docs/context/planning/exec-plans/2026-11-03-dsh-superagent-im-pivot-plan.md`）:
+  - `POST /api/dsh-bot/token` / `GET /api/dsh-bot/token-info` — bot token 生命周期（单有效 token，regenerate 撤旧）
+  - `GET /api/dsh-bot/me` / `POST /api/dsh-bot/join` — Bearer token 鉴权；按邀请码以 GUEST 入群
+  - `GET /api/dsh-bot/messages?groupId&since&limit` — 时间游标拉群消息（含 `bot` 标记，取自 `AgentRuntime.isAgentUserId`）
+  - `POST /api/dsh-bot/messages` — 以 bot（固定 userId `dsh_ai_agent`）幂等发消息：`idempotencyKey` → `dsh_<key>` 消息 ID，与 `ChatServer.broadcast` 去重同源，重试不重复落盘/广播；不触发 Silk AI / ACP agent / cc-connect 路由
 
 ## ChatServer Flow
 

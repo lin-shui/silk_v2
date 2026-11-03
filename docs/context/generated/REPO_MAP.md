@@ -42,7 +42,7 @@
 | `kb/` | Knowledge Base JSON store + exporter + AI Copilot（`KnowledgeBaseCopilot.kt`）+ AI Actions（`KnowledgeBaseAiActions.kt`）+ Memory Layer（`KnowledgeBaseMemory.kt`）+ Prompt Context（`KnowledgeBasePromptContext.kt`）+ Context Preference（`KnowledgeBaseContextPreferenceStore.kt`）+ Embedding（`KnowledgeBaseEmbedding.kt`）+ Obsidian 导出 |
 | `trust/` | Workflow directory trust store |
 | `export/` | Chat 导出 |
-| `routes/` | 已拆出的文件/ASR 路由 |
+| `routes/` | 已拆出的文件/ASR/dsh-bot 路由 |
 | `utils/` | 网页下载器等 |
 
 ## Frontend Surfaces
