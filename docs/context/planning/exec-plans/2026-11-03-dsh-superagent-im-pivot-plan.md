@@ -30,7 +30,11 @@ dsh 的 Source 走 CLI 子进程模式（飞书 `lark-cli`、GitHub `gh`），�
 
 ## 阶段计划
 
-### P0 最小链路（先跑通再说）
+### P0 最小链路（先跑通再说）——代码已完成（2026-11-03）
+
+- silk 侧（分支 `feat/dsh-superagent-integration`，commit `568ed80`）：`routes/DshBotRoutes.kt`（token/me/join/pull/幂等 send）、`dsh/` 包（bot 身份 + token 仓库）、`dshbot_tokens` 表、`AgentRuntime.DSH_BOT_USER_ID` 白名单、`DshBotRoutesTest`（`./gradlew :backend:test` 268/0）。
+- dsh 侧（`lin-shui/dsh-superagent-prototype` main，commit `b64a500`）：`src/sources/silk.ts` Source kind + `scripts/silk-cli.mjs`（SILK_URL/SILK_BOT_TOKEN 环境变量），`pnpm check` 1203/0；CLI 已对合同 stub 完成对接冒烟（pull/mention/游标/410 gone）。
+- 剩余：真实 DSH 运行时部署联调（DeepSeek Harness + 模型密钥 + executor 仓库 checkout），群内 @DSH → Ticket → 回群消息全链路验证。接入步骤：silk `POST /api/dsh-bot/token` → `silk-cli join --code <邀请码>` → dsh 面板启用 Silk Source 并配置群。
 
 silk 侧（改动刻意最小，守住"就做 IM"）：
 1. 梳理 `GET /api/messages/poll/{groupId}?since=`（`Routing.kt`）作为 pull 基础；补 bot token 鉴权（token 存储可复用 `ccconnect/CcConnectTokenRepository` 模式）。
