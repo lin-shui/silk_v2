@@ -36,6 +36,15 @@ dsh 的 Source 走 CLI 子进程模式（飞书 `lark-cli`、GitHub `gh`），�
 - dsh 侧（`lin-shui/dsh-superagent-prototype` main，commit `b64a500`）：`src/sources/silk.ts` Source kind + `scripts/silk-cli.mjs`（SILK_URL/SILK_BOT_TOKEN 环境变量），`pnpm check` 1203/0；CLI 已对合同 stub 完成对接冒烟（pull/mention/游标/410 gone）。
 - 剩余：真实 DSH 运行时部署联调（DeepSeek Harness + 模型密钥 + executor 仓库 checkout），群内 @DSH → Ticket → 回群消息全链路验证。接入步骤：silk `POST /api/dsh-bot/token` → `silk-cli join --code <邀请码>` → dsh 面板启用 Silk Source 并配置群。
 
+### 部署进展（2026-11-03，ubuntu-silk-open 容器）
+
+- 已装：tmux 3.4、gh 2.45（官方源不可达，低于文档建议的 2.48，功能路径未受影响）、`@deepseek-ai/dsh@0.2.1-rc.3`。
+- DSH profile `superagent`（`~/.dsh/profiles/superagent`）：webserver 127.0.0.1:3082（DSH 拒绝 0.0.0.0），`dsh-superagent` stateDir `/home/silk/.dsh/state/superagent`，启用 `dsh-superagent-silk`，`llm-deepseek` 用 `DEEPSEEK_API_KEY`（key 复用容器内既有 Claude 配置，DSH 无需另配账号）。
+- silk dev 实例：`/tmp/silk-dev`（独立库/历史/端口 36790），未触碰生产实例；bot token 已签发、以 GUEST 入群。**真实后端全链路已验证**：token → join → me → `/api/messages/send` 人类消息 → bot pull（`bot` 标记正确）→ 幂等 reply（sent → duplicate，历史仅一条）。
+- DSH 设置已保存：`source:silk`（群 `3f7c2a1e-…`、listen all、poll 10s）、`policy.sources.silk.allowed=[u_alice]`、`executor`（directory `/home/silk/work/dsh`，prepare 用 `git worktree add` 从 `/home/silk/src/dsh-repo` 自举仓库出 worktree）。
+- 接线：`/usr/local/bin/silk-cli` → 仓库 `scripts/silk-cli.mjs`；`/home/silk/dsh-superagent.sh` 包装启动脚本（注入 SILK_URL/SILK_BOT_TOKEN/DEEPSEEK_API_KEY）。
+- **唯一剩余阻塞**：GitHub agent 账号未登录（`agentCliSignedOut`），需操作者在容器内 `~/.local/bin/gh-agent auth login`；其余均已就绪。
+
 silk 侧（改动刻意最小，守住"就做 IM"）：
 1. 梳理 `GET /api/messages/poll/{groupId}?since=`（`Routing.kt`）作为 pull 基础；补 bot token 鉴权（token 存储可复用 `ccconnect/CcConnectTokenRepository` 模式）。
 2. 新增"以机器人身份幂等发消息"HTTP 端点（幂等 key 语义对齐 dsh `message.id`）。
