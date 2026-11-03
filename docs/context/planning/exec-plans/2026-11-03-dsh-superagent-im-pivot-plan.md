@@ -67,7 +67,8 @@ agent 账号为 `lin-shui-bot`（专用账号，对 `lin-shui/dsh-superagent-pro
 - dsh：`feat/silk-source` → **PR #2 已合并**（`37c7167`）。
 - 合并后 develop 的 `Backend + Web + Desktop`、`Android Debug Kotlin Compile` 两个检查均通过。
 - 环境注意：容器内 gh 2.45 的 `gh pr edit` 会因 Projects classic GraphQL 弃用而失败，改 body 用 REST `PATCH /repos/.../pulls/<n>`；`gh pr create` 正常。
-- 已知 flaky：`BackendFileContractTest > file upload broadcasts stable file payload to live chat and history replay` 在 CI 偶发失败（本地稳定、重跑即绿），与本轮改动无关，待单独修复。
+- 已知 flaky（已修复）：`BackendFileContractTest > file upload broadcasts stable file payload to live chat and history replay` 的偶发失败来自 `ChatHistoryManager` 读-改-写未加 per-session 锁（上传预览消息与 FILE 消息并发写历史互相覆盖），PR #157 已用 `withSessionLock` 串行化。
+- 当前 develop 汇总：#154（bot HTTP 面）、#155（CI 恢复）、#156（本状态文档）、#157（历史写竞态）均已合并；dsh 侧 #2 已合并。
 - 执行环境：`executor.prepare` 已改为先 `git fetch --prune` 再 `worktree add`，新工单从最新 `origin/main` 开分支。
 
 silk 侧（改动刻意最小，守住"就做 IM"）：
