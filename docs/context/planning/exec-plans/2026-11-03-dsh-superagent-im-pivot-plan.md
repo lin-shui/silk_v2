@@ -61,12 +61,14 @@ agent 账号为 `lin-shui-bot`（专用账号，对 `lin-shui/dsh-superagent-pro
 - dev 实例的数据在 `/tmp/silk-dev`（重启即失），DSH 服务需用 `/home/silk/dsh-superagent.sh` 启动以注入 silk/模型凭据。
 - DSH 的 `github` Source 在跑（60s 轮询），会对自举仓库的 GitHub 通知产生额外工单；如需只留 silk，可在 `source:github` 关闭（但部署仍要求 gh 账号可用）。
 
-### 分支与 PR 状态（2026-11-03）
+### 分支与 PR 状态（2026-11-03，已全部合入）
 
-- silk：`feat/dsh-superagent-integration` 已推送（`origin`，含 4 个提交）。**PR 待操作者创建**：bot 账号 (`lin-shui-bot`) 对 `silk_v2` 只有读权限（GitHub 拒绝：`must be a collaborator`），请用 `lin-shui` 打开
-  `https://github.com/lin-shui/silk_v2/compare/develop...feat/dsh-superagent-integration?expand=1`。
-- dsh：`feat/silk-source` 已推送，PR **#2** 已由 `lin-shui-bot` 创建（base `main`）；PR #1（E2E 产物）已由操作者合并。
+- silk：`feat/dsh-superagent-integration` → **PR #154 已合并**（squash 到 develop，`37877a4`）；CI 修复 **PR #155 已合并**（`8da8331`）。
+- dsh：`feat/silk-source` → **PR #2 已合并**（`37c7167`）。
+- 合并后 develop 的 `Backend + Web + Desktop`、`Android Debug Kotlin Compile` 两个检查均通过。
 - 环境注意：容器内 gh 2.45 的 `gh pr edit` 会因 Projects classic GraphQL 弃用而失败，改 body 用 REST `PATCH /repos/.../pulls/<n>`；`gh pr create` 正常。
+- 已知 flaky：`BackendFileContractTest > file upload broadcasts stable file payload to live chat and history replay` 在 CI 偶发失败（本地稳定、重跑即绿），与本轮改动无关，待单独修复。
+- 执行环境：`executor.prepare` 已改为先 `git fetch --prune` 再 `worktree add`，新工单从最新 `origin/main` 开分支。
 
 silk 侧（改动刻意最小，守住"就做 IM"）：
 1. 梳理 `GET /api/messages/poll/{groupId}?since=`（`Routing.kt`）作为 pull 基础；补 bot token 鉴权（token 存储可复用 `ccconnect/CcConnectTokenRepository` 模式）。
@@ -90,4 +92,4 @@ silk 的 `backend/agents/`、`workflow/`、`ccconnect/` 停止演进，仅修 bu
 - 群 = Thread 意味着单群内评估串行，多活群之间互不影响；若未来需要更细粒度再引入引用链。
 - dsh 原型面向"一个 GitHub 仓库"，executor 仓库已定为 dsh-superagent-prototype 自身（自举）。
 - 本分支不动 `docs/todo-roadmap.md`（human-maintained）。
-- **lint 基线（2026-11-03 确认）**：origin/develop HEAD 上 `./gradlew silkLint` 本身就是红的（backend `ai/ClaudeProcessClient.kt`、`Routing.kt:2616` 与 frontend/shared `PlatformWebSocket.js.kt` 共 45 条存量 detekt 报点，来自最近一次 develop 提交）。本分支改动零新增 detekt 报点；存量修复不在本分支范围，另行处理。
+- **lint 基线（2026-11-03 已清理）**：origin/develop 上原有的 45 条存量 detekt 报点（backend `ai/ClaudeProcessClient.kt`、`Routing.kt` poll 端点、frontend/shared `PlatformWebSocket.js.kt`）已由 PR #155 清零，`silkLint` 恢复全绿；同时把两处 `android-actions/setup-android` 升到 `v4`（runner 镜像已移除 `tools` 包）。
