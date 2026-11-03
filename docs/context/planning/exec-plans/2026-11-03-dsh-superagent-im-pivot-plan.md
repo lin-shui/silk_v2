@@ -45,6 +45,22 @@ dsh 的 Source 走 CLI 子进程模式（飞书 `lark-cli`、GitHub `gh`），�
 - 接线：`/usr/local/bin/silk-cli` → 仓库 `scripts/silk-cli.mjs`；`/home/silk/dsh-superagent.sh` 包装启动脚本（注入 SILK_URL/SILK_BOT_TOKEN/DEEPSEEK_API_KEY）。
 - **唯一剩余阻塞**：GitHub agent 账号未登录（`agentCliSignedOut`），需操作者在容器内 `~/.local/bin/gh-agent auth login`；其余均已就绪。
 
+### 端到端验收通过（2026-11-03）
+
+agent 账号为 `lin-shui-bot`（专用账号，对 `lin-shui/dsh-superagent-prototype` 有 push 权限）。真实链路已验证：
+
+1. Alice 在 dev silk 群发 `@DSH 请在 README 的 Documentation 列表里加一行…写完开个 PR`。
+2. silk Source 10s 轮询收到 Trigger（`addressed: mention`）→ Eval `accept`（explicit）→ 建工单 → 先回群确认「好的，会…」。
+3. Executor 在 `/home/silk/work/dsh/<ticket>` worktree 干活，以 `lin-shui-bot` 身份推送分支 `agent/readme-doc-source-line-<id>` 并开 PR #1（README +1 行）。
+4. 终报落回群：「已提交 [PR #1](…)，可以审阅了；合并需要你来点」。
+
+**踩坑记录（重要）**：不要在工单仓库里设 `credential.helper`——dsh 的 `verifyDirectory` 会拒绝 repo-local 的 `credential.*` / `http.*extraheader`（防止 agent 读到仓库自带凭据）。dsh 已在 stateDir 生成 `worker-gitconfig`，把 `credential.https://github.com.helper` 指向部署的 `gh-agent`，并把 `git@github.com:` 重写为 HTTPS；克隆只需保留干净的 remote（HTTPS 即可）。
+
+**v1 已知缺口**：
+- silk 工单不跟随 PR 生命周期（GitHub Source 才把 PR 绑定到 Thread），PR 合并后工单不会自动结束；需要在面板手工停止或后续实现 `bindThread`。
+- dev 实例的数据在 `/tmp/silk-dev`（重启即失），DSH 服务需用 `/home/silk/dsh-superagent.sh` 启动以注入 silk/模型凭据。
+- DSH 的 `github` Source 在跑（60s 轮询），会对自举仓库的 GitHub 通知产生额外工单；如需只留 silk，可在 `source:github` 关闭（但部署仍要求 gh 账号可用）。
+
 silk 侧（改动刻意最小，守住"就做 IM"）：
 1. 梳理 `GET /api/messages/poll/{groupId}?since=`（`Routing.kt`）作为 pull 基础；补 bot token 鉴权（token 存储可复用 `ccconnect/CcConnectTokenRepository` 模式）。
 2. 新增"以机器人身份幂等发消息"HTTP 端点（幂等 key 语义对齐 dsh `message.id`）。
