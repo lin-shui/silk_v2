@@ -61,6 +61,13 @@ agent 账号为 `lin-shui-bot`（专用账号，对 `lin-shui/dsh-superagent-pro
 - dev 实例的数据在 `/tmp/silk-dev`（重启即失），DSH 服务需用 `/home/silk/dsh-superagent.sh` 启动以注入 silk/模型凭据。
 - DSH 的 `github` Source 在跑（60s 轮询），会对自举仓库的 GitHub 通知产生额外工单；如需只留 silk，可在 `source:github` 关闭（但部署仍要求 gh 账号可用）。
 
+### 分支与 PR 状态（2026-11-03）
+
+- silk：`feat/dsh-superagent-integration` 已推送（`origin`，含 4 个提交）。**PR 待操作者创建**：bot 账号 (`lin-shui-bot`) 对 `silk_v2` 只有读权限（GitHub 拒绝：`must be a collaborator`），请用 `lin-shui` 打开
+  `https://github.com/lin-shui/silk_v2/compare/develop...feat/dsh-superagent-integration?expand=1`。
+- dsh：`feat/silk-source` 已推送，PR **#2** 已由 `lin-shui-bot` 创建（base `main`）；PR #1（E2E 产物）已由操作者合并。
+- 环境注意：容器内 gh 2.45 的 `gh pr edit` 会因 Projects classic GraphQL 弃用而失败，改 body 用 REST `PATCH /repos/.../pulls/<n>`；`gh pr create` 正常。
+
 silk 侧（改动刻意最小，守住"就做 IM"）：
 1. 梳理 `GET /api/messages/poll/{groupId}?since=`（`Routing.kt`）作为 pull 基础；补 bot token 鉴权（token 存储可复用 `ccconnect/CcConnectTokenRepository` 模式）。
 2. 新增"以机器人身份幂等发消息"HTTP 端点（幂等 key 语义对齐 dsh `message.id`）。
