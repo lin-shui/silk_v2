@@ -120,6 +120,8 @@ frontend 轻量快检：
 ## 运行备注
 
 - Android job 会显式安装 SDK 并生成 `local.properties`，避免 runner 环境差异导致评估期直接失败。
+- `android-actions/setup-android` 固定在 `v4`（`ci-fast-validation.yml` 与 `ci-script-smoke.yml` 两处）：新版 runner 镜像的 cmdline-tools 已移除 `tools` 包，`v3` 在 setup 阶段会直接失败（`Failed to find package 'tools'`）。
+- 2026-11-03 清理了基线外的存量 detekt 报点（`ClaudeProcessClient` 流式读取拆分、`Routing` 枚举解析收窄异常、浏览器 `PlatformWebSocket` 的 catch/XHR 清理），`silkLint` 恢复全绿。
 - Gradle wrapper 在 GitHub-hosted runner 上会临时改回 `services.gradle.org`，避免镜像可达性造成非业务失败。
 - 目前 `:backend:test` 已经是有意义的快检入口；后续新增 backend 能力时，优先往这里补真实测试，不要再加占位测试。
 - 文件相关快检默认不依赖外部索引服务；未配置时只验证本地路径和 HTTP 合同，不把外部索引可用性混进基础快检。
