@@ -87,6 +87,7 @@ import com.silk.backend.models.Workflow
 import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.agentChangesRoutes
 import com.silk.backend.routes.asrRoutes
+import com.silk.backend.routes.dshBotRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.routes.obsidianRoutes
 import com.silk.backend.agents.acp.AcpRegistry
@@ -348,6 +349,7 @@ fun Application.configureRouting() {
         agentBridgeRoute()
         ccConnectBridgeRoute()
         ccConnectApiRoutes()
+        dshBotRoutes()
         workflowKbRoutes()
         pollMessagesRoute()
         obsidianRoutes()

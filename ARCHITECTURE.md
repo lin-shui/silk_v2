@@ -47,7 +47,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Surface | Primary Paths | Notes |
 | --- | --- | --- |
 | App/bootstrap | `Application.kt`, `settings.gradle.kts`, root `build.gradle.kts`, `silk.sh` | 运行入口与构建编排 |
-| HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt`, `routes/ObsidianRoutes.kt` | `Routing.kt` 仍然很大，是主索引点；`AgentChangesRoutes` 是只读代码审查（Source Control）路由；`ObsidianRoutes` 提供 `/api/obsidian/sync` 一键导出 |
+| HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt`, `routes/ObsidianRoutes.kt`, `routes/DshBotRoutes.kt` | `Routing.kt` 仍然很大，是主索引点；`AgentChangesRoutes` 是只读代码审查（Source Control）路由；`ObsidianRoutes` 提供 `/api/obsidian/sync` 一键导出；`DshBotRoutes` 是 dsh-superagent 集成 bot 的 HTTP 面 |
 | Obsidian integration | `obsidian-plugin/silk-sync/` | Obsidian 插件，一键同步 Silk 聊天记录和 KB 条目到 vault |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt` | 消息主链、历史、URL 下载 |
 | Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
@@ -85,6 +85,15 @@ Silk 支持通过 [cc-connect](https://github.com/chenhg5/cc-connect) 连接外�
 - 路由：`Routing.kt` → `/ccconnect-bridge` WebSocket + token 管理 API
 - 消息路由：`WebSocketConfig.kt` → `CcConnectRegistry.isConnected()` + `GroupRepository.getMemberRole()` 角色检查（HOST / OPERATOR 可转发）优先于 AgentRuntime/Silk AI
 - 插件：`platform/silk/silk.go`（位于 [cc-connect 仓库](https://github.com/chenhg5/cc-connect)，实现 `StreamingCardPlatform`；本地不再保留副本）
+
+## dsh-superagent Integration
+
+多人协作编排由外部 [dsh-superagent-prototype](https://github.com/lin-shui/dsh-superagent-prototype) 承担；Silk 回归 IM 本体，仅以集成 bot 身份作为 dsh 的一个 Source。设计决策与阶段计划见 `docs/context/planning/exec-plans/2026-11-03-dsh-superagent-im-pivot-plan.md`。
+
+- bot 是固定身份的用户 `dsh_ai_agent`（显示名 DSH，不可登录），以 GUEST 角色按邀请码入群；谁能发起工作由 dsh 侧 Policy 决定，silk 不赋予触发权。
+- `routes/DshBotRoutes.kt` 提供 HTTP 面：token 生命周期（`dshbot_tokens` 表，单有效 token）、`me`/`join`、按时间游标拉群消息、幂等发消息（`dsh_<idempotencyKey>` 消息 ID 与 `ChatServer.broadcast` 去重同源）。
+- bot 消息不触发 Silk AI / ACP agent / cc-connect 路由：`AgentRuntime.isAgentUserId` 白名单含 `DSH_BOT_USER_ID`。
+- 映射约定：一个 silk 群 = 一个 dsh Thread；群消息 = Trigger；回复走幂等 Channel send。
 
 ## Context Docs
 

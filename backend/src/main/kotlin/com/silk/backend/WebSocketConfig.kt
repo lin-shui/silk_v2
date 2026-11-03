@@ -451,6 +451,14 @@ class ChatServer(
     }
 
     /**
+     * 判断某条持久化消息是否已存在（与 broadcast 去重同一数据源，含重启后从历史回放的部分），
+     * 供 dsh bot 等外部集成实现幂等发送。
+     */
+    fun hasPersistedMessage(messageId: String): Boolean {
+        return messageHistory.any { it.id == messageId }
+    }
+
+    /**
      * 检查消息是否需要持久化（非临时消息）
      */
     private fun isPersistableNewMessage(message: Message): Boolean {

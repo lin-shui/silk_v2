@@ -95,6 +95,19 @@ object CcConnectTokens : Table("ccconnect_tokens") {
 }
 
 /**
+ * DshBotTokens 表：dsh-superagent 集成 bot 的访问 token
+ * 同一时间只有一个有效 token（regenerate 时先清空），token 绑定 bot 的固定 userId
+ */
+object DshBotTokens : Table("dshbot_tokens") {
+    val token = varchar("token", 64).uniqueIndex()
+    val userId = varchar("user_id", 128)
+    val label = varchar("label", 256)
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(token)
+}
+
+/**
  * HuaweiAccounts 表：华为账号绑定，将华为 openId 与 Silk 用户关联
  */
 object HuaweiAccounts : Table("huawei_accounts") {
