@@ -2611,7 +2611,7 @@ private fun Route.pollMessagesRoute() {
                 userName = entry.senderName,
                 content = entry.content,
                 timestamp = entry.timestamp,
-                type = try { MessageType.valueOf(entry.messageType) } catch (e: Exception) { MessageType.TEXT },
+                type = try { MessageType.valueOf(entry.messageType) } catch (_: IllegalArgumentException) { MessageType.TEXT },
                 references = emptyList(),
                 contentBlocks = null,
                 interactiveOptions = null,

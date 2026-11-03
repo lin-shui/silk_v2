@@ -4,6 +4,7 @@ import org.w3c.dom.WebSocket as BrowserWebSocket
 import org.w3c.dom.MessageEvent
 import org.w3c.dom.events.Event
 import kotlinx.browser.window
+import org.w3c.xhr.XMLHttpRequest
 
 actual class PlatformWebSocket actual constructor(
     private val serverUrl: String,
@@ -38,7 +39,7 @@ actual class PlatformWebSocket actual constructor(
         try {
             ws?.let { old ->
                 old.onclose = null; old.onerror = null; old.onmessage = null; old.onopen = null
-                try { old.close(1000, "Switching group") } catch (e: dynamic) {}
+                try { old.close(1000, "Switching group") } catch (_: dynamic) {}
             }
 
             val safeName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
@@ -57,7 +58,10 @@ actual class PlatformWebSocket actual constructor(
             ws?.onclose = { window.clearTimeout(timer); if (!pollingMode && !isDisconnecting) { startPolling() } else if (!isDisconnecting && !pollingMode) { onDisconnected() } }
             ws?.onerror = { window.clearTimeout(timer); startPolling() }
             ws?.onmessage = { e -> val d = e.data; if (d is String) onMessage(d) }
-        } catch (e: dynamic) { startPolling() }
+        } catch (e: dynamic) {
+            onError(errorMessage(e))
+            startPolling()
+        }
     }
 
     private fun startPolling() {
@@ -83,11 +87,14 @@ actual class PlatformWebSocket actual constructor(
                             historyEndSent = true
                             onMessage("{\"id\":\"history_end\",\"userId\":\"\",\"userName\":\"\",\"content\":\"__history_end__\",\"timestamp\":0,\"type\":\"SYSTEM\",\"isTransient\":true}")
                         }
-                    } catch (e: dynamic) { log("⚠️ Poll parse: $text") }
+                    } catch (e: dynamic) { log("⚠️ Poll parse: $text (${errorMessage(e)})") }
                     if (!isDisconnecting) window.setTimeout({ doPoll() }, 2000)
                 })
             }).catch({ if (!isDisconnecting) window.setTimeout({ doPoll() }, 5000) })
-        } catch (e: dynamic) { if (!isDisconnecting) window.setTimeout({ doPoll() }, 5000) }
+        } catch (e: dynamic) {
+            log("⚠️ Poll request: " + errorMessage(e))
+            if (!isDisconnecting) window.setTimeout({ doPoll() }, 5000)
+        }
     }
 
     private fun stopPolling() { pollingMode = false }
@@ -98,15 +105,13 @@ actual class PlatformWebSocket actual constructor(
                 val json = js("JSON")
                 val msgObj = json.parse(message)
                 msgObj.groupId = currentGroupId
-                val newBody = json.stringify(msgObj)
-                val sendUrl = httpBaseUrl + "/api/messages/send"
-                js("""
-                    var xhr = new XMLHttpRequest();
-                    xhr.open("POST", sendUrl, false);
-                    xhr.setRequestHeader("Content-Type", "application/json");
-                    xhr.send(newBody);
-                    if (xhr.status !== 200) throw new Error("HTTP " + xhr.status + ": " + xhr.responseText);
-                """)
+                val request = XMLHttpRequest()
+                request.open("POST", httpBaseUrl + "/api/messages/send", false)
+                request.setRequestHeader("Content-Type", "application/json")
+                request.send(json.stringify(msgObj))
+                if (request.status.toInt() != 200) {
+                    error("HTTP ${request.status}: ${request.responseText}")
+                }
                 log("✅ [HTTP Polling] sent")
             } catch (e: dynamic) { log("❌ [HTTP Polling] send: " + errorMessage(e)) }
         } else if (ws?.readyState == BrowserWebSocket.OPEN) {
@@ -116,7 +121,7 @@ actual class PlatformWebSocket actual constructor(
 
     actual fun disconnect() {
         isDisconnecting = true; stopPolling()
-        try { ws?.close(1000, "Client disconnecting"); ws = null } catch (e: dynamic) {}
+        try { ws?.close(1000, "Client disconnecting"); ws = null } catch (_: dynamic) {}
         onDisconnected()
     }
 }

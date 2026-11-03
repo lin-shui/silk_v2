@@ -31,6 +31,9 @@ class ClaudeProcessClient(
 ) {
     private val logger = LoggerFactory.getLogger(ClaudeProcessClient::class.java)
 
+    /** tool 标记后无新输出多久视为挂起（毫秒）。 */
+    private val toolIdleTimeoutMs = 60_000L
+
     /** 从 ~/.claude/settings.json 读取环境变量注入子进程 */
     private val claudeEnvVars: Map<String, String> by lazy {
         val settingsFile = java.io.File(System.getProperty("user.home"), ".claude/settings.json")
@@ -203,102 +206,82 @@ class ClaudeProcessClient(
 
     /**
      * 读取子进程 stdout，按阈值流式回调增量文本，返回累计的完整文本。
-     * 与原内联读取循环等价：清理 ANSI/回车，处理跨 read 边界的不完整 UTF-8 尾字节，
+     * 清理 ANSI/回车，处理跨 read 边界的不完整 UTF-8 尾字节，
      * 累计长度达到 sendThreshold 时回调增量，结束后回调剩余文本。
      */
     private suspend fun streamProcessOutput(
         process: Process,
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
     ): String {
-        val output = StringBuilder()
-        var lastSentLength = 0
+        val cursor = StreamCursor(callback, sendThreshold)
         var overflow = ByteArray(0)
         var lastReceiveTime = System.currentTimeMillis()
-        var hasToolMarker = false
-
-        // 使用非阻塞读取 + 超时检测，避免 tool 调用后无后续输出导致永久挂起
         val inputStream = process.inputStream
-        val timeoutAfterToolMs = 60_000L  // tool 标记后 60 秒无新输出则断开
         var shouldStop = false
 
+        // 非阻塞读取 + 空闲超时检测，避免 tool 调用后无后续输出导致永久挂起
         while (!shouldStop) {
-            // 带超时的非阻塞读取
-            val avail = try {
-                inputStream.available()
-            } catch (e: java.io.IOException) {
-                logger.warn("[ClaudeProcessClient] 检查 available 异常: {}", e.message)
-                break
-            }
-
-            if (avail > 0) {
-                val readBuf = ByteArray(minOf(avail, 4096))
-                val bytesRead = try {
-                    inputStream.read(readBuf)
-                } catch (e: java.io.IOException) {
-                    logger.warn("[ClaudeProcessClient] 读取流异常: {}", e.message)
-                    break
-                }
-                if (bytesRead == -1) break
+            val chunk = readChunkOrNull(inputStream) ?: break
+            if (chunk.isEmpty()) {
+                shouldStop = idleAfterTool(cursor.hasToolMarker, lastReceiveTime)
+                if (!shouldStop) delay(500)
+            } else {
                 currentCoroutineContext().ensureActive()
                 lastReceiveTime = System.currentTimeMillis()
-
-                val merged = if (overflow.isNotEmpty()) {
-                    ByteArray(overflow.size + bytesRead).apply {
-                        overflow.copyInto(this)
-                        readBuf.copyInto(this, overflow.size, 0, bytesRead)
-                    }
-                } else {
-                    readBuf.copyOfRange(0, bytesRead)
-                }
-
+                val merged = mergeOverflow(overflow, chunk)
                 val decoded = merged.decodeToString()
                 overflow = captureTrailingPartial(decoded, merged)
-
-                val cleaned = decoded
-                    .replace("\r", "")
-                    .replace(Regex("\\e\\[[\\d;?<>]*[a-zA-Z]"), "")
-                    .replace(Regex("\\e\\][^\\e\\x07]*[\\e\\x07]"), "")
-                    .replace(Regex("\\e[()][a-zA-Z]"), "")
-
-                if (cleaned.isNotBlank()) {
-                    output.append(cleaned)
-                    // 检测 tool 标记
-                    if (!hasToolMarker && (cleaned.contains("<!--TOOL") || cleaned.contains("<!--END_TOOL-->"))) {
-                        hasToolMarker = true
-                    }
-
-                    if (output.length - lastSentLength >= sendThreshold) {
-                        val delta = output.substring(lastSentLength)
-                        lastSentLength = output.length
-                        callback("streaming_incremental", delta, false)
-                    }
-                }
-            } else {
-                // 无数据可用：检查 tool 超时
-                if (hasToolMarker) {
-                    val idle = System.currentTimeMillis() - lastReceiveTime
-                    if (idle > timeoutAfterToolMs) {
-                        logger.warn("[ClaudeProcessClient] tool 调用后 {}ms 无新输出，主动断开", idle)
-                        shouldStop = true
-                    }
-                }
-                // 短暂休眠避免 busy-wait
-                if (!shouldStop) {
-                    kotlinx.coroutines.delay(500)
-                }
+                cursor.append(sanitizeAnsi(decoded))
             }
         }
 
-        // 发送剩余文本
-        if (output.length > lastSentLength) {
-            val remaining = output.substring(lastSentLength)
-            if (remaining.isNotBlank()) {
-                callback("streaming_incremental", remaining, false)
-            }
-        }
-
-        return output.toString()
+        cursor.finish()
+        return cursor.output.toString()
     }
+
+    /** 读取当前可用的字节；暂无数据时返回空数组；流结束或 IO 异常时返回 null。 */
+    private fun readChunkOrNull(inputStream: java.io.InputStream): ByteArray? {
+        val available = try {
+            inputStream.available()
+        } catch (e: java.io.IOException) {
+            logger.warn("[ClaudeProcessClient] 检查 available 异常: {}", e.message)
+            return null
+        }
+        if (available <= 0) return ByteArray(0)
+        val readBuf = ByteArray(minOf(available, 4096))
+        return try {
+            val bytesRead = inputStream.read(readBuf)
+            if (bytesRead < 0) null else readBuf.copyOfRange(0, bytesRead)
+        } catch (e: java.io.IOException) {
+            logger.warn("[ClaudeProcessClient] 读取流异常: {}", e.message)
+            null
+        }
+    }
+
+    /** 把跨 read 边界的残留字节拼到本次读取之前。 */
+    private fun mergeOverflow(overflow: ByteArray, chunk: ByteArray): ByteArray {
+        if (overflow.isEmpty()) return chunk
+        return ByteArray(overflow.size + chunk.size).apply {
+            overflow.copyInto(this)
+            chunk.copyInto(this, overflow.size)
+        }
+    }
+
+    /** tool 标记后长时间无输出：返回 true 表示应主动断开。 */
+    private fun idleAfterTool(hasToolMarker: Boolean, lastReceiveTime: Long): Boolean {
+        if (!hasToolMarker) return false
+        val idle = System.currentTimeMillis() - lastReceiveTime
+        if (idle <= toolIdleTimeoutMs) return false
+        logger.warn("[ClaudeProcessClient] tool 调用后 {}ms 无新输出，主动断开", idle)
+        return true
+    }
+
+    /** 清理 ANSI 转义序列与回车符。 */
+    private fun sanitizeAnsi(text: String): String =
+        text.replace("\r", "")
+            .replace(ANSI_CSI, "")
+            .replace(ANSI_OSC, "")
+            .replace(ANSI_CHARSET, "")
 
     /**
      * 检查解码后的字符串末尾是否有因为跨 read 边界截断而导致的不完整 UTF-8 序列。
@@ -312,5 +295,43 @@ class ClaudeProcessClient(
         }
         if (i < 0 || (raw[i].toInt() and 0xC0) != 0xC0) return ByteArray(0)
         return raw.copyOfRange(i, raw.size)
+    }
+
+    private companion object {
+        val ANSI_CSI = Regex("\\e\\[[\\d;?<>]*[a-zA-Z]")
+        val ANSI_OSC = Regex("\\e\\][^\\e\\x07]*[\\e\\x07]")
+        val ANSI_CHARSET = Regex("\\e[()][a-zA-Z]")
+    }
+}
+
+/** 累计流式输出并按阈值回调增量；tool 标记用于空闲超时判断。 */
+private class StreamCursor(
+    private val callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    private val sendThreshold: Int,
+) {
+    val output = StringBuilder()
+    private var lastSentLength = 0
+    var hasToolMarker = false
+        private set
+
+    suspend fun append(cleaned: String) {
+        if (cleaned.isBlank()) return
+        output.append(cleaned)
+        if (!hasToolMarker && TOOL_MARKERS.any(cleaned::contains)) hasToolMarker = true
+        if (output.length - lastSentLength < sendThreshold) return
+        val delta = output.substring(lastSentLength)
+        lastSentLength = output.length
+        callback("streaming_incremental", delta, false)
+    }
+
+    suspend fun finish() {
+        if (output.length <= lastSentLength) return
+        val remaining = output.substring(lastSentLength)
+        lastSentLength = output.length
+        if (remaining.isNotBlank()) callback("streaming_incremental", remaining, false)
+    }
+
+    private companion object {
+        val TOOL_MARKERS = listOf("<!--TOOL", "<!--END_TOOL-->")
     }
 }
