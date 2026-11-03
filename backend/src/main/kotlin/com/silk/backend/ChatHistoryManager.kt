@@ -278,7 +278,10 @@ class ChatHistoryManager(
     /**
      * 添加消息到历史记录
      */
-    fun addMessage(
+    fun addMessage(sessionName: String, message: Message) =
+        withSessionLock(sessionName) { addMessageLocked(sessionName, message) }
+
+    private fun addMessageLocked(
         sessionName: String,
         message: Message
     ) {
@@ -313,7 +316,10 @@ class ChatHistoryManager(
     /**
      * 替换聊天历史中的已有消息（用于卡片更新等 action="edit" 场景）
      */
-    fun editMessage(
+    fun editMessage(sessionName: String, message: Message) =
+        withSessionLock(sessionName) { editMessageLocked(sessionName, message) }
+
+    private fun editMessageLocked(
         sessionName: String,
         message: Message,
     ) {
@@ -346,7 +352,10 @@ class ChatHistoryManager(
      * 更新 session 的 AI 角色提示
      * @Silk 消息中的角色指令会被保存，用于后续 AI 回复
      */
-    fun updateRolePrompt(sessionName: String, rolePrompt: String?) {
+    fun updateRolePrompt(sessionName: String, rolePrompt: String?) =
+        withSessionLock(sessionName) { updateRolePromptLocked(sessionName, rolePrompt) }
+
+    private fun updateRolePromptLocked(sessionName: String, rolePrompt: String?) {
         val historyFile = getHistoryFile(sessionName)
         val chatHistory = loadChatHistory(sessionName) ?: run {
             if (historyFile.exists()) {
@@ -457,7 +466,10 @@ class ChatHistoryManager(
      * @param messageId 要删除的消息ID
      * @return 是否删除成功
      */
-    fun deleteMessage(sessionName: String, messageId: String): Boolean {
+    fun deleteMessage(sessionName: String, messageId: String): Boolean =
+        withSessionLock(sessionName) { deleteMessageLocked(sessionName, messageId) }
+
+    private fun deleteMessageLocked(sessionName: String, messageId: String): Boolean {
         val chatHistory = loadChatHistory(sessionName) ?: return false
         
         val initialSize = chatHistory.messages.size
@@ -478,7 +490,10 @@ class ChatHistoryManager(
      * @param messageIds 要删除的消息ID列表
      * @return 删除的消息数量
      */
-    fun deleteMessages(sessionName: String, messageIds: List<String>): Int {
+    fun deleteMessages(sessionName: String, messageIds: List<String>): Int =
+        withSessionLock(sessionName) { deleteMessagesLocked(sessionName, messageIds) }
+
+    private fun deleteMessagesLocked(sessionName: String, messageIds: List<String>): Int {
         if (messageIds.isEmpty()) return 0
         
         val chatHistory = loadChatHistory(sessionName) ?: return 0
