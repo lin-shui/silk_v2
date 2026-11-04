@@ -52,12 +52,12 @@ object DatabaseFactory {
             // 创建所有表
             SchemaUtils.create(
                 Users, Groups, GroupMembers, Contacts, ContactRequests,
-                UserSettingsTable, CcConnectTokens, DshBotTokens, HuaweiAccounts, WechatAccounts,
+                UserSettingsTable, DshBotTokens, HuaweiAccounts, WechatAccounts,
                 RefreshTokensTable
             )
             SchemaUtils.createMissingTablesAndColumns(
                 Users, Groups, GroupMembers, Contacts, ContactRequests,
-                UserSettingsTable, CcConnectTokens, DshBotTokens, HuaweiAccounts, WechatAccounts,
+                UserSettingsTable, DshBotTokens, HuaweiAccounts, WechatAccounts,
                 RefreshTokensTable
             )
         }

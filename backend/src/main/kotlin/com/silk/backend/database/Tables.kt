@@ -82,19 +82,6 @@ object UserSettingsTable : Table("user_settings") {
 }
 
 /**
- * CcConnectTokens 表：cc-connect 平台插件连接 token
- * 每个 token 绑定一个群组，cc-connect 通过 token 认证并加入对应群组
- */
-object CcConnectTokens : Table("ccconnect_tokens") {
-    val token = varchar("token", 64).uniqueIndex()
-    val groupId = varchar("group_id", 128)
-    val label = varchar("label", 256)
-    val createdAt = datetime("created_at").default(LocalDateTime.now())
-
-    override val primaryKey = PrimaryKey(token)
-}
-
-/**
  * DshBotTokens 表：dsh-superagent 集成 bot 的访问 token
  * 同一时间只有一个有效 token（regenerate 时先清空），token 绑定 bot 的固定 userId
  */

@@ -4,7 +4,6 @@ import com.silk.backend.agents.acp.AcpRpcException
 import com.silk.backend.agents.core.AcpExtensions
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.agents.core.GitChangesAssembler
-import com.silk.backend.ccconnect.CcConnectRegistry
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
@@ -46,9 +45,7 @@ private suspend fun ApplicationCall.respondGitChanges() {
     }
     val active = AgentRuntime.ensureActiveAcpSession(userId, groupId)
     if (active == null) {
-        // cc-connect 群组无 ACP session：给专属空态而非误导的"未连接"
-        val reason = if (CcConnectRegistry.isConnected(groupId)) "ccconnect" else null
-        respond(GitChangesAssembler.assembleChanges(connected = false, supported = true, raw = null).copy(reason = reason))
+        respond(GitChangesAssembler.assembleChanges(connected = false, supported = true, raw = null))
         return
     }
     val resp = try {

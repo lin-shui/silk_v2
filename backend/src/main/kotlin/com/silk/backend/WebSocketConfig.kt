@@ -165,7 +165,7 @@ data class InteractiveOption(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND, CARD, CARD_REPLY
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CARD, CARD_REPLY
 }
 
 @Serializable
@@ -564,161 +564,6 @@ class ChatServer(
     }
 
     /**
-     * 处理 CC_COMMAND 类型消息：转发命令给 cc-connect agent
-     * @return true 表示已处理（应 return），false 表示未处理（继续后续流程）
-     */
-    private suspend fun handleCcCommandMessage(message: Message): Boolean {
-        val ccCmdGroupId = sessionName.removePrefix("group_")
-        if (message.type == MessageType.CC_COMMAND
-            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccCmdGroupId)
-        ) {
-            val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccCmdGroupId, message.userId)
-            if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
-                com.silk.backend.ccconnect.CcConnectRegistry.sendCommand(ccCmdGroupId, message.content)
-            }
-            return true
-        }
-        return false
-    }
-
-    /**
-     * 处理 TEXT 中的 cmd: 前缀：转发命令给 cc-connect agent
-     * @return true 表示已处理（应 return），false 表示未处理（继续后续流程）
-     */
-    private suspend fun handleCcTextPrefixCommand(message: Message): Boolean {
-        val ccCmdGroupId = sessionName.removePrefix("group_")
-        if (message.type == MessageType.TEXT
-            && message.content.startsWith("cmd:")
-            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccCmdGroupId)
-        ) {
-            val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccCmdGroupId, message.userId)
-            if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
-                com.silk.backend.ccconnect.CcConnectRegistry.sendCommand(ccCmdGroupId, message.content.removePrefix("cmd:"))
-            }
-            return true
-        }
-        return false
-    }
-
-    /**
-     * 处理 cc-connect 路由：根据多人/单人模式和 @-prefix 转发消息给适配器
-     * @return true 表示已处理（应 return），false 表示未处理（继续后续流程）
-     */
-    private suspend fun handleCcConnectRouting(message: Message): Boolean {
-        val ccGroupId = sessionName.removePrefix("group_")
-        if (!isCcConnectRoutingApplicable(ccGroupId, message)) {
-            return false
-        }
-
-        val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccGroupId, message.userId)
-        if (memberRole != MemberRole.HOST && memberRole != MemberRole.OPERATOR) {
-            return true
-        }
-
-        val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
-        val isSoloMode = memberCount <= 1L
-        val matchedPrefix = findMatchingCcPrefix(ccGroupId, message.content)
-
-        if (isSoloMode || matchedPrefix != null) {
-            val forwardContent = extractForwardContent(message.content, matchedPrefix)
-            if (forwardContent.isNotBlank()) {
-                forwardToCcConnect(ccGroupId, message, forwardContent)
-            }
-        }
-        return true
-    }
-
-    /**
-     * 检查是否适用 cc-connect 路由
-     */
-    private fun isCcConnectRoutingApplicable(ccGroupId: String, message: Message): Boolean {
-        return com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
-            && message.type == MessageType.TEXT && !message.isTransient
-            && message.userId != "cc-connect" && message.userId != "system"
-    }
-
-    /**
-     * 查找匹配的 cc-connect 前缀
-     */
-    private fun findMatchingCcPrefix(ccGroupId: String, content: String): String? {
-        val connMeta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(ccGroupId)
-        val triggerName = com.silk.backend.ccconnect.agentTriggerName(connMeta?.agentType ?: "")
-        val prefixes = buildSet {
-            add("@cc")
-            if (triggerName != "cc") add("@$triggerName")
-        }
-        return prefixes.firstOrNull { p ->
-            content.startsWith("$p ", ignoreCase = true) || content.equals(p, ignoreCase = true)
-        }
-    }
-
-    /**
-     * 提取转发内容（移除前缀）
-     */
-    private fun extractForwardContent(content: String, matchedPrefix: String?): String {
-        if (matchedPrefix == null) {
-            return content
-        }
-        val stripped = if (content.startsWith("$matchedPrefix ", ignoreCase = true)) {
-            content.substring(matchedPrefix.length + 1)
-        } else {
-            content.substring(matchedPrefix.length)
-        }
-        return stripped.trim()
-    }
-
-    /**
-     * 转发消息到 cc-connect
-     */
-    private suspend fun forwardToCcConnect(ccGroupId: String, message: Message, forwardContent: String) {
-        val engineContent = transformCcPermissionValues(forwardContent)
-        val historyEntries = loadChatHistoryForCc()
-        val userMsg = com.silk.backend.ccconnect.UserMessage(
-            content = engineContent,
-            userId = message.userId,
-            userName = message.userName,
-            msgId = message.id,
-            history = historyEntries,
-        )
-        if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccGroupId)) {
-            com.silk.backend.ccconnect.CcConnectRegistry.forwardAnswer(ccGroupId, userMsg)
-        } else {
-            com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
-        }
-    }
-
-    /**
-     * 转换 cc-connect 权限按钮值
-     */
-    private fun transformCcPermissionValues(content: String): String {
-        return when (content) {
-            "perm:allow" -> "allow"
-            "perm:deny" -> "deny"
-            "perm:allow_all" -> "allow all"
-            else -> content
-        }
-    }
-
-    /**
-     * 加载聊天历史用于 cc-connect
-     */
-    private fun loadChatHistoryForCc(): List<com.silk.backend.ccconnect.HistoryEntry>? {
-        val chatHistory = historyManager.loadChatHistory(sessionName)
-        return chatHistory?.messages
-            ?.filter { it.messageType == "TEXT" }
-            ?.takeLast(50)
-            ?.map { entry ->
-                com.silk.backend.ccconnect.HistoryEntry(
-                    senderId = entry.senderId,
-                    senderName = entry.senderName,
-                    content = entry.content,
-                    messageType = entry.messageType,
-                    timestamp = entry.timestamp,
-                )
-            }
-    }
-
-    /**
      * 处理 Claude Code 模式拦截：如果 AgentRuntime 处于活跃状态，拦截消息
      * @return true 表示已处理（应 return），false 表示未处理（继续后续流程）
      */
@@ -1021,17 +866,6 @@ class ChatServer(
         }
     }
 
-    @Suppress("CyclomaticComplexMethod")
-    /**
-     * 检查是否应该跳过广播（cc-connect 等待输入时）
-     */
-    private fun shouldSkipBroadcastForCcWaiting(msg: Message): Boolean {
-        return msg.type == MessageType.TEXT
-            && msg.userId != "cc-connect" && msg.userId != "system"
-            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_"))
-            && com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))
-    }
-
     /**
      * 检查是否应该为 Claude Code 拦截消息
      */
@@ -1076,21 +910,12 @@ class ChatServer(
 
         // ⛔ cc-connect 等待回答时，用户 TEXT 消息由下方 cc-connect 路由直接转发给引擎，
         // 不必在此广播——否则按钮值（如 "perm:allow"）会作为用户消息展示给所有人。
-        if (shouldSkipBroadcastForCcWaiting(msg)) {
-            logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", msg.content.take(20))
-        } else {
-            broadcastMessageToAllSessions(msg)
-        }
+        broadcastMessageToAllSessions(msg)
 
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
         val isSingleUserGroup = !isSilkPrivateChat && isSingleHumanGroup()
         // 单人群组相当于私聊 Silk：自动触发 AI，无需 @silk
         val effectiveSilkPrivate = isSilkPrivateChat || isSingleUserGroup
-
-        // ==================== cc-connect 命令转发 ====================
-        if (handleCcCommandMessage(message)) return
-        if (handleCcTextPrefixCommand(message)) return
-        if (handleCcConnectRouting(message)) return
 
         // ==================== Claude Code 模式拦截 ====================
         if (handleClaudeCodeBroadcastInterception(message, isSilkPrivateChat)) return
@@ -1402,83 +1227,6 @@ class ChatServer(
      * 处理 WebSocket 内嵌的 Vision 图片+文字
      * 前端将图片 base64 嵌入消息（##VISION_IMG:data:...##用户文字），后端在此统一处理
      */
-    /**
-     * Forward an image to cc-connect's Claude agent for vision processing.
-     * Called from FileRoutes.kt when a user uploads an image with @claude/@cc prefix
-     * in a cc-connect group. Falls back to Silk's built-in vision if cc-connect is not connected.
-     */
-    suspend fun forwardImageToCcConnect(
-        imageFile: java.io.File,
-        userText: String,
-        userId: String,
-        userName: String,
-        ccGroupId: String
-    ) {
-        logger.info("📸 [CcImage] forwarding image to cc-connect: {}", imageFile.name)
-        if (!imageFile.exists()) {
-            logger.warn("📸 [CcImage] image file not found: {}", imageFile.absolutePath)
-            return
-        }
-        if (!com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)) {
-            logger.warn("📸 [CcImage] cc-connect not connected, falling back to Silk vision")
-            handleVisionImageAndText(imageFile, userText)
-            return
-        }
-
-        try {
-            val imageBytes = imageFile.readBytes()
-            val base64Image = java.util.Base64.getEncoder().encodeToString(imageBytes)
-            val ext = imageFile.extension.lowercase()
-            val mimeType = when (ext) {
-                "png" -> "image/png"
-                "gif" -> "image/gif"
-                "webp" -> "image/webp"
-                else -> "image/jpeg"
-            }
-
-            // Load recent chat history (same pattern as TEXT routing)
-            val chatHistory = historyManager.loadChatHistory(sessionName)
-            val historyEntries = chatHistory?.messages
-                ?.filter { it.messageType == "TEXT" }
-                ?.takeLast(50)
-                ?.map { entry ->
-                    com.silk.backend.ccconnect.HistoryEntry(
-                        senderId = entry.senderId,
-                        senderName = entry.senderName,
-                        content = entry.content,
-                        messageType = entry.messageType,
-                        timestamp = entry.timestamp,
-                    )
-                }
-
-            val userMsg = com.silk.backend.ccconnect.UserMessage(
-                content = userText.ifBlank { "请分析这张图片" },
-                userId = userId,
-                userName = userName,
-                msgId = "img_${System.currentTimeMillis()}",
-                history = historyEntries,
-                images = listOf(
-                    com.silk.backend.ccconnect.ImageAttachment(
-                        mimeType = mimeType,
-                        data = base64Image,
-                        fileName = imageFile.name,
-                    )
-                ),
-            )
-
-            if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccGroupId)) {
-                com.silk.backend.ccconnect.CcConnectRegistry.forwardAnswer(ccGroupId, userMsg)
-            } else {
-                com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
-            }
-            logger.info("📸 [CcImage] image forwarded to cc-connect: {}", imageFile.name)
-        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            logger.error("📸 [CcImage] failed to forward image to cc-connect: {}", e.message, e)
-            // Fallback to Silk vision on error
-            handleVisionImageAndText(imageFile, userText)
-        }
-    }
-
     @Suppress("CyclomaticComplexMethod")
     suspend fun handleVisionImageAndText(
         imageFile: java.io.File,

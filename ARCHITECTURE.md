@@ -62,29 +62,9 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Harmony | `frontend/harmonyApp/` | 独立 ArkTS 应用，含 Todo/Workflow/KB/Audio Duplex |
 | External bridges | `backend/scripts/`（PTY bridge）, `cc_bridge/`, `codex_bridge/`, `feishu_bot/` | Python 服务，不在 Gradle 主工程内 |
 
-## cc-connect Integration
+## Removed: cc-connect
 
-Silk 支持通过 [cc-connect](https://github.com/chenhg5/cc-connect) 连接外部 AI 编程代理（Claude Code / Cursor / Gemini CLI / Codex 等）。
-
-**架构**：cc-connect 通过原生 silk 平台插件（位于 [cc-connect 仓库](https://github.com/chenhg5/cc-connect) 的 `platform/silk/silk.go`）连接到 Silk 后端的 `/ccconnect-bridge` WebSocket 端点。不需要中间适配器进程。
-
-**用户流程**：
-1. Silk 前端创建 cc-connect 群组 → 后端生成 token
-2. 将 token 贴入 cc-connect 的 `config.toml`
-3. cc-connect 启动后自动连接 Silk 对应群组
-4. 群组内的用户消息按角色路由：仅 HOST / OPERATOR 的消息转发到 cc-connect 代理，GUEST 消息不触发命令；多人群中 HOST/OPERATOR 需用 `@<agent>` 前缀触发（如 `@claude`、`@cursor`，通用 `@cc` 始终可用）；单人时直接转发
-
-**消息聚合**：Go 插件实现 cc-connect 的 `StreamingCardPlatform` 接口，将整个 agent turn（thinking、tool use、text）聚合为单条可更新消息。中间状态通过 `reply_stream`（`incremental: false`）做全量替换，最终回复走 `reply` 持久化；若单条 `reply_stream` 正文合并包含思考/工具 emoji，后端按 emoji 边界拆分回填各段。后端在 `thinking` 状态起进入「分阶段 turn」：按 emoji 前缀把 `reply` 归入思考/工具/正文，拼成带 `<!--CC_TURN-->` 与 `<!--THINKING_END-->` 的结构化 Markdown 广播；Web 端识别该标记展示临时气泡，并在 Markdown 管线中剥离标记。最终落盘消息在工具段后插入 `<!--TOOLS_END-->`，Web 将工具调用折叠为与思考区类似的 `<details>`；折叠块内工具原文经 markdown-it 渲染后再 DOMPurify 消毒。
-
-**图片转发**：cc-connect 群组内上传图片时，若图片说明以 `@claude`/`@cc` 前缀开头，则绕过 Silk 自带 vision 管线，将图片 base64 编码后通过 `UserMessage.images` 字段转发给 cc-connect 的 Claude Agent 处理。`UserMessage` 协议现已扩展 `images: [{mime_type, data(base64), file_name}]`。单人模式（群组仅 1 名成员）下无需 `@` 前缀，所有图片自动转到 cc-connect。无前缀的多人群图片仍走 Silk 自带 vision。若 cc-connect 未连接则自动降级为 Silk vision。
-
-**回复图片**：cc-connect Agent 生成图片（SVG/PNG 等，通过 Write/Bash 等工具）后，`silk.go` 的 `Finalize` 会检测工作目录中本次 turn 内新增/修改的图片文件，base64 编码后通过 `reply_images` 消息发送给 Silk。Silk 后端直接以 Markdown data URI（`![](data:image/png;base64,...)`）广播，前端 Markdown 渲染器原生支持，无需文件服务端点。限制：仅扫描项目根目录（非递归），单次最多 5 张，单张 ≤10MB。
-
-**代码面**：
-- 后端：`ccconnect/CcConnectTokenRepository.kt`（token 存储）、`ccconnect/CcConnectRegistry.kt`（连接注册 + `agentTriggerName()` 映射）、`ccconnect/CcConnectProtocol.kt`（协议数据类）
-- 路由：`Routing.kt` → `/ccconnect-bridge` WebSocket + token 管理 API
-- 消息路由：`WebSocketConfig.kt` → `CcConnectRegistry.isConnected()` + `GroupRepository.getMemberRole()` 角色检查（HOST / OPERATOR 可转发）优先于 AgentRuntime/Silk AI
-- 插件：`platform/silk/silk.go`（位于 [cc-connect 仓库](https://github.com/chenhg5/cc-connect)，实现 `StreamingCardPlatform`；本地不再保留副本）
+cc-connect 集成（`/ccconnect-bridge` WebSocket、`ccconnect/` 包、按角色/前缀转发、图片转发与卡片聚合）已于 2026-11 删除：多人协作编排统一交给外部 dsh-superagent（见下节），Silk 只保留 IM 本体与内建 Silk AI。历史实现可查 git 历史与 `docs/context/planning/exec-plans/2026-11-03-dsh-superagent-im-pivot-plan.md`。
 
 ## dsh-superagent Integration
 
@@ -92,7 +72,7 @@ Silk 支持通过 [cc-connect](https://github.com/chenhg5/cc-connect) 连接外�
 
 - bot 是固定身份的用户 `dsh_ai_agent`（显示名 DSH，不可登录），以 GUEST 角色按邀请码入群；谁能发起工作由 dsh 侧 Policy 决定，silk 不赋予触发权。
 - `routes/DshBotRoutes.kt` 提供 HTTP 面：token 生命周期（`dshbot_tokens` 表，单有效 token）、`me`/`join`、按时间游标拉群消息、幂等发消息（`dsh_<idempotencyKey>` 消息 ID 与 `ChatServer.broadcast` 去重同源）。
-- bot 消息不触发 Silk AI / ACP agent / cc-connect 路由：`AgentRuntime.isAgentUserId` 白名单含 `DSH_BOT_USER_ID`。
+- bot 消息不触发 Silk AI / ACP agent 路由：`AgentRuntime.isAgentUserId` 白名单含 `DSH_BOT_USER_ID`。
 - 映射约定：一个 silk 群 = 一个 dsh Thread；群消息 = Trigger；回复走幂等 Channel send。
 
 ## Context Docs
