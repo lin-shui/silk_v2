@@ -563,17 +563,16 @@ private suspend fun handleFileUpload(call: ApplicationCall) {
         val user = com.silk.backend.database.UserRepository.findUserById(userId)
         val userName = user?.fullName ?: "用户"
 
-        val isImageFile = isImageFileName(fileName)
-
         // 广播用户合并消息（图片预览 + 文字，单条 SYSTEM 消息）
         val downloadUrl = buildFileDownloadUrl(sessionId, safeFileName)
         val fileSize = fileBytes.size.toLong()
         val userTextForMsg = parts.userTextInput?.trim() ?: ""
+        val isImageFile = isImageFileName(fileName)
 
         broadcastUploadUserMessageAndVision(
             applicationScope = call.application,
             sessionId, userId, userName, fileName,
-            targetFile, downloadUrl, fileSize, userTextForMsg, isImageFile
+            targetFile, downloadUrl, fileSize, userTextForMsg
         )
 
         // 先返回上传成功响应（不阻塞用户）
@@ -625,7 +624,6 @@ private suspend fun broadcastUploadUserMessageAndVision(
     downloadUrl: String,
     fileSize: Long,
     userText: String,
-    isImageFile: Boolean,
 ) {
     val previewContent = "##PREVIEW_IMAGE:${downloadUrl}##\n${userText}"
     try {
@@ -637,12 +635,8 @@ private suspend fun broadcastUploadUserMessageAndVision(
         applicationScope.launch(Dispatchers.IO) {
             processUploadedImageVision(
                 chatSvr = chatSvr,
-                finalSessionId = sessionId,
-                finalUserId = userId,
-                finalUserName = userName,
                 finalUserText = userText,
                 targetFile = targetFile,
-                isImageFile = isImageFile,
             )
         }
     } catch (e: Exception) {
@@ -756,75 +750,17 @@ private suspend fun reportOcrExtraction(extractedTextFile: File, finalSessionId:
 @Suppress("TooGenericExceptionCaught", "LongParameterList")
 private suspend fun processUploadedImageVision(
     chatSvr: com.silk.backend.ChatServer,
-    finalSessionId: String,
-    finalUserId: String,
-    finalUserName: String,
     finalUserText: String,
     targetFile: File,
-    isImageFile: Boolean,
 ) {
     try {
-        // === cc-connect image routing ===
-        // If this is a cc-connect group and the caption starts with @cc / @claude prefix,
-        // forward the image to cc-connect's agent (Claude) for vision processing
-        // instead of Silk's built-in vision pipeline.
-        // Solo mode (single member): no @-prefix needed, same as TEXT routing.
-        val ccGroupId = finalSessionId.removePrefix("group_")
-        val isCcConnected = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
-
-        val matchedPrefix = matchedCcConnectPrefix(ccGroupId, isCcConnected, finalUserText)
-        val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
-        val isSoloMode = memberCount <= 1L
-
-        val forwardToCcConnect = isCcConnected && isImageFile && (isSoloMode || matchedPrefix != null)
-        if (forwardToCcConnect) {
-            val strippedText = stripCcConnectPrefix(finalUserText, matchedPrefix)
-            chatSvr.forwardImageToCcConnect(
-                imageFile = targetFile,
-                userText = strippedText.trim(),
-                userId = finalUserId,
-                userName = finalUserName,
-                ccGroupId = ccGroupId,
-            )
-        } else {
-            chatSvr.handleVisionImageAndText(
-                targetFile, finalUserText
-            )
-        }
+        chatSvr.handleVisionImageAndText(targetFile, finalUserText)
     } catch (e: Exception) {
         logger.error("❌ Vision 异步处理失败: {}", e.message, e)
         chatSvr.broadcastCombinedVisionResult(
             "⚠️ Vision 分析出错: ${e.message}",
             System.currentTimeMillis()
         )
-    }
-}
-
-/**
- * 返回标题命中的 cc-connect 触发前缀（@cc 或 @<trigger>），未连接或无命中返回 null。
- * 与原内联前缀匹配逻辑等价。
- */
-private fun matchedCcConnectPrefix(ccGroupId: String, isCcConnected: Boolean, userText: String): String? {
-    val connMeta = if (isCcConnected) {
-        com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(ccGroupId)
-    } else null
-    val triggerName = com.silk.backend.ccconnect.agentTriggerName(connMeta?.agentType ?: "")
-    val prefixes = buildSet {
-        add("@cc")
-        if (triggerName != "cc") add("@$triggerName")
-    }
-    return prefixes.firstOrNull { p ->
-        userText.startsWith("$p ", ignoreCase = true) || userText.equals(p, ignoreCase = true)
-    }
-}
-
-/** 去除命中的 cc-connect 前缀（带空格则多去一个空格），无前缀（单人模式）原样返回。 */
-private fun stripCcConnectPrefix(userText: String, matchedPrefix: String?): String {
-    if (matchedPrefix == null) return userText // solo mode, keep caption as-is
-    return if (userText.startsWith("$matchedPrefix ", ignoreCase = true)) {
-        userText.substring(matchedPrefix.length + 1)
-    } else {
-        userText.substring(matchedPrefix.length)
     }
 }
 

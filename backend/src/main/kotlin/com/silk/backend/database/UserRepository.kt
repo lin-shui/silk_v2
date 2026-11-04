@@ -173,8 +173,6 @@ object UserRepository {
                 for (groupId in ownedGroups) {
                     // 删除群组成员
                     GroupMembers.deleteWhere { GroupMembers.groupId eq groupId }
-                    // 删除 cc-connect token
-                    CcConnectTokens.deleteWhere { CcConnectTokens.groupId eq groupId }
                 }
                 Groups.deleteWhere { Groups.hostId eq userId }
 

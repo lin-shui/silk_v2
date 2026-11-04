@@ -94,3 +94,22 @@ silk 的 `backend/agents/`、`workflow/`、`ccconnect/` 停止演进，仅修 bu
 - dsh 原型面向"一个 GitHub 仓库"，executor 仓库已定为 dsh-superagent-prototype 自身（自举）。
 - 本分支不动 `docs/todo-roadmap.md`（human-maintained）。
 - **lint 基线（2026-11-03 已清理）**：origin/develop 上原有的 45 条存量 detekt 报点（backend `ai/ClaudeProcessClient.kt`、`Routing.kt` poll 端点、frontend/shared `PlatformWebSocket.js.kt`）已由 PR #155 清零，`silkLint` 恢复全绿；同时把两处 `android-actions/setup-android` 升到 `v4`（runner 镜像已移除 `tools` 包）。
+
+## 方案 B：删除旧协作面（2026-11 起）
+
+### Stage 1a：后端 cc-connect（本 PR）
+
+- 删除 `backend/.../ccconnect/`（Registry / TokenRepository / Protocol）
+- 删除 `/ccconnect-bridge` WebSocket、cc-connect token 管理 API、按角色/前缀转发、按钮答案拦截、cc-connect 图片转发、`ccconnect_tokens` 表与建群发 token 逻辑
+- `WebSocketConfig.broadcast` 不再有 cc-connect 分支：消息现在只可能走 ACP（若有活动 agent）、Vision、Silk AI
+- 破坏性：生产有 4 个群曾生成 cc-connect token（`silk-spark-main`、`silk-open-cc`、`test_cc_public`、`test_cc`），合并后这些群的 cc-connect 连接将失效；`silk-spark-main` 已改用 dsh，不受影响
+- 前端按钮/契约（`interactiveOptions`、`ccConnectToken`、`CreateGroupRequest.type`）暂留，Stage 1b 随三端 UI 一并删除
+
+### Stage 2（待做）
+
+- 删除 ACP agents（`backend/agents/`、`/agent-bridge`、`cc_bridge/`、`codex_bridge/`）与 workflow 的 agent 执行路径
+- 迁移：3 个 bridge token、3 个 workflow 的使用方确认后再删
+
+### Stage 3（待做）
+
+- 删除 workflow 编排面（`WorkflowManager`、`/api/workflows`、三端 Workflow 页面）
