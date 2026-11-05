@@ -3076,7 +3076,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                         onClick {
                                             // 插入 @用户名
                                             val beforeAt = messageText.substring(0, mentionStartIndex)
-                                            val displayName = if (isAgentUserId(userId)) "Silk" else userName
+                                            val displayName = if (userId == SILK_AGENT_USER_ID) SILK_AGENT_DISPLAY_NAME else userName
                                             messageText = "$beforeAt@$displayName "
                                             showMentionMenu = false
                                             mentionStartIndex = -1
@@ -3098,14 +3098,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                             style {
                                                 fontSize(14.px)
                                                 color(Color(SilkColors.textPrimary))
-                                                if (isAgentUserId(userId)) {
+                                                if (userId == SILK_AGENT_USER_ID) {
                                                     property("font-weight", "600")
                                                 }
                                             }
                                         }) {
                                             Text(userName)
                                         }
-                                        if (isAgentUserId(userId)) {
+                                        if (userId == SILK_AGENT_USER_ID) {
                                             Span({
                                                 style {
                                                     fontSize(12.px)
