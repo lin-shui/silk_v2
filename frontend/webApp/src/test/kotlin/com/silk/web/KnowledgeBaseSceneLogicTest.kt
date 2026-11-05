@@ -350,8 +350,8 @@ class KnowledgeBaseSceneLogicTest {
     }
 
     @Test
-    fun sourceMessageJumpPrefersWorkflowThenFallsBackToChat() {
-        val workflowEntry = KBEntryItem(
+    fun sourceMessageJumpUsesSourceGroupForLegacyWorkflowEntries() {
+        val legacyWorkflowEntry = KBEntryItem(
             id = "entry-workflow",
             title = "工作流总结",
             source = KBEntrySource(
@@ -361,18 +361,18 @@ class KnowledgeBaseSceneLogicTest {
                 messageIds = listOf("msg-1", "msg-2"),
             ),
         )
-        val chatEntry = workflowEntry.copy(
+        val chatEntry = legacyWorkflowEntry.copy(
             id = "entry-chat",
-            source = workflowEntry.source.copy(workflowId = null),
+            source = legacyWorkflowEntry.source.copy(workflowId = null),
         )
 
         assertEquals(
             KnowledgeSourceMessageJump(
-                kind = KnowledgeSourceMessageJumpKind.WORKFLOW,
-                targetId = "wf-7",
+                kind = KnowledgeSourceMessageJumpKind.CHAT,
+                targetId = "group-1",
                 messageId = "msg-1",
             ),
-            knowledgeSourceMessageJump(workflowEntry),
+            knowledgeSourceMessageJump(legacyWorkflowEntry),
         )
         assertEquals(
             KnowledgeSourceMessageJump(

@@ -4,7 +4,7 @@
  */
 import http from '@ohos.net.http';
 import { User, LoginResponse, RegisterResponse } from '../models/User';
-import { Group, GroupMember, CreateGroupResponse } from '../models/Group';
+import { Group, CreateGroupResponse } from '../models/Group';
 import { UserSettings, UserSettingsResponse } from '../models/UserSettings';
 import { UserTodoItem } from '../models/UserTodoItem';
 import { API_BASE_URL, API_TIMEOUT } from '../common/Constants';
@@ -43,7 +43,6 @@ export interface CreateGroupRequest {
   name: string;
   description?: string;
   createdBy: string;
-  type?: string; // "ccconnect" 或 undefined
 }
 
 /**
@@ -113,47 +112,9 @@ interface BackendGroup {
 interface BackendCreateGroupRequest {
   userId: string;
   groupName: string;
-  type?: string;
 }
 
-// ==================== CC-Connect interfaces ====================
-
-export interface CcModeOption {
-  key: string;
-  name: string;
-}
-
-export interface CcModelOption {
-  name: string;
-  desc?: string;
-}
-
-export interface CcConnectTokenInfo {
-  success: boolean;
-  token?: string;
-  connected?: boolean;
-  agentType?: string;
-  project?: string;
-  cwd?: string;
-  mode?: string;
-  model?: string;
-  availableModes?: CcModeOption[];
-  availableModels?: CcModelOption[];
-}
-
-// ==================== Workflow & Knowledge Base interfaces ====================
-
-export interface WorkflowApiItem {
-  id: string;
-  name: string;
-  description: string;
-  ownerId: string;
-  agentType: string;
-  taskFocus: string;
-  groupId: string;
-  createdAt: number;
-  updatedAt: number;
-}
+// ==================== Knowledge Base interfaces ====================
 
 export interface KBTopicApiItem {
   id: string;
@@ -175,41 +136,6 @@ export interface KBEntryApiItem {
   updatedAt: number;
 }
 
-// ==================== CC/Bridge workflow interfaces ====================
-
-export interface CcStateResponse {
-  success: boolean;
-  active?: boolean;
-  running?: boolean;
-  workingDir?: string;
-  sessionId?: string;
-  sessionStarted?: boolean;
-  bridgeConnected?: boolean;
-  error?: string;
-}
-
-export interface DirEntry {
-  name: string;
-  isDir: boolean;
-}
-
-export interface DirListingResponse {
-  success: boolean;
-  path?: string;
-  parent?: string;
-  segments?: string[];
-  separator?: string;
-  entries?: DirEntry[];
-  truncated?: boolean;
-  error?: string;
-}
-
-export interface TrustedDirCheckResponse {
-  trusted: boolean;
-  bridgeConnected: boolean;
-  bridgeId?: string;
-}
-
 interface BackendJoinGroupRequest {
   userId: string;
   invitationCode: string;
@@ -222,15 +148,6 @@ interface BackendLeaveGroupRequest {
 interface MarkReadRequest {
   userId: string;
   groupId: string;
-}
-
-interface CreateWorkflowRequestBody {
-  userId: string;
-  name: string;
-  description: string;
-  agentType?: string;
-  taskFocus?: string;
-  initialDir?: string;
 }
 
 interface StartSilkPrivateChatRequest {
@@ -387,7 +304,6 @@ interface ResponseEnvelope {
   group?: BackendGroup;
   groups?: BackendGroup[];
   settings?: UserSettings;
-  ccConnectToken?: string;
 }
 
 /**
@@ -851,20 +767,6 @@ export class ApiClient {
     }
   }
 
-  private async deleteRaw(endpoint: string): Promise<string> {
-    const httpRequest = this.createHttpRequest();
-    try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: this.buildHeaders(), connectTimeout: this.timeout, readTimeout: this.timeout };
-      const response = await httpRequest.request(
-        `${this.baseUrl}${endpoint}`,
-        opts
-      );
-      return response.result as string;
-    } finally {
-      httpRequest.destroy();
-    }
-  }
-
   // ==================== 群组相关 API ====================
 
   /**
@@ -896,9 +798,6 @@ export class ApiClient {
         userId: request.createdBy,
         groupName: request.name
       };
-      if (request.type !== undefined) {
-        payload.type = request.type;
-      }
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.POST,
         header: { 'Content-Type': 'application/json' },
@@ -914,8 +813,7 @@ export class ApiClient {
         const result: CreateGroupResponse = {
           success: parsed.success,
           message: parsed.message,
-          group: normalizedGroup,
-          ccConnectToken: parsed.ccConnectToken
+          group: normalizedGroup
         };
         return result;
       }
@@ -1460,55 +1358,6 @@ export class ApiClient {
     return this.get<LatestVersionInfo>('/api/version/latest');
   }
 
-  // ==================== Workflow API ====================
-
-  async getWorkflows(userId: string): Promise<WorkflowApiItem[]> {
-    try {
-      const result = await this.getRaw(`/api/workflows?userId=${userId}`);
-      return JSON.parse(result) as WorkflowApiItem[];
-    } catch (_) { return []; }
-  }
-
-  async createWorkflow(name: string, description: string, userId: string, agentType?: string, taskFocus?: string, initialDir?: string): Promise<WorkflowApiItem> {
-    const bodyObj: CreateWorkflowRequestBody = {
-      userId: userId,
-      name: name,
-      description: description
-    };
-    if (agentType !== undefined) bodyObj.agentType = agentType;
-    if (taskFocus !== undefined) bodyObj.taskFocus = taskFocus;
-    if (initialDir !== undefined) bodyObj.initialDir = initialDir;
-    const body = JSON.stringify(bodyObj);
-    const resultStr = await this.postRaw('/api/workflows', body);
-    if (resultStr.includes('"success":false')) {
-      const errObj = JSON.parse(resultStr) as Record<string, Object>;
-      throw new Error((errObj['message'] as string) || '创建工作流失败');
-    }
-    return JSON.parse(resultStr) as WorkflowApiItem;
-  }
-
-  async getWorkflowByGroupId(groupId: string): Promise<WorkflowApiItem | undefined> {
-    try {
-      const result = await this.getRaw(`/api/workflows/by-group/${groupId}`);
-      return JSON.parse(result) as WorkflowApiItem;
-    } catch (_) { return undefined; }
-  }
-
-  async deleteWorkflow(workflowId: string, userId: string): Promise<boolean> {
-    try {
-      await this.deleteRaw(`/api/workflows/${workflowId}?userId=${userId}`);
-      return true;
-    } catch (_) { return false; }
-  }
-
-  async renameWorkflow(workflowId: string, userId: string, newName: string): Promise<WorkflowApiItem | undefined> {
-    try {
-      const body = JSON.stringify({ userId: userId, name: newName });
-      const result = await this.putRaw(`/api/workflows/${workflowId}`, body);
-      return JSON.parse(result) as WorkflowApiItem;
-    } catch (_) { return undefined; }
-  }
-
   // ==================== Knowledge Base API ====================
 
   async getKBTopics(userId: string): Promise<KBTopicApiItem[]> {
@@ -1591,79 +1440,6 @@ export class ApiClient {
     } finally {
       httpRequest.destroy();
     }
-  }
-
-  // ==================== CC/Bridge Workflow API ====================
-
-  /**
-   * 获取 CC 工作状态
-   */
-  async getCcState(userId: string, groupId: string): Promise<CcStateResponse | null> {
-    try {
-      const result = await this.getRaw(`/users/${userId}/cc-state/${groupId}`);
-      return JSON.parse(result) as CcStateResponse;
-    } catch (_) { return null; }
-  }
-
-  /**
-   * 列出远程服务器的子目录（目录浏览器用）
-   */
-  async listCcDir(userId: string, path?: string): Promise<DirListingResponse | null> {
-    try {
-      const query = path ? `?path=${encodeURIComponent(path)}` : '';
-      const result = await this.getRaw(`/users/${userId}/cc-fs/list${query}`);
-      return JSON.parse(result) as DirListingResponse;
-    } catch (_) { return null; }
-  }
-
-  /**
-   * 切换 CC 工作目录
-   */
-  async cdCcDir(userId: string, groupId: string, path: string): Promise<CcStateResponse | null> {
-    try {
-      const body = JSON.stringify({ groupId: groupId, path: path });
-      const result = await this.postRaw(`/users/${userId}/cc-fs/cd`, body);
-      return JSON.parse(result) as CcStateResponse;
-    } catch (_) { return null; }
-  }
-
-  /**
-   * 检查目录是否已被信任
-   */
-  async checkTrustedDir(userId: string, path: string): Promise<TrustedDirCheckResponse | null> {
-    try {
-      const result = await this.getRaw(`/users/${userId}/trusted-dirs/check?path=${encodeURIComponent(path)}`);
-      return JSON.parse(result) as TrustedDirCheckResponse;
-    } catch (_) { return null; }
-  }
-
-  /**
-   * 添加目录到信任列表
-   */
-  async addTrustedDir(userId: string, path: string): Promise<boolean> {
-    try {
-      const body = JSON.stringify({ path: path });
-      await this.postRaw(`/users/${userId}/trusted-dirs`, body);
-      return true;
-    } catch (_) { return false; }
-  }
-
-  // ==================== cc-connect Token / Status API ====================
-
-  async getCcConnectTokenInfo(groupId: string, userId: string): Promise<CcConnectTokenInfo | null> {
-    try {
-      const result = await this.getRaw(`/api/ccconnect/groups/${groupId}/token-info?userId=${userId}`);
-      return JSON.parse(result) as CcConnectTokenInfo;
-    } catch (_) { return null; }
-  }
-
-  async regenerateCcConnectToken(groupId: string, userId: string): Promise<string | null> {
-    try {
-      const body = JSON.stringify({ groupId: groupId, userId: userId });
-      const result = await this.postRaw('/api/ccconnect/regenerate-token', body);
-      const info = JSON.parse(result) as CcConnectTokenInfo;
-      return info.token ? info.token : null;
-    } catch (_) { return null; }
   }
 
   static getInstance(): ApiClient {

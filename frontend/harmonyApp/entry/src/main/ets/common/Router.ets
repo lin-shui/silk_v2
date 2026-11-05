@@ -2,7 +2,6 @@
  * 简单的路由管理器
  * 用于页面导航
  */
-import { router as pageRouter } from '@kit.ArkUI';
 
 export enum PageRoute {
   LOGIN = 'pages/LoginPage',
@@ -19,7 +18,6 @@ export enum PageName {
   Chat = 'Chat',
   Todo = 'Todo',
   Settings = 'Settings',
-  Workflow = 'Workflow',
   KnowledgeBase = 'KnowledgeBase'
 }
 
@@ -27,7 +25,6 @@ export class Router {
   private static instance: Router;
   private currentPage: PageName = PageName.Login;
   private pageListeners: Array<(page: PageName) => void> = [];
-  workflowAgentType: string = '';
   
   private constructor() {}
   

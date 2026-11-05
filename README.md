@@ -11,7 +11,7 @@ A cross-platform chat application built with Kotlin Multiplatform. It provides a
 - **Android**: Kotlin Multiplatform Android app; APK can be built and served for download.
 - **Vector store**: Weaviate (run via Docker by `silk.sh`). Used for context and file search.
 - **AI**: Any OpenAI-compatible API; configure `API_BASE_URL`, `OPENAI_API_KEY`, and `AI_MODEL` in `.env`.
-- **Workflow**: Named, persistent Claude Code agent sessions. Each workflow creates a dedicated chat room with CC mode always active — no need to type `/cc`.
+- **Collaboration**: orchestrating multiple agents on a task is delegated to the external [dsh-superagent-prototype](https://github.com/lin-shui/dsh-superagent-prototype); Silk itself stays an IM with a built-in assistant.
 
 ## Todo Roadmap Governance
 
@@ -36,13 +36,11 @@ All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the *
 | `.env` | Local config (create from `.env.example`). Not committed. |
 | `.env.example` | Template and documentation for required/optional env vars. |
 | `backend/` | Kotlin backend (Ktor), static files, chat history. |
-| `backend/.../agents/` | Agent framework: AgentRuntime, ACP protocol layer, Claude Code adapter descriptor. |
-| `cc_bridge/` | ACP Bridge Adapter: external Python process running Claude CLI; connects to backend `/agent-bridge` via ACP. |
+| `backend/.../routes/DshBotRoutes.kt` | HTTP surface used by the external dsh-superagent bot (token, join, pull, idempotent send). |
 | `frontend/webApp/` | Kotlin/JS web frontend. |
 | `frontend/androidApp/` | Android app; APK output can be copied to `backend/static`. |
 | `frontend/desktopApp/` | Desktop client (optional). |
 | `frontend/shared/` | Shared KMP code for frontends. |
-| `backend/workflows/` | Workflow data store (`workflow_store.json`). |
 | `search/` | Weaviate schema and indexing (e.g. `schema.py`). |
 
 ---
@@ -151,210 +149,15 @@ Only refresh `config/lint/detekt/` baselines with `./gradlew silkLintBaseline` w
 
 ---
 
-## Workflow
+## dsh-superagent integration
 
-Workflows give each user a dedicated Claude Code programming session with its own persistent chat history. Unlike regular chats where you type `/cc` to enter CC mode, a workflow chat has CC mode **always on** — every message goes directly to the Claude Code agent.
+Multi-person, multi-agent collaboration is not implemented inside Silk. Silk acts as one
+Source for the external [dsh-superagent-prototype](https://github.com/lin-shui/dsh-superagent-prototype):
+one Silk group maps to one dsh Thread, and a fixed bot account (`dsh_ai_agent`) joins the
+group to pull messages and post idempotent replies through `routes/DshBotRoutes.kt`.
 
-### Quick start
-
-1. Open the **Workflow** tab in the left navigation bar.
-2. Click **+ 创建**, enter a name, and confirm.
-3. Select the workflow to open its chat panel — Claude Code is ready immediately.
-4. Type any programming task; Claude Code will read, write, and edit files via the Bridge Agent.
-5. Use standard CC commands (`/new`, `/cancel`, `/status`, `/cd`, `/session`, `/compact`, `/help`) inside the workflow chat.
-
-### How it works
-
-- Creating a workflow automatically creates a chat group behind the scenes and links them together.
-- When you open a workflow, the WebSocket connection detects it and silently activates CC mode — no `/cc` needed.
-- Workflows are per-user; each user's workflow list and sessions are isolated.
-- Workflow data is stored in `backend/workflows/workflow_store.json`.
-
-### API
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/workflows?userId=...` | List workflows |
-| POST | `/api/workflows` | Create workflow (`{userId, name, description, initialDir}`); requires directory trust |
-| DELETE | `/api/workflows/{id}?userId=...` | Delete workflow |
-
-### Trusted Directories
-
-Before creating a workflow or changing its working directory, the selected directory must be explicitly trusted for the current bridge machine. Trust records are per-user and per-bridge (strict v1: exact bridge ID match). Trusted parent directories automatically cover their children.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/users/{userId}/trusted-dirs/check?path=...` | Check if a directory is trusted on the current bridge |
-| POST | `/users/{userId}/trusted-dirs` | Add trust for a directory (`{path}`) |
-| DELETE | `/users/{userId}/trusted-dirs` | Remove trust for a directory (`{path}`) |
-| GET | `/users/{userId}/trusted-dirs` | List all trusted directories for the user |
-
-### Prerequisites
-
-Workflows require a running **ACP Bridge Adapter** — see [CC Bridge](#cc-bridge-external-claude-cli) below.
-
----
-
-## Claude Code integration
-
-Silk supports a **Claude Code (CC) mode** that lets users interact with a Claude Code CLI from any chat session. This turns Silk into a programming assistant interface — users can ask Claude to read, write, and edit code on the filesystem.
-
-CC mode uses an **ACP (Agent Client Protocol) Bridge** architecture: the Silk backend does not run the Claude CLI itself. Instead, a separate Python process (`cc_bridge/acp_adapter.py`) connects to the backend via WebSocket using the ACP JSON-RPC protocol, receives commands, and executes the Claude CLI locally. This decouples the backend deployment from the Claude execution environment.
-
-### Prerequisites
-
-- **ACP Bridge Adapter** running and connected to the Silk backend (see [CC Bridge](#cc-bridge-external-claude-cli) below)
-- **Claude CLI** installed on the machine running the adapter (`npm install -g @anthropic-ai/claude-code` or equivalent)
-
-### Configuration
-
-The following environment variables are used by the **ACP Bridge Adapter** (set on the machine running `acp_adapter.py`, not the Silk backend):
-
-```bash
-# Claude CLI binary path (default: auto-detected from PATH)
-# CLAUDE_CODE_PATH=claude
-
-# Max tool-call rounds per execution (default: 100)
-# CLAUDE_CODE_MAX_TURNS=100
-
-# Per-execution timeout in seconds (default: 36000 = 10 hours)
-# CLAUDE_CODE_TIMEOUT=36000
-
-# Max output characters per execution (default: 30000)
-# CLAUDE_CODE_MAX_OUTPUT_CHARS=30000
-```
-
-### Usage
-
-In any Silk chat (group or private), send `/cc` to enter Claude Code mode:
-
-```
-/cc              Enter CC mode (new session each time)
-<any text>       Send as prompt to Claude Code
-/exit            Exit CC mode, return to normal Silk chat
-```
-
-#### Session management
-
-```
-/new             Start a new CC session (reset context)
-/session         List historical sessions
-/session <id>    Resume a previous session by ID prefix
-/cd <path>       Change working directory (creates new session)
-/cd              Reset to default working directory
-/compact         Compress session context
-```
-
-#### Task control
-
-```
-/cancel          Cancel running task and clear queue
-/queue           View queued messages
-/queue clear     Clear the message queue
-/status          Show current CC state (session, directory, running/idle)
-/help            Show all CC commands
-```
-
-#### Behavior notes
-
-- **Per-user isolation**: each user has their own CC state per group; one user entering CC mode does not affect others
-- **CC responses are private**: only the user who activated CC sees the responses; other group members see the user's messages but not CC output
-- **Message queue**: if a task is running, new messages are queued (max 10) and auto-executed when the current task finishes
-- **Session persistence**: CC sessions are managed by the Bridge Agent (`~/.silk/cc_sessions.json`); sessions expire after 7 days of inactivity
-- **Permission mode**: currently uses `bypassPermissions` (all tool operations are allowed without confirmation)
-
-### Architecture
-
-CC mode is implemented in `backend/src/main/kotlin/com/silk/backend/agents/`:
-
-| Package/File | Responsibility |
-|------|---------------|
-| `agents/core/AgentRuntime.kt` | Command routing, per-user state, message queue, workflow persistence |
-| `agents/core/CommandRouter.kt` | Parse `/cc`, `/new`, `/status`, `@agent` etc. |
-| `agents/acp/AcpClient.kt` | ACP JSON-RPC client (talks to adapter) |
-| `agents/acp/AcpRegistry.kt` | Manage ACP WebSocket connections per (userId, agentType) |
-| `agents/core/AcpExtensions.kt` | `_silk/*` extension calls (set_cwd, list_dir, compact, list_local_sessions) |
-
-The integration point is `AgentRuntime.handleIfActive()` called from `ChatServer.broadcast()` (in `WebSocketConfig.kt`).
-
-### CC Bridge (external Claude CLI)
-
-The Claude CLI runs on a separate machine (or the same machine in a different process) via the **ACP Bridge Adapter**, which connects to Silk via WebSocket using ACP (JSON-RPC 2.0). This is useful when:
-
-- The backend runs in a container or VM without Claude CLI installed
-- You want to run Claude CLI on a machine with direct access to your codebase
-- You need to separate the backend deployment from the Claude execution environment
-
-#### How it works
-
-```
-User (browser) ──→ Silk backend ──ACP/WebSocket──→ ACP Adapter (acp_adapter.py) ──→ Claude CLI
-```
-
-The ACP Adapter (`cc_bridge/acp_adapter.py`) connects to the Silk backend's `/agent-bridge` WebSocket endpoint, authenticates with a token, and handles ACP requests (`session/new`, `session/prompt`, `_silk/*` extensions) by executing Claude CLI commands locally and streaming results back as `session/update` notifications.
-
-#### Setup
-
-1. **Generate a Bridge Token** in the Silk web UI:
-   - Go to **Settings** → **Claude Code** section
-   - Click **Generate Token** (or **Regenerate Token** if one already exists)
-   - Copy the token
-
-2. **Install dependencies** on the machine where you want to run Claude CLI:
-
-   ```bash
-   cd cc_bridge
-   pip install -r requirements.txt   # websockets>=12.0
-   ```
-
-3. **Ensure Claude CLI is available** on that machine:
-
-   ```bash
-   claude --version   # should print the Claude CLI version
-   ```
-
-4. **Configure** — create `cc_bridge/.env`:
-
-   ```bash
-   BRIDGE_SERVER=<silk-backend-host>:8006
-   BRIDGE_TOKEN=<your-token>
-   # BRIDGE_WORKING_DIR=/path/to/workdir  # optional
-   # BRIDGE_LOG_LEVEL=INFO                # optional
-   ```
-
-5. **Start the ACP Bridge Adapter**:
-
-   ```bash
-   cd cc_bridge
-   ./bridge.sh start        # background (recommended)
-   # or: python acp_adapter.py --server <host>:8006 --token <token>   # foreground
-   ```
-
-6. **Verify connection** in the Silk web UI:
-   - Settings page should show a green status dot with **Connected**
-   - **Bridge IP** displays the IP address of the machine running the adapter
-   - Click **Refresh Status** to update the connection status
-
-#### Management (bridge.sh)
-
-| Command | Description |
-|---------|-------------|
-| `./bridge.sh start` | Start adapter in background |
-| `./bridge.sh stop` | Stop adapter (graceful shutdown) |
-| `./bridge.sh restart` | Restart adapter |
-| `./bridge.sh status` | Check running status |
-| `./bridge.sh logs` | Tail the log file |
-
-#### Files
-
-| File | Responsibility |
-|------|---------------|
-| `cc_bridge/bridge.sh` | Management script: start/stop/restart/status/logs |
-| `cc_bridge/acp_adapter.py` | ACP server: handles session/prompt, streams updates, _silk/* extensions |
-| `cc_bridge/executor.py` | Claude CLI subprocess management |
-| `cc_bridge/session_manager.py` | Session persistence and lifecycle |
-| `cc_bridge/fs_listing.py` | Directory listing helper (used by _silk/list_dir) |
-| `cc_bridge/requirements.txt` | Python dependencies (`websockets>=12.0`) |
+See [ARCHITECTURE.md](ARCHITECTURE.md#dsh-superagent-integration) for the HTTP surface and
+the decision record in `docs/context/planning/exec-plans/2026-11-03-dsh-superagent-im-pivot-plan.md`.
 
 ---
 

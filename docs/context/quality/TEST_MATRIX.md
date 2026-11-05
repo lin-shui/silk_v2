@@ -24,18 +24,11 @@
 - Primary tests:
   - `todos/UserTodoStoreTest`
 
-## Agent Framework / ACP
+## dsh-superagent Bot Surface
 
 - Command: `./gradlew :backend:test`
-- Primary tests:
-  - `agents/core/AgentRuntimeTest`
-  - `agents/core/AgentRuntimeAcpIntegrationTest`
-  - `agents/core/AgentSessionTest`
-  - `agents/core/CommandRouterTest`
-  - `agents/core/GroupAgentContextTest`
-  - `agents/core/AcpUpdateMapperTest`
-  - `agents/acp/AcpClientTest`
-  - `agents/acp/AcpRegistryTest`
+- Primary test:
+  - `routes/DshBotRoutesTest` — token 生命周期、按邀请码入群、时间游标拉取、幂等发送
 
 ## Knowledge Base
 
@@ -48,12 +41,6 @@
   - `kb/KnowledgeBaseCopilotTest` — KB Copilot 草稿生成与写回
   - `kb/KnowledgeBaseEmbeddingTest` — 嵌入向量缓存与混合搜索（cosineSimilarity、l2Normalize、KbEmbeddingCache CRUD、NoOpEmbeddingProvider、混合搜索集成）
   - `kb/KnowledgeBaseManagerAccessControlTest` — 权限控制测试
-
-## Trusted Directory / Workflow Directory Trust
-
-- Command: `./gradlew :backend:test`
-- Primary tests:
-  - `trust/TrustedDirManagerTest`
 
 ## Web File Contract / Parser
 
@@ -70,7 +57,6 @@
   - `./gradlew :frontend:androidApp:compileDebugKotlin`
 - Primary tests:
   - `frontend/androidApp/src/test/kotlin/com/silk/android/FileContractsTest.kt`
-  - `frontend/androidApp/src/test/kotlin/com/silk/android/WorkflowPathUtilsTest.kt`（工作流目录浏览路径工具）
 
 ## Desktop File Contract / Parser
 
@@ -100,22 +86,6 @@
   - before blaming CI for fast-validation lint failures, because the same `silkLint` entrypoint runs in CI
 - Maintenance:
   - `./gradlew silkLintBaseline` regenerates `config/lint/detekt/` baselines for intentionally accepted existing findings
-
-## CC Bridge (Python)
-
-- Command: `python3 -m pytest cc_bridge/tests/ -v`
-- Primary tests:
-  - `cc_bridge/tests/test_cc_session_index.py`
-
-## Codex Bridge (Python)
-
-- Command: `python3 -m pytest codex_bridge/tests/ -v`
-- Primary tests:
-  - `codex_bridge/tests/test_codex_session_index.py`
-  - `codex_bridge/tests/test_codex_session_load.py`
-  - `codex_bridge/tests/test_codex_dispatcher.py`
-  - `codex_bridge/tests/test_codex_executor.py`
-  - `codex_bridge/tests/test_fs_listing.py`
 
 ## When Payloads Change
 

@@ -52,7 +52,7 @@ backend 真实快检：
 - [x] WebSocket URL 下载异常分支（读超时 / 连接拒绝 / 损坏 PDF）状态回显与“不落盘”约束
 - [x] WebSocket URL 下载产物文件消息广播与历史回放
 - [x] 未读计数与 `mark-read` 链路
-- [x] 旧 SQLite 初始化不丢登录、用户设置、Bridge token、群组与成员关系
+- [x] 旧 SQLite 初始化不丢登录、用户设置、群组与成员关系
 - [x] 聊天历史重启恢复元数据、追加消息不覆盖旧记录、坏历史文件拒绝覆盖并保留备份
 - [x] AI 工具暴露面过滤（禁用工具不暴露给模型）
 - [x] AI 工具会话作用域拒绝（空作用域 / 非当前会话）
@@ -62,14 +62,11 @@ backend 真实快检：
 - [x] 消息撤回 HTTP 合同（发送者权限、普通消息撤回、`@silk` 连带回复删除）
 - [x] 用户 Todo 列表 / 更新 / 删除 HTTP 合同
 - [x] Todo 生命周期：done 重开、cancelled 重开门槛、逻辑去重、月度模板实例化
-- [x] Claude Code Bridge 元信息格式化单测
-- [x] TrustedDir 精确匹配、子目录继承、bridge/user 隔离、幂等与持久化 round-trip
 
 frontend 轻量快检：
 
 - [x] Android 文件列表 JSON 解析与 `downloadUrl` 透传单测
 - [x] Android `FILE` 消息 payload 解析（JSON / 旧 `|` 格式）单测
-- [x] Android Workflow Folder Picker 路径拼接 / 面包屑工具单测
 - [x] Desktop 文件卡片 payload 解析与下载文件名提取单测
 - [x] Web 文件列表 JSON 解析与 `downloadUrl` 透传单测
 - [x] Web `FILE` 消息 payload 解析（JSON / 旧 `|` 格式）单测
@@ -92,8 +89,6 @@ frontend 轻量快检：
 - 新增 AI 工具权限测试，锁定禁用工具暴露面、会话作用域拒绝，以及路径拒绝时的审计结果。
 - 新增 AutoCLI 工具测试，锁定启用条件、命令注入拒绝、站点白名单和可选真实执行。
 - 新增 citation 测试，锁定搜索来源引用标记、垃圾结果过滤、无效引用剔除和最终引用重编号。
-- 新增 TrustedDirManager 测试，覆盖 per-user/per-bridge 信任隔离、子目录继承、幂等和持久化 round-trip。
-- Claude Code 已切到 Bridge Agent 架构后，移除了失效的旧 session store / stream parser JVM 单测，保留当前后端仍承担的元信息格式化测试。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
 - 新增仓库级 `silkLint`，用 detekt 检查 Gradle 主工程 Kotlin 源码，并用 `config/lint/detekt/` baseline 固化既有静态分析问题，避免首轮引入时全仓重排。
 - 把 `:backend:shadowJar` 和产物 artifact 上传接进快检，补上交付装配层拦截。
@@ -101,7 +96,6 @@ frontend 轻量快检：
 - Web 文件列表加载改为显式 JSON 解析，直接锁定后端返回的 `fileName` / `downloadUrl` / `processedUrls` 合同，不再靠动态对象读字段。
 - Web `FILE` 消息卡片解析抽成纯函数，并补上旧 `fileName|fileSize|downloadUrl` 历史 payload 兼容，避免前端 UI 解析逻辑只能在运行时兜底。
 - Android `FILE` 消息卡片解析抽成纯函数，补齐 JSON / 旧 `|` payload 轻量单测，避免历史消息格式回归只在真机上暴露。
-- Android Workflow Folder Picker 路径拼接抽成可测工具，覆盖 Unix / Windows 路径与面包屑回跳。
 - Desktop 补上 `MessageType.FILE` 卡片解析与下载入口，PDF 报告下载文件名提取也抽成纯函数，避免桌面端继续靠字符串扫 `/download/report/...pdf` 和内联 URL 解码硬扛。
 - 快检工作流新增 `:frontend:webApp:nodeTest` 与 `:frontend:androidApp:testDebugUnitTest`，并上传 Web/Android 测试报告 artifact，方便直接定位前端解析回归。
 - 快检工作流再加入 `:frontend:desktopApp:test` 和 desktop 测试报告 artifact，把三端文件消息解析都放进基础拦截。

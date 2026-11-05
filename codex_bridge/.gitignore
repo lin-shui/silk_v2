@@ -1,7 +1,0 @@
-.bridge.pid
-bridge.log
-.env
-__pycache__/
-*.pyc
-tests/__pycache__/
-.pytest_cache/

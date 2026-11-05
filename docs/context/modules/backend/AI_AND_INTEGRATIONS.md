@@ -12,9 +12,8 @@
   - `knowledge_base/manifest.md`：当前用户可读 topic/entry 清单（含 ids、状态、space、相对路径）
   - `knowledge_base/topics/<topic>__<topicId>/<entry>__<entryId>.md`：单条 KB 文档，供 Claude CLI 的 Grep/Read 主动查阅
 - 当模型在最终回复末尾输出 ` ```silk_kb_action ` 代码块时，后端会统一做“清洗正文 + 解析 JSON + 权限校验 + 执行 + 回写结果摘要”后处理：
-  - 内建 Silk AI：`WebSocketConfig.generateIntelligentResponse()` 使用 `DirectModelAgent.lastKnowledgeBaseActions`
-  - 外部 agent：`AgentRuntime.executeSinglePrompt()` 会对 ACP 最终回复执行同样的后处理
-  - 若当前群组属于 workflow，会补齐 `workflowId + sourceGroupId + recentMessageIds` provenance；未显式指定 `sourceType` 的 create 默认按 `WORKFLOW`，并和 `CHAT` / `AI_RESPONSE` 一样强制落成 `CANDIDATE`
+  - `WebSocketConfig.generateIntelligentResponse()` 使用 `DirectModelAgent.lastKnowledgeBaseActions`
+  - 新条目和 `CHAT` / `AI_RESPONSE` 一样强制落成 `CANDIDATE`（`KBSourceType.WORKFLOW` 仅作为历史存量兼容值保留）
 - `AIConfig.kt` 统一读取：
   - Anthropic Claude API（Messages API）
   - ASR
@@ -57,18 +56,10 @@
 - KB 自助查阅：
   - 聊天主链会把当前用户可读的 KB 条目同步到 agent workspace
   - system prompt 明确要求：若用户要求“总结到 KB / 更新 KB / 先查 skill 再执行”，模型应先读 `knowledge_base/manifest.md`，再输出结构化 `silk_kb_action`
-  - 这套约束现在对内建 Silk AI 与经 ACP 接入的外部 agent 都生效；真正写入仍只由 Silk 服务端执行
+  - 这套约束对内建 Silk AI 生效；真正写入仍只由 Silk 服务端执行
 - `utils/WebPageDownloader.kt`：
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke
-
-## Agent Framework / ACP
-
-- 入口面：`agents/core/AgentRuntime.kt`（`WebSocketConfig` 唯一调用点）
-- Agent 描述符：`agents/adapters/claudecode/ClaudeCodeDescriptor.kt`、`agents/adapters/codex/CodexDescriptor.kt`
-- 执行面：`cc_bridge/acp_adapter.py` 与 `codex_bridge/codex_adapter.py`（外部进程）通过 ACP 协议连接 `/agent-bridge` 端点；`agents/acp/AcpRegistry.kt` 管理连接
-- ACP 不可用时直接报"未连接"，无 fallback
-- 详见 `integrations/CLAUDE_CODE_AND_BRIDGES.md`
 
 ## ASR
 
@@ -86,6 +77,5 @@
 - 改 tool schema / tool permission：更新后端测试
 - 改 AnthropicClient 格式转换：同步验证 convertMessage / convertTool 双向兼容
 - 改 grep searchContext：确认 accessibleSessionIds 隔离不被破坏
-- 改 agent 指令路由：看 `agents/core/CommandRouter.kt` + 对应 adapter；外部 adapter：同时查看 `cc_bridge/`、`codex_bridge/`
 - 改 ASR 协议：同步看 Web/Android/Harmony 调用端
 - 改 Audio Duplex 代理协议：同步看 Web/Android/Harmony Audio Duplex 调用端

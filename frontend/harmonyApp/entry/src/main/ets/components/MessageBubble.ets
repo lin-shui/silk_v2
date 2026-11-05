@@ -528,7 +528,7 @@ export struct MessageBubble {
               bodyText = ccClean.trim();
             }
           } else {
-            // Claude PTY / cc-connect format: single marker per section
+            // Claude PTY format: single marker per section
             const thinkingMarker = '<!--THINKING_END-->';
             const hasThinking = ccClean.includes(thinkingMarker);
             thinkingText = hasThinking ? ccClean.substringBefore(thinkingMarker).trim() : '';

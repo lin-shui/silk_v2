@@ -49,7 +49,7 @@ export interface ContentBlock {
 }
 
 /**
- * 交互式按钮选项（用于 cc-connect 提问）
+ * 交互式按钮选项（用于 AI 提问）
  */
 export interface InteractiveOption {
   label: string;
@@ -74,12 +74,12 @@ export interface Message {
   references?: Reference[];  // 引用来源列表（可选）
   footerContent?: string;    // AI 消息的耗时/轮次等元信息（渲染在消息底部）
   contentBlocks?: ContentBlock[];       // 结构化 content block（流式 / 持久化回放）
-  interactiveOptions?: InteractiveOption[];  // 交互式按钮选项（用于 cc-connect 提问）
+  interactiveOptions?: InteractiveOption[];  // 交互式按钮选项（用于 AI 提问）
 }
 
-/** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾，或为 cc-connect）。 */
+/** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾）。 */
 export function isAgentUserId(userId: string): boolean {
-  return userId.endsWith('_ai_agent') || userId === 'cc-connect';
+  return userId.endsWith('_ai_agent');
 }
 
 /**

@@ -14,7 +14,6 @@
 - 页面包含：
   - `MainPage.ets`
   - `ChatPage.ets`
-  - `WorkflowPage.ets`
   - `KnowledgeBasePage.ets`
   - `TodoPage.ets`
   - `AudioDuplexPage.ets`

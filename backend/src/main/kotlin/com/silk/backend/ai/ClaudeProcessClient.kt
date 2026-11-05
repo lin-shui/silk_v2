@@ -56,11 +56,10 @@ class ClaudeProcessClient(
     }
 
     /**
-     * 从 CWD 向上查找 cc_bridge/pty_chat.py。
+     * 从 CWD 向上查找 backend/scripts/pty_chat.py。
      */
     private fun resolvePtyChatPath(): String {
-        // 优先找 backend/scripts/pty_chat.py（新标准位置），再找 cc_bridge/pty_chat.py（旧位置）
-        val targets = listOf("backend/scripts/pty_chat.py", "cc_bridge/pty_chat.py")
+        val targets = listOf("backend/scripts/pty_chat.py")
         var dir = File(System.getProperty("user.dir"))
         while (true) {
             for (target in targets) {

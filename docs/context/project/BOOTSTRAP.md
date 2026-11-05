@@ -16,7 +16,7 @@
   - `:frontend:androidApp`
   - `:frontend:desktopApp`
   - `:frontend:webApp`
-- Harmony、`cc_bridge/`、`feishu_bot/`、`search/` 不在 Gradle 主工程里。
+- Harmony、`feishu_bot/`、`search/` 不在 Gradle 主工程里。
 
 ## Operational Truth Files
 
@@ -59,4 +59,3 @@
 - 未配置时端口默认并不完全一致：后端运行入口常回落到 `8003`，`silk.sh` 的 Web 前端静态服务器默认 `8005`，Web/Android `FRONTEND_PORT` 生成 fallback 仍是 `8004`；详见 `KNOWN_DRIFT.md`
 - 端口与公网/内网分离时，需要特别注意 `BACKEND_HTTP_PORT` 与 `BACKEND_INTERNAL_PORT`
 - Backend SQLite 默认使用 `./silk_database.db`；测试或隔离运行可通过 JVM 参数 `-Dsilk.databasePath=...` 覆盖
-- Workflow / TrustedDir 默认写到 `~/.silk-data/workflows`；`silk.sh` 会通过 `SILK_WORKFLOW_DIR` / `-Dsilk.workflowDir=...` 注入同一目录

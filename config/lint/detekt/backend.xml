@@ -4,7 +4,6 @@
   <CurrentIssues>
     <ID>CyclomaticComplexMethod:Routing.kt$private fun Route.registerApiKbCopilotStreamPostRoute()</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
-    <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
     <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>
     <ID>LargeClass:GroupTodoExtractionService.kt$GroupTodoExtractionService</ID>
     <ID>LargeClass:KnowledgeBaseManager.kt$KnowledgeBaseManager</ID>

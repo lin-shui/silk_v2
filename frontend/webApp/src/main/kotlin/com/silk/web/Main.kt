@@ -193,14 +193,6 @@ private fun parseFileNameFromContentDisposition(contentDisposition: String?): St
         ?.getOrNull(1)
 }
 
-/** Strip provider prefix and middle-ellipsis long model ids for compact badges. */
-private fun compactModelId(modelId: String, maxLen: Int = 40): String {
-    val bare = modelId.substringAfterLast('/').trim()
-    if (bare.length <= maxLen) return bare
-    val keep = (maxLen - 1) / 2
-    return bare.take(keep) + "…" + bare.takeLast(maxLen - keep - 1)
-}
-
 fun main() {
     console.log("showCropOverlay init")
     js("""
@@ -511,7 +503,6 @@ fun SilkApp() {
                     key(appState.currentTab) {
                         when (appState.currentTab) {
                             NavTab.SILK -> SilkTabContent(appState)
-                            NavTab.WORKFLOW -> WorkflowScene(appState)
                             NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
                             NavTab.AUDIO_DUPLEX -> AudioDuplexScene(appState)
                         }
@@ -560,9 +551,6 @@ fun SilkNavRail(appState: WebAppState) {
         // Tab items
         NavRailItem("Silk", appState.currentTab == NavTab.SILK, "\uD83D\uDCAC") {
             appState.selectTab(NavTab.SILK)
-        }
-        NavRailItem("工作流", appState.currentTab == NavTab.WORKFLOW, "\uD83D\uDD17") {
-            appState.selectTab(NavTab.WORKFLOW)
         }
         NavRailItem("知识库", appState.currentTab == NavTab.KNOWLEDGE_BASE, "\uD83D\uDCDA") {
             appState.selectTab(NavTab.KNOWLEDGE_BASE)
@@ -657,7 +645,6 @@ fun ChatScene(appState: WebAppState) {
     var userGroups by remember(user?.id) { mutableStateOf<List<Group>>(emptyList()) }
     var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
-    var sidebarCcStatus by remember(user?.id) { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
     var chatListWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_chat_list_w", 320)) }
     var chatListCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("silk_chat_list_collapsed", false)) }
     ensureLayoutStylesInjected()
@@ -690,14 +677,6 @@ fun ChatScene(appState: WebAppState) {
             if (unreadResponse.success) {
                 unreadCounts = unreadResponse.unreadCounts
             }
-            val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
-            userGroups.forEach { g ->
-                val info = ApiClient.getCcConnectTokenInfo(g.id, user.id)
-                if (info != null && info.success) {
-                    statusMap[g.id] = info
-                }
-            }
-            sidebarCcStatus = statusMap
         } catch (e: Exception) {
             console.error("❌ 加载聊天室群组列表失败:", e)
         } finally {
@@ -950,15 +929,12 @@ fun ChatScene(appState: WebAppState) {
                     }
                     else -> {
                         val silkPrivateGroups = userGroups.filter { it.name.startsWith("[Silk]") }
-                        val ccGroups = userGroups.filter { sidebarCcStatus.containsKey(it.id) }
-                        val silkNormalGroups = userGroups.filter { !it.name.startsWith("[Silk]") && !sidebarCcStatus.containsKey(it.id) }
+                        val silkNormalGroups = userGroups.filter { !it.name.startsWith("[Silk]") }
 
                         @Composable
                         fun renderGroupItem(item: Group) {
                             val isActive = item.id == group.id
                             val unread = unreadCounts[item.id] ?: 0
-                            val ccInfo = sidebarCcStatus[item.id]
-                            val isCcGroup = ccInfo != null
                             val isSilkPrivate = item.name.startsWith("[Silk]")
                             Div({
                                 style {
@@ -1005,22 +981,7 @@ fun ChatScene(appState: WebAppState) {
                                     }) {
                                         Text(item.name)
                                     }
-                                    val typeBadge: String? = when {
-                                        isCcGroup -> {
-                                            val raw = (ccInfo?.agentType ?: "").lowercase().trim()
-                                            when {
-                                                raw.startsWith("claude") -> "claude"
-                                                raw.startsWith("cursor") -> "cursor"
-                                                raw.startsWith("gemini") -> "gemini"
-                                                raw.startsWith("codex")  -> "codex"
-                                                raw.startsWith("copilot") -> "copilot"
-                                                raw.isBlank() -> "cc"
-                                                else -> raw
-                                            }
-                                        }
-                                        isSilkPrivate -> null
-                                        else -> "silk"
-                                    }
+                                    val typeBadge: String? = if (isSilkPrivate) null else "silk"
                                     if (typeBadge != null) {
                                         Span({
                                             style {
@@ -1030,21 +991,11 @@ fun ChatScene(appState: WebAppState) {
                                                 property("font-weight", "600")
                                                 property("letter-spacing", "0.3px")
                                                 property("flex-shrink", "0")
-                                                if (isCcGroup) {
-                                                    if (ccInfo?.connected == true) {
-                                                        backgroundColor(Color("#E8F5E9"))
-                                                        color(Color("#2E7D32"))
-                                                    } else {
-                                                        backgroundColor(Color("#FFF3E0"))
-                                                        color(Color("#E65100"))
-                                                    }
-                                                } else {
-                                                    backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
-                                                    color(Color(SilkColors.primary))
-                                                }
+                                                backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
+                                                color(Color(SilkColors.primary))
                                             }
                                         }) {
-                                            Text(if (isCcGroup && ccInfo?.connected != true) "$typeBadge ⏸" else typeBadge)
+                                            Text(typeBadge)
                                         }
                                     }
                                     if (unread > 0) {
@@ -1114,46 +1065,14 @@ fun ChatScene(appState: WebAppState) {
                             silkPrivateGroups.forEach { renderGroupItem(it) }
                         }
 
-                        // --- Section 2: CC-Connect 群组 ---
-                        if (ccGroups.isNotEmpty()) {
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "8px")
-                                    marginTop(if (silkPrivateGroups.isNotEmpty()) 12.px else 0.px)
-                                    marginBottom(8.px)
-                                }
-                            }) {
-                                Span({
-                                    style {
-                                        fontSize(11.px)
-                                        color(Color("#2E7D32"))
-                                        property("font-weight", "700")
-                                        property("letter-spacing", "1px")
-                                        property("white-space", "nowrap")
-                                    }
-                                }) { Text("CC-Connect") }
-                                Div({
-                                    style {
-                                        property("flex", "1")
-                                        height(1.px)
-                                        backgroundColor(Color("#4CAF50"))
-                                        property("opacity", "0.3")
-                                    }
-                                })
-                            }
-                            ccGroups.forEach { renderGroupItem(it) }
-                        }
-
-                        // --- Section 3: Silk 普通群组 ---
+                        // --- Section 2: Silk 普通群组 ---
                         if (silkNormalGroups.isNotEmpty()) {
                             Div({
                                 style {
                                     display(DisplayStyle.Flex)
                                     alignItems(AlignItems.Center)
                                     property("gap", "8px")
-                                    marginTop(if (silkPrivateGroups.isNotEmpty() || ccGroups.isNotEmpty()) 12.px else 0.px)
+                                    marginTop(if (silkPrivateGroups.isNotEmpty()) 12.px else 0.px)
                                     marginBottom(8.px)
                                 }
                             }) {
@@ -1599,13 +1518,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
-    // cc-connect status for this group
-    var ccConnectInfo by remember(group.id) { mutableStateOf<CcConnectTokenInfo?>(null) }
-    LaunchedEffect(group.id) {
-        val info = ApiClient.getCcConnectTokenInfo(group.id, user.id)
-        if (info != null && info.success) ccConnectInfo = info
-    }
-
     // 动态生成 WebSocket URL，兼容同源代理与本地分端口开发
     val wsUrl = remember {
         val url = backendWsOrigin()
@@ -1619,28 +1531,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
-    val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
-    val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
     val contentBlocks by chatClient.transientContentBlocks.collectAsState()
-    val interactiveOptions by chatClient.interactiveOptions.collectAsState()
 
-    // Update ccConnectInfo when metadata arrives via WebSocket
-    LaunchedEffect(ccMetadataJson) {
-        val raw = ccMetadataJson ?: return@LaunchedEffect
-        try {
-            val parsed = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                .decodeFromString<CcMetadataEvent>(raw)
-            val current = ccConnectInfo ?: return@LaunchedEffect
-            ccConnectInfo = current.copy(
-                mode = parsed.mode ?: current.mode,
-                model = parsed.model ?: current.model,
-                availableModes = if (parsed.availableModes.isNullOrEmpty()) current.availableModes else parsed.availableModes,
-                availableModels = if (parsed.availableModels.isNullOrEmpty()) current.availableModels else parsed.availableModels,
-            )
-        } catch (e: Exception) {
-            console.log("cc_metadata parse error:", e)
-        }
-    }
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
@@ -1761,13 +1653,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var kbRefSearchResults by remember { mutableStateOf<List<KnowledgeBaseEntrySearchResult>>(emptyList()) }
     var kbRefIsSearching by remember { mutableStateOf(false) }
     
-    // cc-connect token dialog
-    var showCcConnectTokenDialog by remember { mutableStateOf(false) }
-
-    // cc-connect mode/model dropdown state
-    var showModeDropdown by remember { mutableStateOf(false) }
-    var showModelDropdown by remember { mutableStateOf(false) }
-
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
     
@@ -1860,9 +1745,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     
     val activeChatNavigationTarget = appState.chatNavigationTarget?.takeIf { it.groupId == group.id }
 
-    // 自动滚动到底部 — 包括 contentBlocks（cc-connect / Claudian 流式回复的主要通道）
-    // 以及 interactiveOptions（交互式按钮出现在底部时）
-    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, interactiveOptions, activeChatNavigationTarget?.requestId) {
+    // 自动滚动到底部 — 包括 contentBlocks（流式回复的主要通道）
+    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, activeChatNavigationTarget?.requestId) {
         if (activeChatNavigationTarget?.messageId?.isNullOrBlank() == false) return@LaunchedEffect
         js("""
             setTimeout(function() {
@@ -1960,64 +1844,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }) {
                     Text(group.name)
-                    if (ccConnectInfo != null) {
-                        Span({
-                            style {
-                                fontSize(10.px)
-                                padding(2.px, 8.px)
-                                borderRadius(4.px)
-                                property("font-weight", "600")
-                                property("letter-spacing", "0.5px")
-                                property("cursor", "pointer")
-                                property("transition", "opacity 0.2s ease")
-                                if (ccConnectInfo?.connected == true) {
-                                    backgroundColor(Color("#E8F5E9"))
-                                    color(Color("#2E7D32"))
-                                } else {
-                                    backgroundColor(Color("#FFF3E0"))
-                                    color(Color("#E65100"))
-                                }
-                            }
-                            attr("title", "Click to view token & connection info")
-                            onClick { showCcConnectTokenDialog = true }
-                        }) {
-                            val label = if (ccConnectInfo?.connected == true) {
-                                val agentName = run {
-                                    val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
-                                    when {
-                                        raw.startsWith("claude") -> "Claude"
-                                        raw.startsWith("cursor") -> "Cursor"
-                                        raw.startsWith("gemini") -> "Gemini"
-                                        raw.startsWith("codex")  -> "Codex"
-                                        raw.startsWith("copilot") -> "Copilot"
-                                        raw.isBlank() -> "agent"
-                                        else -> raw
-                                    }
-                                }
-                                "cc-connect ($agentName)"
-                            } else {
-                                "cc-connect (offline)"
-                            }
-                            Text(label)
-                        }
-                    }
-                }
-                val cwdText = ccConnectInfo?.cwd
-                if (ccConnectInfo?.connected == true && !cwdText.isNullOrBlank()) {
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("font-family", "monospace")
-                            property("letter-spacing", "0")
-                            property("overflow", "hidden")
-                            property("text-overflow", "ellipsis")
-                            property("white-space", "nowrap")
-                        }
-                        title(cwdText)
-                    }) {
-                        Text("📁 $cwdText")
-                    }
                 }
             }
             
@@ -2585,11 +2411,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
             // 显示临时消息（如果有）
             transientMessage?.let { message ->
-                val isStructuredCcContent = message.content.contains("<!--CC_TURN-->")
                 val shouldShowTransientMsg = message.content.isNotBlank() &&
                     message.currentStep == null &&
                     message.totalSteps == null &&
-                    (isStructuredCcContent || !isLikelyAgentStatusContent(message.content))
+                    !isLikelyAgentStatusContent(message.content)
                 if (shouldShowTransientMsg) {
                     MessageItem(
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
@@ -2636,17 +2461,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                 }
-            }
-
-            // 显示交互式按钮选项（cc-connect 提问）
-            if (interactiveOptions.isNotEmpty()) {
-                console.log("🔘 [UI] rendering InteractiveOptions: ${interactiveOptions.size} options: ${interactiveOptions.map { it.label }}")
-                InteractiveOptions(
-                    options = interactiveOptions,
-                    onAnswer = { value ->
-                        chatClient.sendCcAnswer(value)
-                    }
-                )
             }
         }
 
@@ -2841,26 +2655,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             }) {
                 val isSilkPrivateChat = group.name.startsWith("[Silk]")
-                val isCcConnectGroup = ccConnectInfo != null
-                val currentMemberRole = groupMembers.find { it.id == user.id }?.role
-                val canTriggerCc = currentMemberRole == "HOST" || currentMemberRole == "OPERATOR"
-                val showCcButton = isCcConnectGroup && groupMembers.size >= 2 && canTriggerCc
-                val ccTriggerName = run {
-                    val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
-                    when {
-                        raw.startsWith("claude") -> "claude"
-                        raw.startsWith("cursor") -> "cursor"
-                        raw.startsWith("gemini") -> "gemini"
-                        raw.startsWith("codex")  -> "codex"
-                        raw.startsWith("copilot") -> "copilot"
-                        raw.isBlank() -> "cc"
-                        else -> raw
-                    }
-                }
-                val ccPrefix = "@$ccTriggerName"
 
-                // @Silk 快捷按钮（在 Silk 私聊和 cc-connect 群组中隐藏）
-                if (!isSilkPrivateChat && !isCcConnectGroup) {
+                // @Silk 快捷按钮（在 Silk 私聊中隐藏）
+                if (!isSilkPrivateChat) {
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -2913,198 +2710,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
                 }
 
-                // 代理触发按钮（按连接的代理类型显示 @claude/@cursor 等，仅多人群 HOST/OPERATOR 可见）
-                if (showCcButton) {
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        property("justify-content", "flex-start")
-                        property("gap", "8px")
-                        alignItems(AlignItems.Center)
-                        property("flex-wrap", "wrap")
-                    }
-                }) {
-                    Button({
-                        style {
-                            padding(6.px, 12.px)
-                            backgroundColor(Color("rgba(76, 175, 80, 0.12)"))
-                            color(Color("#4CAF50"))
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color("#4CAF50"))
-                            }
-                            borderRadius(16.px)
-                            property("cursor", "pointer")
-                            fontSize(13.px)
-                            property("font-weight", "500")
-                            property("transition", "all 0.2s ease")
-                            property("white-space", "nowrap")
-                        }
-                        onClick {
-                            val prefixWithSpace = "$ccPrefix "
-                            val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
-                            if (input != null) {
-                                val currentText = messageText
-                                val cursorPos = input.selectionStart ?: currentText.length
-                                val beforeCursor = currentText.substring(0, cursorPos)
-                                val afterCursor = currentText.substring(cursorPos)
-                                messageText = "$beforeCursor$prefixWithSpace$afterCursor"
-                                window.setTimeout({
-                                    val newPos = cursorPos + prefixWithSpace.length
-                                    input.setSelectionRange(newPos, newPos)
-                                    input.focus()
-                                }, 0)
-                            } else {
-                                messageText = if (messageText.isEmpty() || messageText.endsWith(" ")) {
-                                    "$messageText$prefixWithSpace"
-                                } else {
-                                    "$messageText $prefixWithSpace"
-                                }
-                            }
-                        }
-                    }) {
-                        Text(ccPrefix)
-                    }
-
-                    // mode/model badges inline with @agent button
-                    if (ccConnectInfo?.connected == true) {
-                        val modeKey = ccConnectInfo?.mode ?: ""
-                        val modelName = ccConnectInfo?.model ?: ""
-
-                        if (showModeDropdown || showModelDropdown) {
-                            Div({
-                                style {
-                                    property("position", "fixed")
-                                    property("top", "0"); property("left", "0")
-                                    property("right", "0"); property("bottom", "0")
-                                    property("z-index", "999")
-                                }
-                                onClick { showModeDropdown = false; showModelDropdown = false }
-                            })
-                        }
-
-                        // Mode
-                        if (modeKey.isNotBlank() || !ccConnectInfo?.availableModes.isNullOrEmpty()) {
-                            val modeName = ccConnectInfo?.availableModes?.find { it.key == modeKey }?.name ?: modeKey
-                            val (modeBg, modeFg, modeBorder) = when (modeKey) {
-                                "force", "bypassPermissions", "yolo" -> Triple("#FFF0F0", "#C62828", "#FFCDD2")
-                                "plan" -> Triple("#EDF4FF", "#1565C0", "#BBDEFB")
-                                "ask" -> Triple("#F0FFF0", "#2E7D32", "#C8E6C9")
-                                else -> Triple("#F7F7F7", "#555555", "#E0E0E0")
-                            }
-                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
-                                Span({
-                                    style {
-                                        fontSize(13.px); padding(4.px, 12.px); borderRadius(14.px)
-                                        property("font-weight", "500"); property("cursor", "pointer")
-                                        property("transition", "all 0.15s ease"); property("user-select", "none")
-                                        backgroundColor(Color(modeBg)); color(Color(modeFg))
-                                        property("border", "1px solid $modeBorder")
-                                    }
-                                    attr("title", "Permission mode")
-                                    onClick { showModeDropdown = !showModeDropdown; showModelDropdown = false }
-                                }) { Text("⚙ ${modeName.ifBlank { "mode" }}") }
-                                if (showModeDropdown && !ccConnectInfo?.availableModes.isNullOrEmpty()) {
-                                    Div({
-                                        style {
-                                            property("position", "absolute"); property("bottom", "100%"); property("left", "0")
-                                            property("z-index", "1000"); marginBottom(6.px)
-                                            backgroundColor(Color.white); borderRadius(10.px)
-                                            property("box-shadow", "0 4px 20px rgba(0,0,0,0.12)")
-                                            property("min-width", "180px"); padding(6.px)
-                                            property("border", "1px solid #E8E8E8")
-                                        }
-                                    }) {
-                                        Div({ style { padding(6.px, 12.px); fontSize(11.px); color(Color("#999")); property("font-weight", "500"); property("text-transform", "uppercase"); property("letter-spacing", "0.5px") } }) { Text("Mode") }
-                                        ccConnectInfo?.availableModes?.forEach { opt ->
-                                            val isCurrent = opt.key == modeKey
-                                            Div({
-                                                style {
-                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer"); fontSize(14.px)
-                                                    if (isCurrent) { backgroundColor(Color("#F0F4FF")); property("font-weight", "600"); color(Color("#1565C0")) }
-                                                }
-                                                onClick { showModeDropdown = false; if (!isCurrent) chatClient.sendCcCommand(user.id, "/mode ${opt.key}") }
-                                                onMouseOver { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F0F4FF" else "#F5F5F5" }
-                                                onMouseOut { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F0F4FF" else "" }
-                                            }) { Text(if (isCurrent) "✓ ${opt.name}" else "  ${opt.name}") }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Model
-                        if (!ccConnectInfo?.availableModels.isNullOrEmpty()) {
-                            val badgeModel = if (modelName.isNotBlank()) compactModelId(modelName) else "default"
-                            val modelTitle = if (modelName.isNotBlank()) modelName else "agent default"
-                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock); maxWidth(320.px) } }) {
-                                Span({
-                                    style {
-                                        fontSize(13.px); padding(4.px, 12.px); borderRadius(14.px)
-                                        property("font-weight", "500"); property("cursor", "pointer")
-                                        property("transition", "all 0.15s ease"); property("user-select", "none")
-                                        backgroundColor(Color("#F8F0FF")); color(Color("#6A1B9A"))
-                                        property("border", "1px solid #E1BEE7")
-                                        display(DisplayStyle.InlineBlock); maxWidth(100.percent)
-                                        property("overflow", "hidden"); property("text-overflow", "ellipsis")
-                                        property("white-space", "nowrap"); property("vertical-align", "middle")
-                                        property("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
-                                    }
-                                    attr("title", "Model: $modelTitle")
-                                    onClick { showModelDropdown = !showModelDropdown; showModeDropdown = false }
-                                }) { Text("🤖 $badgeModel") }
-                                if (showModelDropdown) {
-                                    Div({
-                                        style {
-                                            property("position", "absolute"); property("bottom", "100%"); property("left", "0")
-                                            property("z-index", "1000"); marginBottom(6.px)
-                                            backgroundColor(Color.white); borderRadius(10.px)
-                                            property("box-shadow", "0 4px 20px rgba(0,0,0,0.12)")
-                                            minWidth(360.px); property("max-width", "min(520px, 92vw)")
-                                            property("max-height", "min(420px, 60vh)")
-                                            property("overflow-y", "auto"); padding(6.px)
-                                            property("border", "1px solid #E8E8E8")
-                                        }
-                                    }) {
-                                        Div({ style { padding(6.px, 12.px); fontSize(11.px); color(Color("#999")); property("font-weight", "500"); property("text-transform", "uppercase"); property("letter-spacing", "0.5px") } }) { Text("Model") }
-                                        ccConnectInfo?.availableModels?.forEach { opt ->
-                                            val isCurrent = opt.name == modelName
-                                            Div({
-                                                style {
-                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer")
-                                                    property("white-space", "normal"); property("word-break", "break-all")
-                                                    if (isCurrent) { backgroundColor(Color("#F3E5F5")); color(Color("#6A1B9A")) }
-                                                }
-                                                onClick { showModelDropdown = false; if (!isCurrent) chatClient.sendCcCommand(user.id, "/model switch ${opt.name}") }
-                                                onMouseOver { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "#F5F5F5" }
-                                                onMouseOut { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "" }
-                                            }) {
-                                                Div({
-                                                    style {
-                                                        fontSize(13.px)
-                                                        if (isCurrent) property("font-weight", "600")
-                                                        property("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
-                                                        property("line-height", "1.45")
-                                                    }
-                                                }) { Text(if (isCurrent) "✓ ${opt.name}" else opt.name) }
-                                                if (opt.desc.isNotBlank()) {
-                                                    Div({
-                                                        style {
-                                                            fontSize(12.px); color(Color("#888")); marginTop(2.px)
-                                                            property("line-height", "1.35"); property("word-break", "break-word")
-                                                        }
-                                                    }) { Text(opt.desc) }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                }
                 
                 // 第一行：输入框占据整行
                 // 发送消息的函数
@@ -3281,9 +2886,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             }
                         }
                         attr("placeholder", when {
-                            pendingQuestionId != null -> "回答 Claude Code 的问题..."
                             group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
-                            ccConnectInfo != null -> "Message cc-connect agent..."
                             else -> strings.messageInputPlaceholder
                         })
                         attr("rows", "2")
@@ -3855,7 +3458,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         source = KBEntrySource(
                             sourceType = draft.sourceType,
                             sourceGroupId = draft.sourceGroupId,
-                            workflowId = draft.workflowId,
                             messageIds = listOf(draft.message.id),
                         ),
                     )
@@ -4115,9 +3717,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             currentUserId = user.id,
             isLoading = isLoadingContacts,
             strings = strings,
-            isHost = group.hostId == user.id,
-            isCcConnectGroup = ccConnectInfo != null,
-            groupId = group.id,
             onMemberClick = { member ->
                 // 检查是否是联系人
                 val isContact = contacts.any { it.contactId == member.id }
@@ -4148,24 +3747,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 showMembersDialog = false
                 selectedMemberForInvite = null
                 inviteMemberResult = null
-            },
-            onMembersChanged = {
-                scope.launch {
-                    val membersResponse = ApiClient.getGroupMembers(group.id)
-                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                }
             }
-        )
-    }
-    
-    // cc-connect token info dialog
-    if (showCcConnectTokenDialog && ccConnectInfo != null) {
-        CcConnectTokenDialog(
-            groupId = group.id,
-            userId = user.id,
-            tokenInfo = ccConnectInfo!!,
-            onTokenRegenerated = { newInfo -> ccConnectInfo = newInfo },
-            onDismiss = { showCcConnectTokenDialog = false }
         )
     }
 
@@ -5468,10 +5050,7 @@ fun MarkdownContent(
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content, references) {
         try {
-            // Strip the cc-connect turn routing marker (invisible to users)
             val cleanContent = content
-                .replace("<!--CC_TURN-->\n", "")
-                .replace("<!--CC_TURN-->", "")
             // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
             // before any other processing, so DOMPurify won't strip them as invalid tags.
             val htmlSafeContent = cleanContent.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
@@ -6142,8 +5721,8 @@ fun MessageItem(
         formatMessageTimestampForWeb(message.timestamp)
     }
     
-    // 是否是 AI 消息（包含 cc-connect 代理回复）
-    val isAIMessage = isAgentUserId(message.userId) || message.userId == "cc-connect"
+    // 是否是 AI 消息
+    val isAIMessage = isAgentUserId(message.userId)
     
     // AI 消息使用专用卡片
     val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
@@ -6202,8 +5781,7 @@ fun MessageItem(
     }
 
     // Agent 提问消息 - 橙色警告样式
-    // 注意：仅处理 cc-connect 的文本型提问（type=TEXT，按钮走底部 interactiveOptions）。
-    // ACP/Workflow agent 的提问是 CARD 类型（questionCard），必须落到下面 when(type) 的
+    // 注意：文本型提问（type=TEXT）在此渲染；CARD 类型的提问必须落到下面 when(type) 的
     // CARD 分支由 CardMessageRenderer 渲染，不能在此被当作文本拦截。
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION &&
         message.type != MessageType.CARD && message.type != MessageType.CARD_REPLY) {
@@ -7042,10 +6620,8 @@ fun MessageItem(
         }
         MessageType.STOP_GENERATE -> {
         }
-        MessageType.CC_COMMAND -> {
-        }
         MessageType.CARD -> {
-            // ACP/Workflow agent 交互卡片（问题/权限/计划）→ CardMessageRenderer
+            // 交互卡片（问题/权限/计划）→ CardMessageRenderer
             chatClient?.let {
                 Div({
                     attr("id", messageDomId(message.id))
@@ -7055,6 +6631,7 @@ fun MessageItem(
                 }
             }
         }
+        MessageType.CC_COMMAND -> Unit
         MessageType.CARD_REPLY -> {
             // 卡片回复（用户点击）由服务器回放为卡片 edit，这里不单独渲染
         }
@@ -7237,195 +6814,6 @@ internal fun isLikelyAgentStatusContent(content: String): Boolean {
         "⏳"
     )
     return statusHints.any { hint -> text.contains(hint) }
-}
-
-@Suppress("CyclomaticComplexMethod")
-@Composable
-fun CcConnectTokenDialog(
-    groupId: String,
-    userId: String,
-    tokenInfo: CcConnectTokenInfo,
-    onTokenRegenerated: (CcConnectTokenInfo) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var tokenCopied by remember { mutableStateOf(false) }
-    var isRegenerating by remember { mutableStateOf(false) }
-
-    Div({
-        style {
-            position(Position.Fixed)
-            top(0.px); left(0.px)
-            width(100.percent); height(100.vh)
-            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
-            display(DisplayStyle.Flex)
-            justifyContent(JustifyContent.Center)
-            alignItems(AlignItems.Center)
-            property("z-index", "1100")
-            property("backdrop-filter", "blur(4px)")
-        }
-        onClick { onDismiss() }
-    }) {
-        Div({
-            style {
-                backgroundColor(Color(SilkColors.surfaceElevated))
-                borderRadius(16.px)
-                padding(28.px)
-                width(460.px)
-                maxWidth(90.vw)
-                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
-                property("border", "1px solid ${SilkColors.border}")
-            }
-            onClick { it.stopPropagation() }
-        }) {
-            H3({
-                style {
-                    marginTop(0.px); marginBottom(20.px)
-                    color(Color(SilkColors.textPrimary))
-                    property("font-weight", "600")
-                }
-            }) { Text("cc-connect Token") }
-
-            // Connection status
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
-                    marginBottom(16.px)
-                }
-            }) {
-                Span({
-                    style {
-                        width(8.px); height(8.px)
-                        borderRadius(50.percent)
-                        backgroundColor(Color(if (tokenInfo.connected) "#4CAF50" else "#FF9800"))
-                        display(DisplayStyle.InlineBlock)
-                    }
-                }) {}
-                Span({
-                    style {
-                        fontSize(13.px)
-                        color(Color(SilkColors.textPrimary))
-                    }
-                }) {
-                    if (tokenInfo.connected) {
-                        Text("Connected — ${tokenInfo.agentType ?: "agent"}${if (tokenInfo.project != null) " / ${tokenInfo.project}" else ""}")
-                    } else {
-                        Text("Offline — waiting for cc-connect to connect")
-                    }
-                }
-            }
-
-            // Token display (host only)
-            if (tokenInfo.token != null) {
-                Div({
-                    style {
-                        padding(16.px); borderRadius(8.px)
-                        property("background", SilkColors.surface)
-                        property("border", "1px solid ${SilkColors.border}")
-                        marginBottom(16.px)
-                        property("word-break", "break-all")
-                        fontFamily("monospace"); fontSize(14.px)
-                        color(Color(SilkColors.textPrimary))
-                    }
-                }) { Text(tokenInfo.token ?: "") }
-
-                // config.toml snippet
-                Div({
-                    style {
-                        fontSize(13.px); color(Color(SilkColors.textSecondary))
-                        marginBottom(16.px); property("line-height", "1.6")
-                    }
-                }) {
-                    Text("Paste this token into cc-connect's config.toml:")
-                    Div({
-                        style {
-                            fontSize(12.px); padding(12.px); borderRadius(6.px)
-                            property("background", SilkColors.surface)
-                            property("border", "1px solid ${SilkColors.border}")
-                            property("overflow-x", "auto")
-                            color(Color(SilkColors.textPrimary))
-                            fontFamily("monospace")
-                            property("white-space", "pre")
-                            marginTop(8.px)
-                        }
-                    }) {
-                        Text("""[[projects.platforms]]
-type = "silk"
-[projects.platforms.options]
-server = "wss://your-server:15003/ccconnect-bridge"
-token  = "${tokenInfo.token ?: ""}"
-""")
-                    }
-                }
-            }
-
-            // Action buttons
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.FlexEnd)
-                    property("gap", "12px")
-                }
-            }) {
-                if (tokenInfo.token != null) {
-                    Button({
-                        style {
-                            padding(10.px, 18.px)
-                            backgroundColor(Color(SilkColors.surface))
-                            color(Color(SilkColors.textSecondary))
-                            property("border", "1px solid ${SilkColors.border}")
-                            borderRadius(8.px)
-                            property("cursor", if (isRegenerating) "not-allowed" else "pointer")
-                            fontSize(13.px)
-                            property("opacity", if (isRegenerating) "0.6" else "1")
-                        }
-                        onClick {
-                            if (!isRegenerating) {
-                                scope.launch {
-                                    isRegenerating = true
-                                    val newToken = ApiClient.regenerateCcConnectToken(groupId, userId)
-                                    if (newToken != null) {
-                                        val updated = tokenInfo.copy(token = newToken)
-                                        onTokenRegenerated(updated)
-                                        tokenCopied = false
-                                    }
-                                    isRegenerating = false
-                                }
-                            }
-                        }
-                    }) { Text(if (isRegenerating) "Regenerating..." else "Regenerate") }
-
-                    Button({
-                        style {
-                            padding(10.px, 18.px)
-                            backgroundColor(Color(if (tokenCopied) "#4CAF50" else SilkColors.secondary))
-                            color(Color(if (tokenCopied) "white" else SilkColors.textPrimary))
-                            border { width(0.px) }; borderRadius(8.px)
-                            property("cursor", "pointer"); fontSize(13.px)
-                        }
-                        onClick {
-                            tokenInfo.token?.let { token ->
-                                kotlinx.browser.window.navigator.clipboard.writeText(token)
-                                tokenCopied = true
-                            }
-                        }
-                    }) { Text(if (tokenCopied) "Copied!" else "Copy Token") }
-                }
-
-                Button({
-                    style {
-                        padding(10.px, 18.px)
-                        property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
-                        color(Color.white); border { width(0.px) }; borderRadius(8.px)
-                        property("cursor", "pointer"); fontSize(13.px); property("font-weight", "600")
-                    }
-                    onClick { onDismiss() }
-                }) { Text("Done") }
-            }
-        }
-    }
 }
 
 /**
@@ -7638,15 +7026,10 @@ fun MembersDialog(
     currentUserId: String,
     isLoading: Boolean,
     strings: com.silk.shared.i18n.Strings,
-    isHost: Boolean = false,
-    isCcConnectGroup: Boolean = false,
-    groupId: String = "",
     onMemberClick: (GroupMember) -> Unit,
     onDismiss: () -> Unit,
-    onMembersChanged: () -> Unit = {},
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
-    val scope = rememberCoroutineScope()
     
     Div({
         style {
@@ -7802,33 +7185,6 @@ fun MembersDialog(
                                                 Text(strings.me)
                                             }
                                         }
-                                        if (isCcConnectGroup && !isSilkAI) {
-                                            val roleLabel = when (member.role) {
-                                                "HOST" -> "Host"
-                                                "OPERATOR" -> "Operator"
-                                                else -> null
-                                            }
-                                            if (roleLabel != null) {
-                                                Span({
-                                                    style {
-                                                        fontSize(10.px)
-                                                        marginLeft(8.px)
-                                                        padding(2.px, 6.px)
-                                                        borderRadius(4.px)
-                                                        property("font-weight", "500")
-                                                        if (member.role == "HOST") {
-                                                            backgroundColor(Color("#FFF3E0"))
-                                                            color(Color("#E65100"))
-                                                        } else {
-                                                            backgroundColor(Color("#E3F2FD"))
-                                                            color(Color("#1565C0"))
-                                                        }
-                                                    }
-                                                }) {
-                                                    Text(roleLabel)
-                                                }
-                                            }
-                                        }
                                     }
                                     Div({
                                         style {
@@ -7858,40 +7214,6 @@ fun MembersDialog(
                                         property("gap", "8px")
                                     }
                                 }) {
-                                    val canManageOperator = isCcConnectGroup && isHost && !isCurrentUser && member.role != "HOST"
-                                    if (canManageOperator) {
-                                        val isOperator = member.role == "OPERATOR"
-                                        Div({
-                                            style {
-                                                fontSize(11.px)
-                                                padding(4.px, 10.px)
-                                                borderRadius(6.px)
-                                                property("cursor", "pointer")
-                                                property("transition", "all 0.2s ease")
-                                                property("user-select", "none")
-                                                if (isOperator) {
-                                                    backgroundColor(Color("#E3F2FD"))
-                                                    color(Color("#1565C0"))
-                                                    property("border", "1px solid #90CAF9")
-                                                } else {
-                                                    backgroundColor(Color(SilkColors.surface))
-                                                    color(Color(SilkColors.textSecondary))
-                                                    property("border", "1px solid ${SilkColors.border}")
-                                                }
-                                            }
-                                            onClick {
-                                                it.stopPropagation()
-                                                scope.launch {
-                                                    val ok = ApiClient.setCcConnectOperator(
-                                                        groupId, currentUserId, member.id, !isOperator
-                                                    )
-                                                    if (ok) onMembersChanged()
-                                                }
-                                            }
-                                        }) {
-                                            Text(if (isOperator) "Revoke @cc" else "Grant @cc")
-                                        }
-                                    }
                                     if (!isCurrentUser) {
                                         Div({
                                             style {
@@ -7926,59 +7248,6 @@ fun MembersDialog(
                 onClick { onDismiss() }
             }) {
                 Text("关闭")
-            }
-        }
-    }
-}
-
-/**
- * 交互式按钮选项（cc-connect AskUserQuestion）。
- * 每个选项显示为一个可点击的按钮，点击后发送答案并禁用按钮。
- */
-@Composable
-@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
-@NoLiveLiterals
-fun InteractiveOptions(
-    options: List<com.silk.shared.models.InteractiveOption>,
-    onAnswer: (String) -> Unit
-) {
-    val clickedOption = remember { mutableStateOf<String?>(null) }
-
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            property("flex-wrap", "wrap")
-            property("gap", "8px")
-            marginTop(12.px)
-            padding(8.px, 0.px)
-        }
-    }) {
-        for (opt in options) {
-            val isClicked = clickedOption.value == opt.value
-            Button({
-                style {
-                    padding(8.px, 20.px)
-                    borderRadius(8.px)
-                    border {
-                        width(if (isClicked) 2.px else 1.px)
-                        style(LineStyle.Solid)
-                        color(Color(if (isClicked) "#C8A86C" else "#D0D0D0"))
-                    }
-                    backgroundColor(Color(if (isClicked) "#F5F0E6" else "#FFFFFF"))
-                    color(Color("#333333"))
-                    fontSize(14.px)
-                    property("cursor", if (isClicked) "default" else "pointer")
-                    property("transition", "all 0.2s")
-                    property("opacity", if (isClicked) "0.7" else "1.0")
-                }
-                if (!isClicked) {
-                    onClick {
-                        clickedOption.value = opt.value
-                        onAnswer(opt.value)
-                    }
-                }
-            }) {
-                Text(opt.label)
             }
         }
     }

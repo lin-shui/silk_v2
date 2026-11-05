@@ -1,13 +1,12 @@
-import { Group, CreateGroupResponse } from '../models/Group';
+import { Group } from '../models/Group';
 import { GroupCard } from '../components/GroupCard';
 import { LoadingIndicator } from '../components/LoadingIndicator';
 import { SectionHeader } from '../components/SectionHeader';
 import { SilkColors } from '../common/Theme';
-import { apiClient as globalApiClient, CcConnectTokenInfo, CreateGroupRequest } from '../api/ApiClient';
+import { apiClient as globalApiClient, CreateGroupRequest } from '../api/ApiClient';
 import { router as appRouter } from '../common/Router';
 import { appStore as globalAppStore } from '../stores/AppStore';
 import promptAction from '@ohos.promptAction';
-import pasteboard from '@ohos.pasteboard';
 
 @Component
 export struct GroupListPage {
@@ -24,22 +23,13 @@ export struct GroupListPage {
   @State selectedLeaveGroupIds: string[] = [];
   @State isLeavingGroups: boolean = false;
   @State errorMessage: string = '';
-  @State ccConnectStatus: Record<string, CcConnectTokenInfo> = {};
-  @State createGroupType: string = '';
-  @State generatedToken: string = '';
 
   private get silkPrivateGroups(): Group[] {
     return this.groups.filter((g: Group) => g.name.startsWith('[Silk]'));
   }
 
-  private get ccGroups(): Group[] {
-    return this.groups.filter((g: Group) => this.ccConnectStatus[g.id] !== undefined);
-  }
-
   private get silkNormalGroups(): Group[] {
-    return this.groups.filter((g: Group) =>
-      !g.name.startsWith('[Silk]') && this.ccConnectStatus[g.id] === undefined
-    );
+    return this.groups.filter((g: Group) => !g.name.startsWith('[Silk]'));
   }
 
   private unreadRefreshTimer: number = -1;
@@ -81,10 +71,7 @@ export struct GroupListPage {
       const response = await this.apiClient.getGroups(userId);
       const unreadCounts = await this.apiClient.getUnreadCounts(userId);
 
-      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀）
-      const sourceGroups: Group[] = response.data
-        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
-        : [];
+      const sourceGroups: Group[] = response.data ? response.data : [];
       const nextGroups: Group[] = [];
       for (let i = 0; i < sourceGroups.length; i++) {
         const group = sourceGroups[i];
@@ -93,17 +80,6 @@ export struct GroupListPage {
         nextGroups.push(group);
       }
       this.groups = nextGroups;
-
-      // 加载 cc-connect 连接状态
-      const statusMap: Record<string, CcConnectTokenInfo> = {};
-      for (let i = 0; i < nextGroups.length; i++) {
-        const group = nextGroups[i];
-        const info = await this.apiClient.getCcConnectTokenInfo(group.id, userId);
-        if (info !== null && info.success) {
-          statusMap[group.id] = info;
-        }
-      }
-      this.ccConnectStatus = statusMap;
     } catch (error) {
       this.errorMessage = '加载项目失败';
     } finally {
@@ -193,23 +169,14 @@ export struct GroupListPage {
     try {
       const createRequest: CreateGroupRequest = {
         name: trimmedName,
-        createdBy: user.id,
-        type: this.createGroupType === 'ccconnect' ? 'ccconnect' : undefined
+        createdBy: user.id
       };
       const response = await this.apiClient.createGroup(createRequest);
       if (response.success && response.group) {
         this.groups = this.groups.concat([response.group]);
-        if (response.ccConnectToken) {
-          // CC-Connect 群组：展示 token 供用户复制
-          this.generatedToken = response.ccConnectToken;
-          this.showToast('CC-Connect 项目已创建');
-          this.actionSheetMode = 'create_token';
-        } else {
-          this.showActionSheet = false;
-          this.newGroupName = '';
-          this.createGroupType = '';
-          this.showToast(response.ccConnectToken ? 'CC-Connect 项目已创建' : '项目创建成功');
-        }
+        this.showActionSheet = false;
+        this.newGroupName = '';
+        this.showToast('项目创建成功');
       } else {
         const recovered = await this.recoverCreatedGroupAfterFailure(trimmedName, previousGroupIds);
         if (!recovered) {
@@ -239,10 +206,7 @@ export struct GroupListPage {
 
     try {
       const response = await this.apiClient.getGroups(userId);
-      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀）
-      const sourceGroups: Group[] = response.data
-        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
-        : [];
+      const sourceGroups: Group[] = response.data ? response.data : [];
       const unreadCounts = await this.apiClient.getUnreadCounts(userId);
       const refreshed: Group[] = [];
       for (let i = 0; i < sourceGroups.length; i++) {
@@ -407,7 +371,6 @@ export struct GroupListPage {
     AppStorage.setOrCreate<string>('currentGroupId', group.id);
     AppStorage.setOrCreate<string>('currentGroupName', group.name);
     AppStorage.setOrCreate<string>('currentGroupInvitationCode', group.invitationCode ? group.invitationCode : '');
-    AppStorage.setOrCreate<string>('currentWorkflowTaskFocus', '');
     if (user) {
       AppStorage.setOrCreate<string>('currentUserId', user.id);
       AppStorage.setOrCreate<string>('currentUserName', user.name);
@@ -468,7 +431,6 @@ export struct GroupListPage {
   private openCreateSheet(): void {
     this.actionSheetMode = 'create';
     this.newGroupName = '';
-    this.createGroupType = '';
     this.showActionSheet = true;
   }
 
@@ -485,17 +447,6 @@ export struct GroupListPage {
       });
     } catch (_) {
       // ignore
-    }
-  }
-
-  private handleCopy(text: string): void {
-    try {
-      const pasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
-      const sysPasteboard = pasteboard.getSystemPasteboard();
-      sysPasteboard.setData(pasteData);
-      this.showToast('已复制到剪贴板');
-    } catch (_) {
-      this.showToast('复制失败');
     }
   }
 
@@ -662,7 +613,6 @@ export struct GroupListPage {
               ListItem() {
                 GroupCard({
                   group: group,
-                  ccConnectInfo: null,
                   onGroupClick: (selectedGroup: Group): void => {
                     void this.enterChat(selectedGroup);
                   }
@@ -675,29 +625,7 @@ export struct GroupListPage {
             }, (group: Group) => group.id)
           }
 
-          // --- Section 2: CC-Connect 群组 ---
-          if (this.ccGroups.length > 0) {
-            ListItem() {
-              SectionHeader({ title: 'CC-Connect', color: '#2E7D32' })
-            }
-            ForEach(this.ccGroups, (group: Group) => {
-              ListItem() {
-                GroupCard({
-                  group: group,
-                  ccConnectInfo: this.ccConnectStatus[group.id],
-                  onGroupClick: (selectedGroup: Group): void => {
-                    void this.enterChat(selectedGroup);
-                  }
-                })
-                .border({
-                  width: this.isGroupSelectedForLeave(group.id) ? 2 : 0,
-                  color: this.isGroupSelectedForLeave(group.id) ? SilkColors.error : SilkColors.surface
-                })
-              }
-            }, (group: Group) => group.id)
-          }
-
-          // --- Section 3: Silk 普通群组 ---
+          // --- Section 2: Silk 普通群组 ---
           if (this.silkNormalGroups.length > 0) {
             ListItem() {
               SectionHeader({ title: 'Silk Groups', color: SilkColors.textSecondary })
@@ -706,7 +634,6 @@ export struct GroupListPage {
               ListItem() {
                 GroupCard({
                   group: group,
-                  ccConnectInfo: null,
                   onGroupClick: (selectedGroup: Group): void => {
                     void this.enterChat(selectedGroup);
                   }
@@ -737,7 +664,7 @@ export struct GroupListPage {
     .height('100%')
     .backgroundColor(SilkColors.background)
     .bindSheet($$this.showActionSheet, this.buildActionSheet(), {
-      height: this.actionSheetMode === 'create_token' ? 340 : 240,
+      height: 240,
       backgroundColor: SilkColors.surface
     })
   }
@@ -746,8 +673,6 @@ export struct GroupListPage {
   buildActionSheet() {
     if (this.actionSheetMode === 'join') {
       this.buildJoinSheet();
-    } else if (this.actionSheetMode === 'create_token') {
-      this.buildCreateTokenSheet();
     } else {
       this.buildCreateSheet();
     }
@@ -768,43 +693,6 @@ export struct GroupListPage {
         .backgroundColor(SilkColors.background)
         .onChange((value: string) => this.newGroupName = value)
 
-      // 项目类型选择
-      Text('项目类型')
-        .fontSize(13)
-        .fontColor(SilkColors.textSecondary)
-        .margin({ top: 12, bottom: 8 })
-      Row({ space: 12 }) {
-        Button('普通项目')
-          .height(34)
-          .fontSize(13)
-          .layoutWeight(1)
-          .backgroundColor(this.createGroupType === '' ? SilkColors.primary : '#E8E0D4')
-          .fontColor(this.createGroupType === '' ? Color.White : SilkColors.textSecondary)
-          .borderRadius(17)
-          .onClick(() => {
-            this.createGroupType = '';
-          })
-
-        Button('CC-Connect')
-          .height(34)
-          .fontSize(13)
-          .layoutWeight(1)
-          .backgroundColor(this.createGroupType === 'ccconnect' ? '#2E7D32' : '#E8E0D4')
-          .fontColor(this.createGroupType === 'ccconnect' ? Color.White : SilkColors.textSecondary)
-          .borderRadius(17)
-          .onClick(() => {
-            this.createGroupType = 'ccconnect';
-          })
-      }
-      .width('100%')
-
-      if (this.createGroupType === 'ccconnect') {
-        Text('CC-Connect 项目将与外部 AI 编程助手连接，创建后需将 Token 配置到 claude.hce 文件中')
-          .fontSize(11)
-          .fontColor('#2E7D32')
-          .margin({ top: 8 })
-      }
-
       Row() {
         Button('取消')
           .width('45%')
@@ -812,7 +700,6 @@ export struct GroupListPage {
           .fontColor(SilkColors.textSecondary)
           .onClick(() => {
             this.showActionSheet = false;
-            this.createGroupType = '';
           })
 
         Button(this.isCreatingGroup ? '创建中...' : '创建')
@@ -827,64 +714,6 @@ export struct GroupListPage {
       }
       .width('100%')
       .justifyContent(FlexAlign.SpaceBetween)
-      .margin({ top: 16 })
-    }
-    .width('100%')
-    .padding(16)
-  }
-
-  @Builder
-  buildCreateTokenSheet() {
-    Column() {
-      Text('CC-Connect Token')
-        .fontSize(18)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(SilkColors.textPrimary)
-        .margin({ bottom: 8 })
-
-      Text('请将以下 Token 配置到 claude.hce 文件中（或通过 CLI 执行 connect 命令）')
-        .fontSize(12)
-        .fontColor('#2E7D32')
-        .margin({ bottom: 16 })
-
-      Text(this.generatedToken)
-        .fontSize(14)
-        .fontColor(SilkColors.textPrimary)
-        .fontWeight(FontWeight.Medium)
-        .padding({ top: 14, bottom: 14, left: 16, right: 16 })
-        .backgroundColor(SilkColors.background)
-        .borderRadius(10)
-        .width('100%')
-
-      Text('Token 仅在创建时显示一次，请立即复制保存')
-        .fontSize(11)
-        .fontColor(SilkColors.textLight)
-        .margin({ top: 8 })
-
-      Row() {
-        Button('复制 Token')
-          .layoutWeight(1)
-          .height(40)
-          .backgroundColor(SilkColors.primary)
-          .fontColor(Color.White)
-          .margin({ right: 10 })
-          .onClick(() => {
-            this.handleCopy(this.generatedToken);
-          })
-
-        Button('完成')
-          .layoutWeight(1)
-          .height(40)
-          .backgroundColor(SilkColors.surfaceVariant)
-          .fontColor(SilkColors.textSecondary)
-          .onClick(() => {
-            this.actionSheetMode = 'create';
-            this.showActionSheet = false;
-            this.newGroupName = '';
-            this.createGroupType = '';
-          })
-      }
-      .width('100%')
       .margin({ top: 16 })
     }
     .width('100%')

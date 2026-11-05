@@ -5,7 +5,6 @@ import kotlinx.browser.window
 import org.w3c.dom.HTMLElement
 
 internal const val CHAT_MESSAGES_CONTAINER_ID = "messages"
-internal const val WORKFLOW_MESSAGES_CONTAINER_ID = "wf-messages"
 private const val MESSAGE_NAV_HIGHLIGHT_CLASS = "silk-message-nav-highlight"
 private const val MESSAGE_NAV_HIGHLIGHT_DURATION_MS = 2200
 

@@ -19,7 +19,6 @@ data class UserSettings(
     val language: Language = Language.CHINESE,
     val defaultAgentInstruction: String = "You are a helpful technical research assistant. ",
     val appAuthToken: String? = null,
-    val ccBridgeToken: String? = null,
 )
 
 /**
@@ -40,62 +39,4 @@ data class UserSettingsResponse(
     val success: Boolean,
     val message: String,
     val settings: UserSettings? = null
-)
-
-/**
- * CC 设置响应
- */
-@Serializable
-data class CcSettingsResponse(
-    val success: Boolean,
-    val message: String,
-    val ccBridgeToken: String? = null,
-    val bridgeConnected: Boolean = false,
-    val bridgeIp: String? = null,
-)
-
-/**
- * CC 当前 user+group 状态（含工作目录），用于工作流前端展示
- */
-@Serializable
-data class CcStateResponse(
-    val success: Boolean,
-    val active: Boolean = false,
-    val running: Boolean = false,
-    val workingDir: String = "",
-    val sessionId: String = "",
-    val sessionStarted: Boolean = false,
-    val bridgeConnected: Boolean = false,
-    /** 当前激活 agent 的 type（如 "claude-code"、"codex"）；未激活则为空字符串 */
-    val agentType: String = "",
-    /** 当前激活 agent 的显示名称（含 emoji）；未激活则为空字符串 */
-    val agentDisplayName: String = "",
-    /** 当前工具权限模式（INTERACTIVE / ACCEPT_EDITS / BYPASS）；空字符串表示默认 */
-    val permissionMode: String = "",
-    val error: String? = null,
-)
-
-/**
- * 目录浏览条目（只包含目录）
- */
-@Serializable
-data class DirEntry(
-    val name: String,
-    val isDir: Boolean = true,
-)
-
-/**
- * 目录浏览响应（由 Bridge 提供磁盘列表）
- */
-@Serializable
-data class DirListingResponse(
-    val success: Boolean,
-    val path: String = "",
-    val parent: String? = null,
-    val segments: List<String> = emptyList(),
-    /** 该平台的路径分隔符，Unix 为 "/"，Windows 为 "\\"。兼容老响应时默认 "/"。 */
-    val separator: String = "/",
-    val entries: List<DirEntry> = emptyList(),
-    val truncated: Boolean = false,
-    val error: String? = null,
 )

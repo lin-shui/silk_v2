@@ -42,7 +42,6 @@ internal data class KnowledgeCaptureDraft(
     val message: com.silk.shared.models.Message,
     val sourceType: KBSourceType,
     val sourceGroupId: String? = null,
-    val workflowId: String? = null,
     val preferredSpaceId: String = PERSONAL_SPACE_ID,
 )
 

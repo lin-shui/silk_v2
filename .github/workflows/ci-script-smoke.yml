@@ -273,7 +273,6 @@ jobs:
           WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT}
           WEAVIATE_URL=http://127.0.0.1:${WEAVIATE_HTTP_PORT}
           WEAVIATE_API_KEY=ci-smoke
-          SILK_WORKFLOW_DIR=${RUNNER_TEMP}/silk-workflows
           EOF
 
           mkdir -p frontend/webApp/build/dist/js/productionExecutable
@@ -408,7 +407,6 @@ jobs:
           WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT}
           WEAVIATE_URL=http://127.0.0.1:${WEAVIATE_HTTP_PORT}
           WEAVIATE_API_KEY=ci-smoke
-          SILK_WORKFLOW_DIR=${RUNNER_TEMP}/silk-workflows
           EOF
 
           cat > "$SILK_BACKEND_MOCK" <<'PY'

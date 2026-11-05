@@ -1,6 +1,5 @@
 package com.silk.backend
 
-import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.models.SessionData
@@ -547,7 +546,7 @@ class ChatHistoryManager(
         
         val userMessage = chatHistory.messages[userMessageIndex]
 
-        val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
+        val isAgent = { id: String -> AgentIdentity.isAgentUserId(id) }
 
         // 查找用户消息之后、连续的AI回复消息
         val agentReplies = mutableListOf<String>()

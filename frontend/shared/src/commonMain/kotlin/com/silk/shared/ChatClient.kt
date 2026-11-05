@@ -66,10 +66,6 @@ class ChatClient(
     private val _statusMessages = MutableStateFlow<List<Message>>(emptyList())
     val statusMessages: StateFlow<List<Message>> = _statusMessages.asStateFlow()
 
-    // Agent 提问等待回答状态（AskUserQuestion requestId）
-    private val _pendingQuestionId = MutableStateFlow<String?>(null)
-    val pendingQuestionId: StateFlow<String?> = _pendingQuestionId.asStateFlow()
-
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
@@ -87,9 +83,6 @@ class ChatClient(
     val isLoadingHistory: StateFlow<Boolean> = _isLoadingHistory.asStateFlow()
     private val historyBuffer = mutableListOf<Message>()
     private var historyLoadStartMs: Long = 0
-
-    private val _ccMetadataJson = MutableStateFlow<String?>(null)
-    val ccMetadataJson: StateFlow<String?> = _ccMetadataJson.asStateFlow()
     
     private var suppressTransient: Boolean = false
     
@@ -196,13 +189,6 @@ class ChatClient(
                 return
             }
 
-            // cc-connect metadata 更新：不显示为聊天消息
-            if (message.isTransient && message.type == MessageType.SYSTEM && message.content.startsWith("{\"type\":\"cc_metadata\"")) {
-                log("🔧 [ChatClient] 收到 cc_metadata 更新")
-                _ccMetadataJson.value = message.content
-                return
-            }
-
             // 安全超时：超过 30 秒仍在缓冲则强制刷入
             if (_isLoadingHistory.value) {
                 val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
@@ -229,7 +215,6 @@ class ChatClient(
                     _statusMessages.value = emptyList()
                     _isGenerating.value = false
                     suppressTransient = false
-                    _pendingQuestionId.value = null
                 }
                 return
             }
@@ -265,7 +250,6 @@ class ChatClient(
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
                         suppressTransient = false
-                        _pendingQuestionId.value = null
                         _transientContentBlocks.value = emptyList()  // 清除内容块
                         log("🔘 [ChatClient] CLEAR_STATUS 清除 interactiveOptions")
                         _interactiveOptions.value = emptyList()  // 清除交互式按钮
@@ -334,8 +318,6 @@ class ChatClient(
                     }
                     // Track pending question state
                     if (message.category == MessageCategory.AGENT_QUESTION) {
-                        val reqId = message.id.removePrefix("agent_question_")
-                        _pendingQuestionId.value = reqId
                         // Must clear isGenerating so the send button shows (not stop button)
                         _isGenerating.value = false
                         _transientMessage.value = null
@@ -351,7 +333,6 @@ class ChatClient(
                         // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期，
                         // 由 CLEAR_STATUS 或 sendCcAnswer 负责清除。普通消息到达不应取消等待中的按钮。
                         suppressTransient = false
-                        _pendingQuestionId.value = null
                     }
                 }
             }
@@ -393,7 +374,6 @@ class ChatClient(
         _isGenerating.value = false
         _transientMessage.value = null
         _statusMessages.value = emptyList()
-        _pendingQuestionId.value = null
         _transientContentBlocks.value = emptyList()
         _interactiveOptions.value = emptyList()
     }

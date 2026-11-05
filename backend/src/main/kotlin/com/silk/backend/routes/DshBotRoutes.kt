@@ -2,7 +2,7 @@ package com.silk.backend.routes
 
 import com.silk.backend.Message
 import com.silk.backend.MessageType
-import com.silk.backend.agents.core.AgentRuntime
+import com.silk.backend.AgentIdentity
 import com.silk.backend.ChatHistoryManager
 import com.silk.backend.dsh.DshBotIdentity
 import com.silk.backend.dsh.DshBotTokenRepository
@@ -30,7 +30,7 @@ import org.slf4j.LoggerFactory
  * - pull/send 均校验 bot 是群成员；bot 固定 GUEST 角色，silk 内部无触发权。
  * - send 的幂等键由 dsh Outbox 的 message.id 充当，messageId = "dsh_<key>"，
  *   与 ChatServer.broadcast 的去重同一数据源，重试不会重复落盘/广播。
- * - token 管理端点与 ccconnect token 端点保持同一暴露姿态（见 KNOWN_DRIFT/文档）。
+ * - token 管理端点只允许已登录用户为所在群签发/吊销；token 明文只在签发响应里返回一次。
  */
 
 @Serializable
@@ -245,7 +245,7 @@ fun Route.dshBotRoutes() {
                     id = entry.messageId,
                     senderId = entry.senderId,
                     senderName = entry.senderName,
-                    bot = AgentRuntime.isAgentUserId(entry.senderId),
+                    bot = AgentIdentity.isAgentUserId(entry.senderId),
                     content = entry.content,
                     timestamp = entry.timestamp,
                     type = entry.messageType,
