@@ -1,6 +1,6 @@
 package com.silk.backend.ai
 
-import com.silk.backend.agents.core.AgentRuntime
+import com.silk.backend.AgentIdentity
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.pdf.PDFReportGenerator
 import kotlinx.coroutines.delay
@@ -265,7 +265,7 @@ class AIStepwiseAgent(
         
         // 只提取非Silk的消息（去除AI回复）
         val userMessages = chatHistory
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }  // 排除AI消息
+            .filter { !AgentIdentity.isAgentUserId(it.senderId) }  // 排除AI消息
             .filter { it.messageType == "TEXT" }  // 只要文本消息
             .filter { !it.content.startsWith("@诊断") && !it.content.startsWith("@diagnosis") }  // 排除命令
             .takeLast(50)  // 最近50条

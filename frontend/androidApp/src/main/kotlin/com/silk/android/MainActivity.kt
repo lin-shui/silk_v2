@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.AlertDialog
@@ -308,8 +307,7 @@ fun SilkApp(
     } else if (appState.currentScene == Scene.LOGIN) {
         LoginScreen(appState)
     } else {
-        val showBottomNav = appState.currentScene != Scene.CHAT_ROOM &&
-                            appState.currentScene != Scene.WORKFLOW_CHAT
+        val showBottomNav = appState.currentScene != Scene.CHAT_ROOM
         Scaffold(
             bottomBar = {
                 if (showBottomNav) {
@@ -326,12 +324,6 @@ fun SilkApp(
                             Scene.CHAT_ROOM -> ChatScreen(appState)
                             Scene.SETTINGS -> SettingsScreen(appState)
                             else -> GroupListScreen(appState)
-                        }
-                    }
-                    NavTab.WORKFLOW -> {
-                        when (appState.currentScene) {
-                            Scene.WORKFLOW_CHAT -> WorkflowChatScreen(appState)
-                            else -> WorkflowScreen(appState)
                         }
                     }
                     NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScreen(appState)
@@ -354,19 +346,6 @@ fun SilkBottomNav(appState: AppState) {
             onClick = { appState.currentTab = NavTab.SILK },
             icon = { Icon(Icons.Default.Chat, contentDescription = "Silk") },
             label = { Text("Silk", fontSize = 11.sp) },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = SilkColors.primary,
-                selectedTextColor = SilkColors.primary,
-                unselectedIconColor = SilkColors.textLight,
-                unselectedTextColor = SilkColors.textLight,
-                indicatorColor = SilkColors.primaryLight.copy(alpha = 0.3f)
-            )
-        )
-        NavigationBarItem(
-            selected = appState.currentTab == NavTab.WORKFLOW,
-            onClick = { appState.currentTab = NavTab.WORKFLOW },
-            icon = { Icon(Icons.Default.AccountTree, contentDescription = "工作流") },
-            label = { Text("工作流", fontSize = 11.sp) },
             colors = NavigationBarItemDefaults.colors(
                 selectedIconColor = SilkColors.primary,
                 selectedTextColor = SilkColors.primary,

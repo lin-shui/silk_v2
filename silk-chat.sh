@@ -69,7 +69,6 @@ BACKEND_PORT=${BACKEND_INTERNAL_PORT:-${BACKEND_PORT:-$BACKEND_HTTP_PORT}}
 FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT:-${FRONTEND_PORT:-15004}}
 FRONTEND_PORT=${FRONTEND_INTERNAL_PORT:-${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}}
 FRONTEND_PUBLIC_PORT=${FRONTEND_PUBLIC_PORT:-$FRONTEND_HTTP_PORT}
-SILK_WORKFLOW_DIR=${SILK_WORKFLOW_DIR:-"$HOME/.silk-data/workflows"}
 BACKEND_LOG="/tmp/silk_backend.log"
 FRONTEND_LOG="/tmp/silk_frontend.log"
 FRONTEND_STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
@@ -510,10 +509,8 @@ start() {
 
     echo ""
     echo -e "${BLUE}启动后端 (端口 $BACKEND_PORT)...${NC}"
-    mkdir -p "$SILK_WORKFLOW_DIR"
     rm -f "$BACKEND_LOG"
-    nohup env JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" \
-        ./gradlew :backend:run \
+    nohup ./gradlew :backend:run \
         > "$BACKEND_LOG" 2>&1 &
     echo -e "  ${GREEN}后端启动命令已执行${NC}"
     echo -e "  日志: ${CYAN}$BACKEND_LOG${NC}"

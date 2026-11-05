@@ -14,7 +14,7 @@
 | Executor 仓库 | `lin-shui/dsh-superagent-prototype` |
 | Silk AI（DirectModelAgent） | 保留，单人群需要 |
 | 与飞书的关系 | 集成不经飞书；silk 不与 feishu 扯上关系（`feishu_bot/` 后续去留另议） |
-| 旧协作面（`backend/agents/`、`workflow/`、`ccconnect/`） | 冻结不加新能力，链路稳定后再决定删除 |
+| 旧协作面（`backend/agents/`、`workflow/`、`ccconnect/`） | 方案 B：链路稳定后整面删除（已完成，见文末） |
 
 ## 概念映射（silk → dsh）
 
@@ -95,21 +95,20 @@ silk 的 `backend/agents/`、`workflow/`、`ccconnect/` 停止演进，仅修 bu
 - 本分支不动 `docs/todo-roadmap.md`（human-maintained）。
 - **lint 基线（2026-11-03 已清理）**：origin/develop 上原有的 45 条存量 detekt 报点（backend `ai/ClaudeProcessClient.kt`、`Routing.kt` poll 端点、frontend/shared `PlatformWebSocket.js.kt`）已由 PR #155 清零，`silkLint` 恢复全绿；同时把两处 `android-actions/setup-android` 升到 `v4`（runner 镜像已移除 `tools` 包）。
 
-## 方案 B：删除旧协作面（2026-11 起）
+## 方案 B：删除旧协作面（2026-11，已完成）
 
-### Stage 1a：后端 cc-connect（本 PR）
+### Stage 1a：后端 cc-connect（PR #159 已合并）
 
 - 删除 `backend/.../ccconnect/`（Registry / TokenRepository / Protocol）
 - 删除 `/ccconnect-bridge` WebSocket、cc-connect token 管理 API、按角色/前缀转发、按钮答案拦截、cc-connect 图片转发、`ccconnect_tokens` 表与建群发 token 逻辑
-- `WebSocketConfig.broadcast` 不再有 cc-connect 分支：消息现在只可能走 ACP（若有活动 agent）、Vision、Silk AI
-- 破坏性：生产有 4 个群曾生成 cc-connect token（`silk-spark-main`、`silk-open-cc`、`test_cc_public`、`test_cc`），合并后这些群的 cc-connect 连接将失效；`silk-spark-main` 已改用 dsh，不受影响
-- 前端按钮/契约（`interactiveOptions`、`ccConnectToken`、`CreateGroupRequest.type`）暂留，Stage 1b 随三端 UI 一并删除
+- `WebSocketConfig.broadcast` 不再有 cc-connect 分支：消息只可能走 Vision 或 Silk AI
+- 破坏性：生产曾生成过 cc-connect token 的群（`silk-spark-main`、`silk-open-cc`、`test_cc_public`、`test_cc`）连接失效；`silk-spark-main` 已改用 dsh，不受影响
 
-### Stage 2（待做）
+### Stage 1b + 2 + 3：ACP agents、bridges、workflow（本 PR）
 
-- 删除 ACP agents（`backend/agents/`、`/agent-bridge`、`cc_bridge/`、`codex_bridge/`）与 workflow 的 agent 执行路径
-- 迁移：3 个 bridge token、3 个 workflow 的使用方确认后再删
-
-### Stage 3（待做）
-
-- 删除 workflow 编排面（`WorkflowManager`、`/api/workflows`、三端 Workflow 页面）
+- 后端：删除 `agents/`（ACP 协议层、`AgentRuntime`、`CommandRouter`、`AgentSession`、描述符）、`workflow/WorkflowManager`、`trust/TrustedDirManager`、`routes/AgentChangesRoutes`、`models/Workflow`；`Routing.kt` 删除 `/agent-bridge`、`/api/agents`、`/api/workflows*`、`cc-settings` / `cc-state` / `cc-fs` / `trusted-dirs`；`WebSocketConfig` 删除 ACP 拦截与 AgentRuntime 取消分支；新增 `AgentIdentity`（仅用于 AI 消息身份判定）；`UserSettings.cc_bridge_token` 列与相关仓库方法删除。KB 的 `KBSourceType.WORKFLOW` 仅保留为历史存量兼容值。
+- 外部进程：删除 `cc_bridge/`、`codex_bridge/`、`cursor_bridge/`。
+- 前端：Web/Android 删除 Workflow 页面与导航 Tab、Agent 设置、Source Control、cc-connect 状态/Token/`@cc`/operator 管理；Harmony 删除 `WorkflowPage` / `CcWorkflowPanel` 与对应 API；`frontend/shared` 删除 `CcSettingsResponse` / `CcStateResponse` / `DirListingResponse` / `GitChanges*` / `ccMetadataJson`。
+- 脚本与配置：`silk.sh` / `silk-chat.sh` / `backend/build.gradle.kts` 删除 `SILK_WORKFLOW_DIR` / `-Dsilk.workflowDir` 注入；`.env.example` 与 CI script smoke 同步。
+- 文档：删除 `integrations/CLAUDE_CODE_AND_BRIDGES.md`；同步 `ARCHITECTURE.md`、`TASK_ROUTER.md`、`REPO_MAP.md`、`TEST_MATRIX.md`、后端/前端模块文档、`README.md`、`README_TESTS.md`。
+- 破坏性：ACP bridge、workflow、目录信任、代码审查 API 与全部三端 UI 消失；历史 KB 条目中的 `sourceType=WORKFLOW` / `workflowId` 仍可读取和展示。

@@ -68,13 +68,13 @@ export class ChatStore {
     return this._isGenerating;
   }
 
-  // cc-connect 结构化内容块（与 Web/Android 一致，用于流式渲染 thinking/tool_use/text）
+  // 结构化内容块（与 Web/Android 一致，用于流式渲染 thinking/tool_use/text）
   private _transientContentBlocks: ContentBlock[] = [];
   get transientContentBlocks(): ContentBlock[] {
     return this._transientContentBlocks;
   }
 
-  // cc-connect 交互式按钮选项
+  // 交互式按钮选项
   private _interactiveOptions: InteractiveOption[] = [];
   get interactiveOptions(): InteractiveOption[] {
     return this._interactiveOptions;
@@ -104,7 +104,6 @@ export class ChatStore {
   public onHistoryLoaded: (() => void) | null = null;
   public onConnectionStateChanged: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
-  public onCcMetadataChanged: ((json: string) => void) | null = null;
 
   /**
    * 连接到聊天服务器
@@ -266,7 +265,7 @@ export class ChatStore {
   }
 
   /**
-   * 发送 cc-connect 交互式回答（与 ChatClient.sendCcAnswer 一致）
+   * 发送交互式回答（与 ChatClient.sendCcAnswer 一致）
    */
   sendCcAnswer(content: string): void {
     if (!this.wsClient || this._connectionState !== ConnectionState.CONNECTED) {
@@ -351,7 +350,7 @@ export class ChatStore {
         return;
       }
 
-      // cc-connect 结构化 contentBlocks（流式替换完整 block 列表），同时可能携带交互式选项
+      // 结构化 contentBlocks（流式替换完整 block 列表），同时可能携带交互式选项
       if (message.isTransient && message.contentBlocks && message.contentBlocks.length > 0) {
         this._transientMessage = null;
         this._transientContentBlocks = message.contentBlocks;
@@ -365,7 +364,7 @@ export class ChatStore {
         return;
       }
 
-      // cc-connect 交互式按钮选项（无 contentBlocks 的场景）
+      // 交互式按钮选项（无 contentBlocks 的场景）
       if (message.interactiveOptions && message.interactiveOptions.length > 0) {
         this._interactiveOptions = message.interactiveOptions;
         this.onMessagesChanged?.();
@@ -448,7 +447,7 @@ export class ChatStore {
       this._isGenerating = false;
       this._suppressTransient = false;
       this._transientContentBlocks = [];
-      // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期
+      // 不清除 _interactiveOptions：交互式按钮选项独立于普通消息生命周期
       this.onMessagesChanged?.();
 
     } catch (e) {
@@ -464,12 +463,6 @@ export class ChatStore {
    * 处理 WebSocket 原始数据（用于批量历史等场景）
    */
   handleRawData(data: string): void {
-    // cc_metadata 事件：CC 连接状态/模式/模型更新
-    if (data.includes('"type":"cc_metadata"')) {
-      this.onCcMetadataChanged?.(data);
-      return;
-    }
-
     // 批量历史帧：不依赖 _isHistoryLoading 状态，防止超时后历史消息被丢弃
     if (data.startsWith('[')) {
       try {

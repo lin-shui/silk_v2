@@ -31,20 +31,12 @@
 - `/api/calendar/workday/*`
 - `/api/user-todos/*`
 - `/api/messages/*`
-- `/api/workflows` (POST **requires directory trust**)
 - `/api/kb/*`
 - `/api/files/app-version`
 - `/api/files/hap-version`
 - `/api/files/download-hap`
-- `/users/{userId}/cc-settings*`
-- `/users/{userId}/cc-state/{groupId}`
-- `/users/{userId}/cc-fs/list` (GET, query: path/showHidden)
-- `/users/{userId}/cc-fs/cd` (POST, JSON body: groupId/path; **rejects untrusted directories**)
-- `/users/{userId}/trusted-dirs/check` (GET, query: path)
-- `/users/{userId}/trusted-dirs` (POST, DELETE, GET)
 - `/chat` WebSocket
 - `/ws/audio-duplex` WebSocket proxy
-- `/agent-bridge` WebSocket（ACP 协议，Claude Code / Codex adapter 连接点）
 
 已拆出的专项路由：
 
@@ -64,8 +56,8 @@
 - `routes/DshBotRoutes.kt`（dsh-superagent 集成 bot，见 `docs/context/planning/exec-plans/2026-11-03-dsh-superagent-im-pivot-plan.md`）:
   - `POST /api/dsh-bot/token` / `GET /api/dsh-bot/token-info` — bot token 生命周期（单有效 token，regenerate 撤旧）
   - `GET /api/dsh-bot/me` / `POST /api/dsh-bot/join` — Bearer token 鉴权；按邀请码以 GUEST 入群
-  - `GET /api/dsh-bot/messages?groupId&since&limit` — 时间游标拉群消息（含 `bot` 标记，取自 `AgentRuntime.isAgentUserId`）
-  - `POST /api/dsh-bot/messages` — 以 bot（固定 userId `dsh_ai_agent`）幂等发消息：`idempotencyKey` → `dsh_<key>` 消息 ID，与 `ChatServer.broadcast` 去重同源，重试不重复落盘/广播；不触发 Silk AI / ACP agent 路由
+  - `GET /api/dsh-bot/messages?groupId&since&limit` — 时间游标拉群消息（含 `bot` 标记，取自 `AgentIdentity.isAgentUserId`）
+  - `POST /api/dsh-bot/messages` — 以 bot（固定 userId `dsh_ai_agent`）幂等发消息：`idempotencyKey` → `dsh_<key>` 消息 ID，与 `ChatServer.broadcast` 去重同源，重试不重复落盘/广播；不触发 Silk AI 路由
 
 ## ChatServer Flow
 
@@ -76,10 +68,9 @@
 3. 持久化到 `ChatHistoryManager`
 4. 未读计数
 5. 广播到所有 session
-7. 对普通文本异步触发 URL/PDF 处理
-8. Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
-9. `/recall` 命令交给 `UserHistoryAgent`，在 per-user hardlink workspace 中只读检索历史会话
-10. Silk AI / `DirectModelAgent` 响应
+6. 对普通文本异步触发 URL/PDF 处理
+7. `/recall` 命令交给 `UserHistoryAgent`，在 per-user hardlink workspace 中只读检索历史会话
+8. Silk AI / `DirectModelAgent` 响应
 
 其中 Silk AI 主链新增两段 KB 闭环：
 
@@ -91,7 +82,7 @@
 - WebSocket 消息模型同时存在于：
   - 后端 `WebSocketConfig.kt`
   - 共享前端 `frontend/shared/.../models/Message.kt`
-- HTTP 响应/请求 DTO 中的 CC 模块（`CcStateResponse` / `DirEntry` / `DirListingResponse`）只在 `frontend/shared/.../models/UserSettings.kt` 一处定义；backend 通过 `implementation(project(":frontend:shared"))` 直接 import。新增字段改一处即可。
+- HTTP 响应/请求 DTO 的共享部分在 `frontend/shared/.../models/` 一处定义；backend 通过 `implementation(project(":frontend:shared"))` 直接 import，新增字段改一处即可。
 - WebSocket `blocks_state` 消息：后端流式发送完整 content block 列表（含 type/content/isComplete），前端替换前一次列表。类型包括 `thinking`（ThinkingBlock 折叠渲染）、`text`（MarkdownContent）、`tool_use`（ToolCallBlock）。
 - 文件消息 payload 同时影响：
   - `routes/FileRoutes.kt`
@@ -106,4 +97,4 @@
 - 改历史/持久化时，同步检查 `ChatHistoryManager.kt` 与 `TestWorkspace`
 - 改 WebSocket 权限或回放逻辑时，同步检查 `BackendWebSocketContractTest`
 - 改 `/ws/audio-duplex` 时，同步检查三端 Audio Duplex 调用端
-- 改 `/agent-bridge` 或 agent 指令路由时，同步检查 `AgentRuntime` / ACP 相关测试与 adapter
+- 改 dsh bot 路由时，同步检查 `DshBotRoutesTest` 的鉴权、拉取游标与幂等发送

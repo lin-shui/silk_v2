@@ -44,7 +44,6 @@ import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -111,9 +110,6 @@ fun GroupListScreen(appState: AppState) {
     // ✅ 未读消息计数
     var unreadCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
 
-    // cc-connect status: groupId -> CcConnectTokenInfo
-    var ccConnectStatus by remember { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
-    
     // Language and strings
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
     
@@ -158,17 +154,6 @@ fun GroupListScreen(appState: AppState) {
                             println("✅ 未读消息: $unreadCounts")
                         }
                     }
-
-                    // 加载 cc-connect 连接状态
-                    val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
-                    val currentUserId = appState.currentUser?.id ?: ""
-                    groups.forEach { group ->
-                        val info = ApiClient.getCcConnectTokenInfo(group.id, currentUserId)
-                        if (info != null && info.success) {
-                            statusMap[group.id] = info
-                        }
-                    }
-                    ccConnectStatus = statusMap
                 }
             } catch (e: Exception) {
                 println("❌ 加载群组异常: ${e.message}")
@@ -431,13 +416,10 @@ fun GroupListScreen(appState: AppState) {
                 else -> {
                     // 群组列表（Silk AI → CC-Connect → Silk Groups）
                     val silkPrivateGroups = groups.filter { it.name.startsWith("[Silk]") }
-                    val ccGroups = groups.filter { ccConnectStatus.containsKey(it.id) }
-                    val silkNormalGroups = groups.filter {
-                        !it.name.startsWith("[Silk]") && !ccConnectStatus.containsKey(it.id)
-                    }
+                    val silkNormalGroups = groups.filter { !it.name.startsWith("[Silk]") }
 
                     @Composable
-                    fun renderGroupCard(group: Group, ccInfo: CcConnectTokenInfo?) {
+                    fun renderGroupCard(group: Group) {
                         val isSelected = group.id in selectedGroups
                         val unreadCount = unreadCounts[group.id] ?: 0
                         GroupCard(
@@ -446,7 +428,6 @@ fun GroupListScreen(appState: AppState) {
                             isDeleteMode = isDeleteMode,
                             isSelected = isSelected,
                             unreadCount = unreadCount,
-                            ccConnectInfo = ccInfo,
                             onClick = {
                                 if (isDeleteMode) {
                                     selectedGroups = if (isSelected) {
@@ -514,30 +495,11 @@ fun GroupListScreen(appState: AppState) {
                                 )
                             }
                             items(silkPrivateGroups) { group ->
-                                renderGroupCard(
-                                    group = group,
-                                    ccInfo = ccConnectStatus[group.id]
-                                )
+                                renderGroupCard(group = group)
                             }
                         }
 
-                        // --- Section 2: CC-Connect 群组 ---
-                        if (ccGroups.isNotEmpty()) {
-                            item {
-                                SectionHeader(
-                                    title = "CC-Connect",
-                                    color = Color(0xFF2E7D32)
-                                )
-                            }
-                            items(ccGroups) { group ->
-                                renderGroupCard(
-                                    group = group,
-                                    ccInfo = ccConnectStatus[group.id]
-                                )
-                            }
-                        }
-
-                        // --- Section 3: Silk 普通群组 ---
+                        // --- Section 2: Silk 普通群组 ---
                         if (silkNormalGroups.isNotEmpty()) {
                             item {
                                 SectionHeader(
@@ -546,10 +508,7 @@ fun GroupListScreen(appState: AppState) {
                                 )
                             }
                             items(silkNormalGroups) { group ->
-                                renderGroupCard(
-                                    group = group,
-                                    ccInfo = null
-                                )
+                                renderGroupCard(group = group)
                             }
                         }
 
@@ -590,15 +549,6 @@ fun GroupListScreen(appState: AppState) {
                 onDismiss = { showCreateDialog = false },
                 onGroupCreated = { newGroup ->
                     groups = groups + newGroup
-                },
-                onCcConnectCreated = { newGroup ->
-                    scope.launch {
-                        val currentUserId = appState.currentUser?.id ?: return@launch
-                        val info = ApiClient.getCcConnectTokenInfo(newGroup.id, currentUserId)
-                        if (info != null && info.success) {
-                            ccConnectStatus = ccConnectStatus + (newGroup.id to info)
-                        }
-                    }
                 }
             )
         }
@@ -698,26 +648,10 @@ fun GroupCard(
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
-    ccConnectInfo: CcConnectTokenInfo? = null,
     onClick: () -> Unit,
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
-    val isCcConnect = ccConnectInfo != null
-    val ccConnected = ccConnectInfo?.connected == true
-
-    val badgeName = if (isCcConnect) {
-        val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
-        when {
-            raw.startsWith("claude") -> "claude"
-            raw.startsWith("cursor") -> "cursor"
-            raw.startsWith("gemini") -> "gemini"
-            raw.startsWith("codex")  -> "codex"
-            raw.startsWith("copilot") -> "copilot"
-            raw.isBlank() -> "cc"
-            else -> raw
-        }
-    } else ""
 
     Card(
         modifier = Modifier
@@ -778,24 +712,6 @@ fun GroupCard(
                         maxLines = 1,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    // cc-connect status badge
-                    if (isCcConnect) {
-                        Surface(
-                            shape = MaterialTheme.shapes.extraSmall,
-                            color = if (ccConnected) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
-                        ) {
-                            Text(
-                                text = if (ccConnected) badgeName else "$badgeName (offline)",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (ccConnected) Color(0xFF2E7D32) else Color(0xFFE65100),
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
 
                     Spacer(modifier = Modifier.width(6.dp))
 
@@ -862,28 +778,6 @@ fun GroupCard(
                 }
             }
 
-            // cc-connect 工作目录（第二行）
-            val cwdText = ccConnectInfo?.cwd
-            if (isCcConnect && ccConnected && !cwdText.isNullOrBlank()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = if (hasUnread && !isDeleteMode) 34.dp else 12.dp, end = 12.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "📁",
-                        fontSize = 11.sp
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = cwdText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = SilkColors.textSecondary.copy(alpha = 0.7f),
-                        maxLines = 1
-                    )
-                }
-            }
         }
     }
 }
@@ -896,175 +790,80 @@ fun CreateGroupDialog(
     strings: com.silk.shared.i18n.Strings,
     onDismiss: () -> Unit,
     onGroupCreated: (Group) -> Unit,
-    onCcConnectCreated: ((Group) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
-    val context = androidx.compose.ui.platform.LocalContext.current
     var groupName by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    var isCcConnect by remember { mutableStateOf(false) }
-    var generatedToken by remember { mutableStateOf<String?>(null) }
-    var tokenCopied by remember { mutableStateOf(false) }
 
     val userName = appState.currentUser?.fullName ?: ""
     val previewName = if (groupName.isNotBlank()) "$userName's $groupName" else ""
 
-    if (generatedToken != null) {
-        // Token display phase
-        AlertDialog(
-            onDismissRequest = { },
-            title = { Text("cc-connect Token", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(strings.createGroupTitle) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = groupName,
+                    onValueChange = { groupName = it; errorMessage = "" },
+                    label = { Text(strings.groupName) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading,
+                    singleLine = true
+                )
+
+                if (previewName.isNotEmpty()) {
                     Text(
-                        text = generatedToken!!,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    )
-                    Text(
-                        text = "Paste this token into cc-connect's config.toml:",
+                        text = "${strings.fullName}: $previewName",
                         style = MaterialTheme.typography.bodySmall,
-                        color = SilkColors.textSecondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Surface(
-                        color = SilkColors.secondary.copy(alpha = 0.3f),
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text(
-                            text = """[[projects.platforms]]
-type = "silk"
-[projects.platforms.options]
-server = "wss://your-server:15003/ccconnect-bridge"
-token  = "${generatedToken}"""",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            modifier = Modifier.padding(12.dp)
-                        )
-                    }
                 }
-            },
-            confirmButton = {
-                Button(
-                    onClick = onDismiss,
-                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary)
-                ) { Text("Done") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    tokenCopied = true
-                    // Android clipboard copy
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("cc-connect token", generatedToken))
-                }) { Text(if (tokenCopied) "Copied!" else "Copy Token") }
-            }
-        )
-    } else {
-        AlertDialog(
-            onDismissRequest = onDismiss,
-            title = { Text(strings.createGroupTitle) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Group type selector
+
+                if (errorMessage.isNotEmpty()) {
                     Text(
-                        text = "Type",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = SilkColors.textSecondary
+                        text = errorMessage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = !isCcConnect,
-                            onClick = { isCcConnect = false },
-                            label = { Text("Normal", fontSize = 13.sp) }
-                        )
-                        FilterChip(
-                            selected = isCcConnect,
-                            onClick = { isCcConnect = true },
-                            label = { Text("cc-connect", fontSize = 13.sp) }
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = groupName,
-                        onValueChange = { groupName = it; errorMessage = "" },
-                        label = { Text(strings.groupName) },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading,
-                        singleLine = true
-                    )
-
-                    if (previewName.isNotEmpty() && !isCcConnect) {
-                        Text(
-                            text = "${strings.fullName}: $previewName",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    if (isCcConnect) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = MaterialTheme.shapes.small
-                        ) {
-                            Text(
-                                text = "A token will be generated for connecting cc-connect to this group. Paste it into your cc-connect config.toml.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = SilkColors.textSecondary,
-                                modifier = Modifier.padding(12.dp)
-                            )
-                        }
-                    }
-
-                    if (errorMessage.isNotEmpty()) {
-                        Text(
-                            text = errorMessage,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            isLoading = true
-                            try {
-                                val type = if (isCcConnect) "ccconnect" else null
-                                val response = appState.currentUser?.let { user ->
-                                    ApiClient.createGroup(user.id, groupName, type)
-                                }
-
-                                if (response != null && response.success && response.group != null) {
-                                    onGroupCreated(response.group)
-                                    if (isCcConnect && response.ccConnectToken != null) {
-                                        generatedToken = response.ccConnectToken
-                                        onCcConnectCreated?.invoke(response.group)
-                                    } else {
-                                        onDismiss()
-                                    }
-                                } else {
-                                    errorMessage = response?.message ?: "创建失败"
-                                }
-                            } catch (e: Exception) {
-                                errorMessage = "创建失败: ${e.message}"
-                            } finally {
-                                isLoading = false
-                            }
-                        }
-                    },
-                    enabled = !isLoading && groupName.isNotBlank()
-                ) {
-                    Text(if (isLoading) strings.creating else strings.createButton)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss, enabled = !isLoading) {
-                    Text(strings.cancelButton)
                 }
             }
-        )
-    }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    scope.launch {
+                        isLoading = true
+                        try {
+                            val response = appState.currentUser?.let { user ->
+                                ApiClient.createGroup(user.id, groupName)
+                            }
+
+                            if (response != null && response.success && response.group != null) {
+                                onGroupCreated(response.group)
+                                onDismiss()
+                            } else {
+                                errorMessage = response?.message ?: "创建失败"
+                            }
+                        } catch (e: Exception) {
+                            errorMessage = "创建失败: ${e.message}"
+                        } finally {
+                            isLoading = false
+                        }
+                    }
+                },
+                enabled = !isLoading && groupName.isNotBlank()
+            ) {
+                Text(if (isLoading) strings.creating else strings.createButton)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isLoading) {
+                Text(strings.cancelButton)
+            }
+        }
+    )
 }
 
 @Composable

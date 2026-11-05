@@ -1,11 +1,8 @@
 import { SilkColors } from '../common/Theme';
-import { router as appRouter } from '../common/Router';
 import { GroupListPage } from './GroupListPage';
-import { WorkflowPage } from './WorkflowPage';
 import { KnowledgeBasePage } from './KnowledgeBasePage';
 import { AudioDuplexPage } from './AudioDuplexPage';
 import common from '@ohos.app.ability.common';
-import { BUILD_TIMESTAMP } from '../common/EnvConfig';
 import { HapUpdater } from '../api/HapUpdater';
 
 @Component
@@ -14,7 +11,7 @@ export struct MainPage {
 
   private restoreTab(): number {
     const saved = AppStorage.get<number>('lastMainTab');
-    return (saved !== undefined && saved >= 0 && saved <= 3) ? saved : 0;
+    return (saved !== undefined && saved >= 0 && saved <= 2) ? saved : 0;
   }
 
   aboutToAppear() {
@@ -87,19 +84,14 @@ export struct MainPage {
       .tabBar(this.buildTabItem(0, '💬', 'Silk'))
 
       TabContent() {
-        WorkflowPage()
-      }
-      .tabBar(this.buildTabItem(1, '🔗', '工作流'))
-
-      TabContent() {
         KnowledgeBasePage()
       }
-      .tabBar(this.buildTabItem(2, '📚', '知识库'))
+      .tabBar(this.buildTabItem(1, '📚', '知识库'))
 
       TabContent() {
         AudioDuplexPage()
       }
-      .tabBar(this.buildTabItem(3, '📞', '音频双工'))
+      .tabBar(this.buildTabItem(2, '📞', '音频双工'))
     }
     .width('100%')
     .height('100%')

@@ -1,18 +1,11 @@
 package com.silk.web
 
-import com.silk.shared.models.CcSettingsResponse
-import com.silk.shared.models.CcStateResponse
-import com.silk.shared.models.DirListingResponse
-import com.silk.shared.models.GitChangesResponse
-import com.silk.shared.models.GitFileDiffResponse
 import com.silk.shared.models.Language
-import com.silk.shared.models.TrustedDirCheckResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
 import com.silk.shared.models.UserSettingsResponse
 import kotlinx.browser.localStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.await
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -66,36 +59,6 @@ data class GroupResponse(
     val message: String,
     val group: Group? = null,
     val groups: List<Group>? = null,
-    val ccConnectToken: String? = null,
-)
-
-@Serializable
-data class CcModeOption(val key: String, val name: String)
-
-@Serializable
-data class CcModelOption(val name: String, val desc: String = "")
-
-@Serializable
-data class CcMetadataEvent(
-    val type: String = "cc_metadata",
-    val mode: String? = null,
-    val model: String? = null,
-    @SerialName("available_modes") val availableModes: List<CcModeOption>? = null,
-    @SerialName("available_models") val availableModels: List<CcModelOption>? = null,
-)
-
-@Serializable
-data class CcConnectTokenInfo(
-    val success: Boolean = false,
-    val token: String? = null,
-    val connected: Boolean = false,
-    val agentType: String? = null,
-    val project: String? = null,
-    val cwd: String? = null,
-    val mode: String? = null,
-    val model: String? = null,
-    val availableModes: List<CcModeOption>? = null,
-    val availableModels: List<CcModelOption>? = null,
 )
 
 // ==================== 联系人相关数据模型 ====================
@@ -214,27 +177,6 @@ data class ExportMarkdownResponse(
     val message: String,
     val fileName: String = "",
     val markdown: String = ""
-)
-
-// ==================== Workflow models ====================
-
-@Serializable
-data class WorkflowItem(
-    val id: String,
-    val name: String,
-    val description: String = "",
-    val ownerId: String = "",
-    val groupId: String = "",
-    val agentType: String = "claude_code",
-    val createdAt: Long = 0,
-    val updatedAt: Long = 0,
-)
-
-@Serializable
-data class AgentInfo(
-    val agentType: String,
-    val displayName: String,
-    val connected: Boolean,
 )
 
 // ==================== Knowledge Base models ====================
@@ -677,13 +619,9 @@ object ApiClient {
         }
     }
     
-    suspend fun createGroup(userId: String, groupName: String, type: String? = null): GroupResponse {
+    suspend fun createGroup(userId: String, groupName: String): GroupResponse {
         return try {
-            val body = if (type != null) {
-                """{"userId":"$userId","groupName":"$groupName","type":"$type"}"""
-            } else {
-                """{"userId":"$userId","groupName":"$groupName"}"""
-            }
+            val body = """{"userId":"$userId","groupName":"$groupName"}"""
             val response = post("/groups/create", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
@@ -703,39 +641,6 @@ object ApiClient {
         }
     }
 
-    suspend fun getCcConnectTokenInfo(groupId: String, userId: String): CcConnectTokenInfo? {
-        return try {
-            val response = get("/api/ccconnect/groups/$groupId/token-info?userId=$userId")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("获取cc-connect信息失败:", e)
-            null
-        }
-    }
-
-    suspend fun regenerateCcConnectToken(groupId: String, userId: String): String? {
-        return try {
-            val response = post("/api/ccconnect/groups/$groupId/regenerate-token", """{"userId":"$userId"}""")
-            val parsed = jsonParser.decodeFromString<CcConnectTokenInfo>(response)
-            parsed.token
-        } catch (e: Exception) {
-            console.log("重新生成token失败:", e)
-            null
-        }
-    }
-
-    suspend fun setCcConnectOperator(groupId: String, userId: String, targetUserId: String, grant: Boolean): Boolean {
-        return try {
-            val body = """{"userId":"$userId","targetUserId":"$targetUserId","grant":$grant}"""
-            val response = post("/api/ccconnect/groups/$groupId/set-operator", body)
-            val parsed = jsonParser.decodeFromString<SimpleResponse>(response)
-            parsed.success
-        } catch (e: Exception) {
-            console.log("设置operator失败:", e)
-            false
-        }
-    }
-    
     // ==================== 联系人相关 API ====================
     
     /**
@@ -932,126 +837,6 @@ object ApiClient {
         }
     }
 
-    // ==================== Claude Code 设置相关 API ====================
-
-    /**
-     * 获取 CC 设置（token + bridge 状态）
-     */
-    suspend fun getCcSettings(userId: String): CcSettingsResponse {
-        return try {
-            val response = get("/users/$userId/cc-settings")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("获取CC设置失败:", e)
-            CcSettingsResponse(false, "网络错误")
-        }
-    }
-
-    /**
-     * 生成/重新生成 Bridge Token
-     */
-    suspend fun generateBridgeToken(userId: String): CcSettingsResponse {
-        return try {
-            val response = post("/users/$userId/cc-settings/generate-token", "{}")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("生成Bridge Token失败:", e)
-            CcSettingsResponse(false, "网络错误")
-        }
-    }
-
-    /**
-     * 查询 Bridge 在线状态
-     */
-    suspend fun getBridgeStatus(userId: String): CcSettingsResponse {
-        return try {
-            val response = get("/users/$userId/cc-settings/bridge-status")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("查询Bridge状态失败:", e)
-            CcSettingsResponse(false, "网络错误")
-        }
-    }
-
-    /**
-     * 查询 user+group 在 CC 模式下的当前状态（含工作目录），用于工作流前端显示
-     */
-    suspend fun getCcState(userId: String, groupId: String): CcStateResponse {
-        return try {
-            val response = get("/users/$userId/cc-state/$groupId")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("查询CC状态失败:", e)
-            CcStateResponse(success = false)
-        }
-    }
-
-    /**
-     * 列出 Bridge 机器上指定路径下的子目录（用于 Folder Picker）
-     */
-    suspend fun listCcDir(userId: String, path: String? = null, showHidden: Boolean = false): DirListingResponse {
-        return try {
-            val query = buildString {
-                append("?showHidden=$showHidden")
-                if (!path.isNullOrBlank()) {
-                    append("&path=")
-                    append(encodeUri(path))
-                }
-            }
-            val response = get("/users/$userId/cc-fs/list$query")
-            jsonParser.decodeFromString(response)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            // 协程取消必须原样往上抛，否则上层 Job.cancel() 无法真正中断加载
-            throw e
-        } catch (e: Exception) {
-            console.log("列目录失败:", e)
-            DirListingResponse(success = false, error = e.message ?: "网络错误")
-        }
-    }
-
-    /**
-     * 直接为 user+group 切换 Bridge 工作目录（不发聊天消息，不出现 /cd 气泡）。
-     * groupId 可传 raw（如 "abc"）或已带前缀（如 "group_abc"），后端会兼容处理。
-     */
-    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse {
-        return try {
-            val body = kotlinx.serialization.json.buildJsonObject {
-                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
-                put("path", kotlinx.serialization.json.JsonPrimitive(path))
-            }.toString()
-            val response = post("/users/$userId/cc-fs/cd", body)
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("切换目录失败:", e)
-            CcStateResponse(success = false)
-        }
-    }
-    
-    /** 更新工作流会话设置（agent / permissionMode）。 */
-    suspend fun updateCcSettings(
-        userId: String,
-        groupId: String,
-        activeAgent: String? = null,
-        permissionMode: String? = null,
-    ): CcStateResponse {
-        return try {
-            val body = kotlinx.serialization.json.buildJsonObject {
-                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
-                if (!activeAgent.isNullOrBlank()) {
-                    put("activeAgent", kotlinx.serialization.json.JsonPrimitive(activeAgent))
-                }
-                if (!permissionMode.isNullOrBlank()) {
-                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
-                }
-            }.toString()
-            val response = post("/users/$userId/cc-settings/update", body)
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("更新会话设置失败:", e)
-            CcStateResponse(success = false, error = e.message)
-        }
-    }
-
     // ==================== 消息撤回相关 API ====================
     
     /**
@@ -1206,182 +991,6 @@ object ApiClient {
 
     /** URL-encode a string via JS's encodeURIComponent. */
     private fun encodeUri(s: String): String = js("encodeURIComponent")(s).unsafeCast<String>()
-
-    // ==================== Workflow API ====================
-
-    suspend fun getWorkflows(userId: String): List<WorkflowItem> {
-        return try {
-            val response = get("/api/workflows?userId=$userId")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("获取工作流失败:", e)
-            emptyList()
-        }
-    }
-
-    // ==================== Source Control (代码审查) API ====================
-
-    suspend fun getGitChanges(userId: String, groupId: String): GitChangesResponse {
-        return try {
-            val response = get("/api/agent/changes?userId=$userId&groupId=$groupId")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("获取代码改动失败:", e)
-            GitChangesResponse(success = false, message = "网络错误")
-        }
-    }
-
-    suspend fun getGitFileDiff(userId: String, groupId: String, path: String): GitFileDiffResponse {
-        return try {
-            val encoded = js("encodeURIComponent")(path) as String
-            val response = get("/api/agent/changes/file?userId=$userId&groupId=$groupId&path=$encoded")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("获取文件 diff 失败:", e)
-            GitFileDiffResponse(success = false, message = "网络错误")
-        }
-    }
-
-    /** 列出可作为 workflow agent 的选项（含 bridge agent 与 silk_chat）。失败时返回空列表。 */
-    suspend fun listAgents(userId: String): List<AgentInfo> {
-        return try {
-            val response = get("/api/agents?userId=${encodeUri(userId)}")
-            jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            console.log("获取 agent 列表失败:", e)
-            emptyList()
-        }
-    }
-
-    /** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
-    sealed class CreateWorkflowResult {
-        data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
-        data class Err(val message: String) : CreateWorkflowResult()
-    }
-
-    @Suppress("NestedBlockDepth")
-    suspend fun createWorkflow(
-        name: String,
-        description: String,
-        userId: String,
-        initialDir: String = "",
-        agentType: String = "claude_code",
-        permissionMode: String = "",
-    ): CreateWorkflowResult {
-        return try {
-            // 构造 JSON，使用 JsonObject 安全编码避免手动转义
-            val obj = kotlinx.serialization.json.buildJsonObject {
-                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
-                put("name", kotlinx.serialization.json.JsonPrimitive(name))
-                put("description", kotlinx.serialization.json.JsonPrimitive(description))
-                if (initialDir.isNotBlank()) {
-                    put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
-                }
-                if (agentType.isNotBlank()) {
-                    put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
-                }
-                if (permissionMode.isNotBlank()) {
-                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
-                }
-            }
-            val response = post("/api/workflows", obj.toString())
-            // 响应有两种形状：
-            //   成功：Workflow 对象（有 id/groupId 等字段，无 success 字段）
-            //   失败：错误信封 {"success": false, "message": "..."}
-            // 优先用 success 字段区分，避免"错误响应恰好含 id 字段"这种 ignoreUnknownKeys 陷阱
-            val parsed = try {
-                kotlinx.serialization.json.Json.parseToJsonElement(response).jsonObject
-            } catch (_: Exception) { null }
-            if (parsed == null) {
-                CreateWorkflowResult.Err("服务器返回了无法识别的响应")
-            } else {
-                val success = parsed["success"]?.jsonPrimitive?.booleanOrNull
-                // success 字段存在且为 false → 错误信封；未出现 success 字段 → 视为 Workflow 对象
-                if (success == false) {
-                    val msg = parsed["message"]?.jsonPrimitive?.contentOrNull ?: "创建失败"
-                    CreateWorkflowResult.Err(msg)
-                } else {
-                    try {
-                        CreateWorkflowResult.Ok(jsonParser.decodeFromString<WorkflowItem>(response))
-                    } catch (_: Exception) {
-                        CreateWorkflowResult.Err("解析创建结果失败")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            console.log("创建工作流失败:", e)
-            CreateWorkflowResult.Err(e.message ?: "网络错误")
-        }
-    }
-
-    suspend fun renameWorkflow(workflowId: String, userId: String, newName: String): WorkflowItem? {
-        return try {
-            val body = kotlinx.serialization.json.buildJsonObject {
-                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
-                put("name", kotlinx.serialization.json.JsonPrimitive(newName))
-            }.toString()
-            val response = put("/api/workflows/$workflowId", body)
-            jsonParser.decodeFromString<WorkflowItem>(response)
-        } catch (e: Exception) {
-            console.log("重命名工作流失败:", e)
-            null
-        }
-    }
-
-    suspend fun deleteWorkflow(workflowId: String, userId: String): Boolean {
-        return try {
-            val response = window.fetch(
-                "$BASE_URL/api/workflows/$workflowId?userId=$userId",
-                RequestInit(method = "DELETE")
-            ).await()
-            response.ok
-        } catch (e: Exception) {
-            console.log("删除工作流失败:", e)
-            false
-        }
-    }
-
-    // ==================== Trusted Directory API ====================
-
-    sealed class TrustCheckResult {
-        data class Trusted(val bridgeId: String?) : TrustCheckResult()
-        data class NotTrusted(val bridgeId: String?) : TrustCheckResult()
-        object BridgeDisconnected : TrustCheckResult()
-        data class Error(val message: String) : TrustCheckResult()
-    }
-
-    suspend fun checkTrustedDir(userId: String, path: String): TrustCheckResult {
-        return try {
-            val query = "?path=${encodeUri(path)}"
-            val response = get("/users/$userId/trusted-dirs/check$query")
-            val parsed = jsonParser.decodeFromString<TrustedDirCheckResponse>(response)
-            when {
-                !parsed.bridgeConnected -> TrustCheckResult.BridgeDisconnected
-                parsed.trusted -> TrustCheckResult.Trusted(parsed.bridgeId)
-                else -> TrustCheckResult.NotTrusted(parsed.bridgeId)
-            }
-        } catch (e: kotlinx.serialization.SerializationException) {
-            console.log("解析信任目录检查响应失败:", e)
-            TrustCheckResult.Error("服务器返回了无法识别的响应")
-        } catch (e: Exception) {
-            console.log("检查信任目录失败:", e)
-            TrustCheckResult.Error("网络错误: ${e.message}")
-        }
-    }
-
-    suspend fun addTrustedDir(userId: String, path: String): Boolean {
-        return try {
-            val body = kotlinx.serialization.json.buildJsonObject {
-                put("path", kotlinx.serialization.json.JsonPrimitive(path))
-            }.toString()
-            val response = post("/users/$userId/trusted-dirs", body)
-            val json = jsonParser.parseToJsonElement(response).jsonObject
-            json["success"]?.jsonPrimitive?.booleanOrNull ?: false
-        } catch (e: Exception) {
-            console.log("添加信任目录失败:", e)
-            false
-        }
-    }
 
     // ==================== Knowledge Base API ====================
 

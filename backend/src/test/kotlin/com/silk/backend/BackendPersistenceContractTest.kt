@@ -44,10 +44,6 @@ class BackendPersistenceContractTest {
             assertEquals(Language.ENGLISH, settings.language)
             assertEquals("Keep existing instruction.", settings.defaultAgentInstruction)
 
-            val bridgeToken = UserSettingsRepository.generateBridgeToken(user.id)
-            assertEquals(bridgeToken, UserSettingsRepository.getBridgeToken(user.id))
-            assertEquals(user.id, UserSettingsRepository.findUserIdByBridgeToken(bridgeToken))
-
             val group = assertNotNull(GroupRepository.findGroupById("legacy-group-id"))
             assertEquals("Legacy Group", group.name)
             assertEquals(user.id, group.hostId)
@@ -58,7 +54,6 @@ class BackendPersistenceContractTest {
 
             val loginAfterSecondInit = AuthService.login(LoginRequest("legacy-user", "legacy-secret"))
             assertTrue(loginAfterSecondInit.success, loginAfterSecondInit.message)
-            assertEquals(bridgeToken, UserSettingsRepository.getBridgeToken(user.id))
             assertEquals(listOf(group.id), GroupRepository.getUserGroups(user.id).map { it.id })
         }
     }

@@ -1,6 +1,6 @@
 package com.silk.backend.dsh
 
-import com.silk.backend.agents.core.AgentRuntime
+import com.silk.backend.AgentIdentity
 import com.silk.backend.database.User
 import com.silk.backend.database.UserRepository
 import com.silk.backend.database.Users
@@ -12,13 +12,13 @@ import org.slf4j.LoggerFactory
  * dsh-superagent 集成 bot 的固定身份。
  *
  * userId 结尾满足前端 `_ai_agent` 约定（三端 UI 按 agent 渲染），
- * 后端侧由 AgentRuntime.isAgentUserId 白名单识别（不触发 Silk AI / ACP agent）。
+ * 后端侧由 AgentIdentity.isAgentUserId 白名单识别（不触发 Silk AI）。
  * bot 以 GUEST 角色入群：silk 内部不赋予触发权，谁能发起工作由 dsh 侧 Policy 决定。
  */
 object DshBotIdentity {
     private val logger = LoggerFactory.getLogger(DshBotIdentity::class.java)
 
-    val BOT_USER_ID: String = AgentRuntime.DSH_BOT_USER_ID
+    val BOT_USER_ID: String = AgentIdentity.DSH_BOT_USER_ID
     const val BOT_LOGIN_NAME = "dsh"
     const val BOT_DISPLAY_NAME = "DSH"
 

@@ -2,11 +2,6 @@
 
 这些点容易误导 agent，遇到冲突时按本文件处理。
 
-## Protected Human-Facing Files May Stay Stale
-
-- 本轮按用户要求不修改 `README.md`、`.env.example`、`silk.sh`。
-- 因此这些文件里的旧叙述不要自动当成最新事实；对 coding agent 来说，代码与 `docs/context/**` 的最近文档优先。
-
 ## Port Defaults Are Not Uniform
 
 - `README.md` / `.env.example` 仍有 `8006` 后端端口叙述。
@@ -29,7 +24,6 @@
 ## README Understates Current Capabilities
 
 - `README.md` 仍以 Web / Android / optional Desktop 为主，未完整描述 Harmony、Audio Duplex、HAP 下载路由等当前能力。
-- `README.md` 里的 Workflow 存储路径仍写 `backend/workflows/workflow_store.json`，实际默认是 `~/.silk-data/workflows/workflow_store.json`。
 - 若需要 coding context，优先看 `ARCHITECTURE.md` 与 `docs/context/**`。
 
 ## `Routing.kt` Still Owns Most HTTP Surface
@@ -40,7 +34,7 @@
 ## Desktop Feature Parity Is Lower
 
 - `frontend/desktopApp` 当前主要是登录 / 群组 / 聊天 / 设置。
-- Workflow / Knowledge Base / Audio Duplex 的主壳当前在 Web、Android、Harmony，更不是 Desktop 的事实能力面。
+- Knowledge Base / Audio Duplex 的主壳当前在 Web、Android、Harmony，不是 Desktop 的事实能力面。
 
 ## `search/` Is Legacy
 
@@ -58,35 +52,3 @@
 - Todo 规划的 canonical 文件仍是 `docs/todo-roadmap.md`
 - 它是 human-maintained roadmap，不是 agent 自动维护的执行日志
 - `docs/context/planning/TODO_ROADMAP.md` 只是 agent-facing wrapper
-
-## Agent Framework (Plan E–E4 + F1 M1-M4 Done)
-
-CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` / `BridgeRegistry` / `StreamParser` / `bridge_agent.py` 已物理删除。**Plan F1 M1-M4 已落地**，Codex CLI 经 ACP 接入并完成多 agent UX 收尾：
-
-- **入口面**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`
-- **聊天执行**：`acp_adapter.py` 通过 `/agent-bridge` 端点接收 ACP 请求，复用 `Executor` 跑 Claude CLI，流式推 `session/update` 通知
-- **文件系统操作走 ACP**：`/cc-fs/cd` → `_silk/set_cwd`；`/cc-fs/list` → `_silk/list_dir`
-- **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.cliSessionId` 写入 `Workflow.agentSessions[agentType]`（per-agent）；`autoActivateForWorkflow` 用 seed 续会话
-- **Multi-agent UX（F1 M4）**：`/codex <text>` inline 文本一步切换+提问；`@codex <text>` 跨 agent 路由不再静默；`Workflow.activeAgent` 持久化，`/use` 切换落盘，下次进工作流自动恢复；前端工作流标题显示 active agent badge
-- **`/session <id>` 真正加载**：`AgentRuntime` 调 ACP `session/load`，cc_bridge 复用 `SessionManager.resume_session`，codex_bridge 新增 `codex_session_index.find_session_file`
-- **Token 重生踢连接**：`AcpRegistry.disconnect(userId)` 关闭老 ACP 连接
-- **TrustedDir bridgeId**：`resolveBridgeId(userId)` 从 `AcpRegistry.getRemoteIp` 拿，格式 `"ip:<remoteIp>"` 不变
-- **`/cc-bridge` WebSocket 端点已删除**
-- **无回退路径**：ACP 不可用时直接报"未连接"
-
-排查 agent 行为时只看 `AgentRuntime` + 对应 ACP adapter（Claude Code: `cc_bridge/acp_adapter.py`；Codex: `codex_bridge/codex_adapter.py`）。
-
-## `Cc` / `cc-` 命名残留：应为 Agent-Agnostic
-
-ACP 抽象完成后，以下 API 端点、数据类、函数名仍保留了 Claude Code 时代的 `Cc` / `cc-` 前缀，实际功能已与具体 agent type 无关。待迁移时统一重命名。
-
-| 类别 | 当前命名 | 建议命名 | 涉及文件 |
-|------|---------|---------|---------|
-| 数据类 | `CcStateResponse` | `AgentStateResponse` | `frontend/shared/.../UserSettings.kt`（定义）+ 后端 `Routing.kt` + 三端 `ApiClient` |
-| 路由端点 | `GET /users/{userId}/cc-state/{groupId}` | `/agent-state/` | `Routing.kt` |
-| 路由端点 | `GET /users/{userId}/cc-fs/list` | `/agent-fs/list` | `Routing.kt` |
-| 路由端点 | `POST /users/{userId}/cc-fs/cd` | `/agent-fs/cd` | `Routing.kt` |
-| ApiClient 函数 | `getCcState()` | `getAgentState()` | 三端 `ApiClient` |
-| ApiClient 函数 | `cdCcDir()` | `cdAgentDir()` | 三端 `ApiClient` |
-| 局部变量 | `ccGroupId` | `agentGroupId` | `Routing.kt` |
-| HarmonyOS 组件 | `CcWorkflowPanel.ets` / `loadCcState()` | `AgentWorkflowPanel.ets` / `loadAgentState()` | `harmonyApp/.../CcWorkflowPanel.ets` |

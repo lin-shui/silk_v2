@@ -118,7 +118,7 @@ data class AuthResponse(
 data class CreateGroupRequest(
     val userId: String,
     val groupName: String,
-    val type: String? = null, // null = normal group, "ccconnect" = cc-connect group
+    val type: String? = null, // null = normal group; "ccconnect" is a legacy value no longer written
 )
 
 /**
@@ -479,7 +479,6 @@ data class UserSettings(
     val language: Language = Language.CHINESE,
     val defaultAgentInstruction: String = "You are a helpful technical research assistant. ",
     val appAuthToken: String? = null,
-    val ccBridgeToken: String? = null,
 )
 
 /**
@@ -502,21 +501,6 @@ data class UserSettingsResponse(
     val settings: UserSettings? = null
 )
 
-/**
- * CC 设置响应
- */
-@Serializable
-data class CcSettingsResponse(
-    val success: Boolean,
-    val message: String,
-    val ccBridgeToken: String? = null,
-    val bridgeConnected: Boolean = false,
-    val bridgeIp: String? = null,
-)
-
-// CcStateResponse / DirEntry / DirListingResponse 已迁移到 :frontend:shared 模块
-// （com.silk.shared.models），前后端共用一份定义，避免字段漂移。
-// 需要这些类型的文件直接 `import com.silk.shared.models.*`。
 
 // ==================== 消息撤回相关模型 ====================
 

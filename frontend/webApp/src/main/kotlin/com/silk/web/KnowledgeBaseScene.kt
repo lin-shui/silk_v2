@@ -288,7 +288,6 @@ private fun knowledgeWorkflowLabel(workflowId: String): String {
 
 internal enum class KnowledgeSourceMessageJumpKind {
     CHAT,
-    WORKFLOW,
 }
 
 internal data class KnowledgeSourceMessageJump(
@@ -300,13 +299,6 @@ internal data class KnowledgeSourceMessageJump(
 internal fun knowledgeSourceMessageJump(entry: KBEntryItem): KnowledgeSourceMessageJump? {
     val messageId = entry.source.messageIds.firstOrNull()?.trim().orEmpty()
     if (messageId.isBlank()) return null
-    entry.source.workflowId?.trim()?.takeIf { it.isNotBlank() }?.let { workflowId ->
-        return KnowledgeSourceMessageJump(
-            kind = KnowledgeSourceMessageJumpKind.WORKFLOW,
-            targetId = workflowId,
-            messageId = messageId,
-        )
-    }
     entry.source.sourceGroupId?.trim()?.takeIf { it.isNotBlank() }?.let { groupId ->
         return KnowledgeSourceMessageJump(
             kind = KnowledgeSourceMessageJumpKind.CHAT,
@@ -1758,7 +1750,6 @@ private fun KnowledgeEditorPane(
     currentUserId: String,
     groups: List<Group>,
     onOpenSourceGroup: ((Group) -> Unit)?,
-    onOpenSourceWorkflow: ((String) -> Unit)?,
     onOpenSourceMessage: ((KnowledgeSourceMessageJump) -> Unit)?,
     onTitleChange: (String) -> Unit,
     onResetTitle: () -> Unit,
@@ -1821,7 +1812,6 @@ private fun KnowledgeEditorPane(
                 currentUserId = currentUserId,
                 groups = groups,
                 onOpenSourceGroup = onOpenSourceGroup,
-                onOpenSourceWorkflow = onOpenSourceWorkflow,
                 onOpenSourceMessage = onOpenSourceMessage,
             )
             // Inline file preview for entries with fileRef
@@ -2429,7 +2419,6 @@ private fun KnowledgeEntryMetaBar(
     currentUserId: String,
     groups: List<Group>,
     onOpenSourceGroup: ((Group) -> Unit)? = null,
-    onOpenSourceWorkflow: ((String) -> Unit)? = null,
     onOpenSourceMessage: ((KnowledgeSourceMessageJump) -> Unit)? = null,
 ) {
     val sourceGroup = entry.source.sourceGroupId?.let { groupId -> groups.find { it.id == groupId } }
@@ -2465,11 +2454,6 @@ private fun KnowledgeEntryMetaBar(
         val chipActions = linkedMapOf<String, () -> Unit>()
         if (sourceGroup != null && onOpenSourceGroup != null) {
             chipActions["来源群组"] = { onOpenSourceGroup(sourceGroup) }
-        }
-        entry.source.workflowId?.takeIf { it.isNotBlank() }?.let { workflowId ->
-            if (onOpenSourceWorkflow != null) {
-                chipActions["工作流"] = { onOpenSourceWorkflow(workflowId) }
-            }
         }
         if (sourceMessageJump != null && onOpenSourceMessage != null) {
             chipActions["来源消息"] = { onOpenSourceMessage(sourceMessageJump) }
@@ -6318,17 +6302,9 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 currentUserId = user.id,
                 groups = userGroups,
                 onOpenSourceGroup = { group -> appState.openChatGroup(group) },
-                onOpenSourceWorkflow = { workflowId -> appState.openWorkflow(workflowId) },
                 onOpenSourceMessage = { jump ->
-                    when (jump.kind) {
-                        KnowledgeSourceMessageJumpKind.CHAT -> {
-                            userGroups.find { it.id == jump.targetId }?.let { group ->
-                                appState.openChatGroup(group = group, messageId = jump.messageId)
-                            }
-                        }
-                        KnowledgeSourceMessageJumpKind.WORKFLOW -> {
-                            appState.openWorkflow(workflowId = jump.targetId, messageId = jump.messageId)
-                        }
+                    userGroups.find { it.id == jump.targetId }?.let { group ->
+                        appState.openChatGroup(group = group, messageId = jump.messageId)
                     }
                 },
                 onTitleChange = {
