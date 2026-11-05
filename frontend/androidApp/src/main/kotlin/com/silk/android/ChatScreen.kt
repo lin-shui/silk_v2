@@ -380,13 +380,13 @@ fun ChatScreen(appState: AppState) {
         users.add(user.id to user.fullName)
         // 从群组成员列表添加所有成员
         groupMembers.forEach { member ->
-            if (!isAgentUserId(member.id) && member.id != user.id) {
+            if (member.id != SILK_AGENT_USER_ID && member.id != user.id) {
                 users.add(member.id to member.fullName)
             }
         }
         // 从消息中提取其他用户（作为补充，以防成员列表不完整）
         messages.forEach { msg ->
-            if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
+            if (msg.userId != SILK_AGENT_USER_ID && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)
             }
         }
@@ -1605,7 +1605,7 @@ fun ChatScreen(appState: AppState) {
                                             ) {
                                                 items(filteredUsers.size) { index ->
                                                     val (userId, userName) = filteredUsers[index]
-                                                    val displayName = if (isAgentUserId(userId)) "Silk" else userName
+                                                    val displayName = if (userId == SILK_AGENT_USER_ID) SILK_AGENT_DISPLAY_NAME else userName
                                                     Surface(
                                                         onClick = {
                                                             val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
